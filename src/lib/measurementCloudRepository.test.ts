@@ -16,6 +16,7 @@ import type { PendingMeasurementSave, StoredMeasurementPending, WorkspaceDraft }
 const mocks = vi.hoisted(() => ({
   rpc: vi.fn(), from: vi.fn(), download: vi.fn(), upload: vi.fn(),
   cached: null as MeasurementWorkspace | null,
+  snapshotWrites: 0, deltaWrites: [] as number[],
   drafts: [] as WorkspaceDraft[], stored: [] as StoredMeasurementPending[],
   revision: 0, eventRevision: null as number | null, compactedRevision: null as number | null, missingVersion: false,
 }));
@@ -28,7 +29,15 @@ vi.mock('./measurementWorkspaceStore', () => ({ MeasurementCommitRejectedError: 
   constructor(message: string) { super(message); this.name = 'MeasurementCommitRejectedError'; }
 }, measurementRepository: () => ({
   load: async () => mocks.cached,
-  cacheSnapshot: async (w: MeasurementWorkspace) => { mocks.cached = structuredClone(w); },
+  cacheSnapshot: async (w: MeasurementWorkspace) => { mocks.cached = structuredClone(w); mocks.snapshotWrites++; mocks.deltaWrites = []; },
+  cacheEntryPatch: async (revision: number, patch: { entries: MeasurementWorkspace['entries']; event: MeasurementWorkspace['audit'][number] }) => {
+    const base = mocks.cached!;
+    const replacements = new Map(patch.entries.map(entry => [`${entry.measurementId}:${entry.serviceId}`, entry]));
+    mocks.cached = { ...base, revision, entries: base.entries.map(entry => replacements.get(`${entry.measurementId}:${entry.serviceId}`) ?? entry),
+      audit: [...base.audit, patch.event] };
+    mocks.deltaWrites.push(revision);
+    return mocks.deltaWrites.length;
+  },
   drafts: async () => structuredClone(mocks.drafts),
   writeDraft: async (d: WorkspaceDraft) => { mocks.drafts.push(d); },
   clearDraft: async (mid: string, sid: string, rid?: string) => {
@@ -65,7 +74,7 @@ beforeEach(() => {
   const storage = new Map<string, string>();
   vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null,
     setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) });
-  vi.clearAllMocks(); mocks.rpc.mockReset(); mocks.cached = null; mocks.drafts = []; mocks.stored = [];
+  vi.clearAllMocks(); mocks.rpc.mockReset(); mocks.cached = null; mocks.snapshotWrites = 0; mocks.deltaWrites = []; mocks.drafts = []; mocks.stored = [];
   mocks.download.mockReset(); mocks.upload.mockReset();
   mocks.revision = 0; mocks.eventRevision = null; mocks.compactedRevision = null; mocks.missingVersion = false;
   mocks.from.mockImplementation((table: string) => ({ select: () => ({ eq: () => ({
@@ -543,6 +552,25 @@ describe('Abertura da Medição com plantas sob demanda', () => {
 });
 
 describe('Medição somente nuvem', () => {
+  it('envia só o item editado e mantém checkpoint local compacto mesmo com base grande', async () => {
+    const base = await fixture();
+    base.importedKeys.push('x'.repeat(3_000_000));
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base);
+    await repo.load();
+    await vi.waitFor(() => expect(mocks.snapshotWrites).toBe(1));
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 2 });
+    await repo.stage!(next, base);
+    patchSaved(base, next);
+    await repo.commit(next, base.revision);
+    await vi.waitFor(() => expect(mocks.deltaWrites).toEqual([next.revision]));
+    expect(mocks.snapshotWrites).toBe(1);
+    expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_entries_v2', expect.any(Object));
+    expect(JSON.stringify(mocks.rpc.mock.lastCall![1]).length).toBeLessThan(10_000);
+    expect(JSON.stringify(encodeMeasurementWorkspace(next)).length).toBeGreaterThan(3_000_000);
+    expect(mocks.stored).toEqual([]);
+  });
+
   it('cadastra DWF pelo delta de catálogo sem regravar a Medição inteira', async () => {
     const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     loaded(base); await repo.load();

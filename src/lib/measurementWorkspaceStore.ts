@@ -9,6 +9,14 @@ export interface PendingMeasurementEntrySave {
   format: 'entry-patch-v1'; projectId: string; baseRevision: number; operationId: string;
   patch: { entries: MeasuredEntry[]; event: MeasurementAudit }; archivedAt?: string;
 }
+export interface ConfirmedMeasurementEntryPatch {
+  revision: number;
+  patch: PendingMeasurementEntrySave['patch'];
+}
+interface ConfirmedMeasurementEntryLog {
+  baseRevision: number;
+  patches: ConfirmedMeasurementEntryPatch[];
+}
 export interface PendingMeasurementCaptureSave {
   format: 'capture-patch-v1'; projectId: string; baseRevision: number; operationId: string;
   patch: Omit<MeasurementCapturePatch, 'plan'> & { plan: Omit<MeasurementCapturePatch['plan'], 'file'> };
@@ -45,6 +53,8 @@ export interface MeasurementRepository {
   stage?(candidate: MeasurementWorkspace, base: MeasurementWorkspace): Promise<void>;
   /** Last confirmed cloud snapshot for reopening an offline browser. */
   cacheSnapshot?(workspace: MeasurementWorkspace): Promise<void>;
+  /** Durable confirmed entry delta; avoids cloning the complete workspace per item. */
+  cacheEntryPatch?(revision: number, patch: PendingMeasurementEntrySave['patch']): Promise<number>;
   /** Local cache only; the confirmed revision and operational records do not change. */
   cachePlanFile?(planId: string, storagePath: string, file: Blob): Promise<void>;
   /** Unconfirmed operations in their original order, ready to resume after reload. */
@@ -96,8 +106,8 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
   if (scope.environment !== 'isolated' || !scope.userId || !scope.projectId) throw new Error('Ativação operacional indisponível até validar o servidor e a incorporação.');
   const key = JSON.stringify([scope.userId, scope.projectId]);
   const open = () => new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open('measurement-workspace-v1', 2);
-    request.onupgradeneeded = () => ['workspaces', 'backups', 'pending', 'drafts', 'pending_entry_patches']
+    const request = indexedDB.open('measurement-workspace-v1', 3);
+    request.onupgradeneeded = () => ['workspaces', 'backups', 'pending', 'drafts', 'pending_entry_patches', 'confirmed_entry_patches']
       .forEach(name => { if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name); });
     request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
   });
@@ -122,8 +132,47 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
     preserveEntryPending: pending => update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => [...(rows ?? []).filter(p => p.operationId !== pending.operationId), pending]),
     preserveCapturePending: pending => update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => [...(rows ?? []).filter(p => p.operationId !== pending.operationId), pending]),
     stage: (candidate, base) => update<StoredMeasurementPending[]>('pending', rows => [...(rows ?? []).filter(p => pendingOperationId(p) !== candidate.audit.at(-1)?.id), { baseRevision: base.revision, candidate }]),
-    cacheSnapshot: workspace => update<MeasurementWorkspace>('workspaces', current =>
-      current && current.revision > workspace.revision ? current : retainCachedPlanFiles(workspace, current)),
+    cacheSnapshot: async workspace => {
+      const db = await open();
+      return new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(['workspaces', 'confirmed_entry_patches'], 'readwrite');
+        const snapshots = tx.objectStore('workspaces');
+        const deltas = tx.objectStore('confirmed_entry_patches');
+        const currentRequest = snapshots.get(key);
+        currentRequest.onsuccess = () => {
+          const current = currentRequest.result as MeasurementWorkspace | undefined;
+          if (current && current.revision > workspace.revision) return;
+          snapshots.put(retainCachedPlanFiles(workspace, current ?? null), key);
+          const deltaRequest = deltas.get(key);
+          deltaRequest.onsuccess = () => deltas.put({ baseRevision: workspace.revision,
+            patches: ((deltaRequest.result as ConfirmedMeasurementEntryLog | undefined)?.patches ?? [])
+              .filter(delta => delta.revision > workspace.revision) } satisfies ConfirmedMeasurementEntryLog, key);
+        };
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onabort = tx.onerror = () => { db.close(); reject(tx.error ?? new Error('Checkpoint local interrompido.')); };
+      });
+    },
+    cacheEntryPatch: async (revision, patch) => {
+      const db = await open();
+      return new Promise<number>((resolve, reject) => {
+        const tx = db.transaction('confirmed_entry_patches', 'readwrite');
+        const store = tx.objectStore('confirmed_entry_patches');
+        const request = store.get(key);
+        let count = 0;
+        request.onsuccess = () => {
+          const log = request.result as ConfirmedMeasurementEntryLog | undefined;
+          if (!log || !Number.isSafeInteger(log.baseRevision) || !Array.isArray(log.patches)) { tx.abort(); return; }
+          if (revision <= log.baseRevision) { count = log.patches.length; return; }
+          const latest = log.patches.at(-1)?.revision ?? log.baseRevision;
+          if (latest !== revision - 1) { tx.abort(); return; }
+          const patches = [...log.patches, { revision, patch }];
+          count = patches.length;
+          store.put({ ...log, patches } satisfies ConfirmedMeasurementEntryLog, key);
+        };
+        tx.oncomplete = () => { db.close(); resolve(count); };
+        tx.onabort = tx.onerror = () => { db.close(); reject(tx.error ?? new Error('Checkpoint local desatualizado.')); };
+      });
+    },
     cachePlanFile: (planId, storagePath, file) => {
       if (!(file instanceof Blob) || file.size === 0) return Promise.reject(new Error('Arquivo vazio não pode substituir uma planta confirmada.'));
       return update<MeasurementWorkspace>('workspaces', current => {
@@ -149,9 +198,35 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
       ]);
     },
     load: async () => {
-      const value = await read<MeasurementWorkspace>('workspaces');
-      if (value && (value.schema !== 1 || value.projectId !== scope.projectId || !Array.isArray(value.entries) || !Array.isArray(value.periods) || !Array.isArray(value.plans))) throw new Error('Base incompleta ou incompatível. Edição bloqueada.');
-      return value;
+      const db = await open();
+      return new Promise<MeasurementWorkspace | null>((resolve, reject) => {
+        const tx = db.transaction(['workspaces', 'confirmed_entry_patches'], 'readonly');
+        const baseRequest = tx.objectStore('workspaces').get(key);
+        const deltaRequest = tx.objectStore('confirmed_entry_patches').get(key);
+        tx.oncomplete = () => {
+          db.close();
+          try {
+            let value = (baseRequest.result ?? null) as MeasurementWorkspace | null;
+            const log = deltaRequest.result as ConfirmedMeasurementEntryLog | undefined;
+            const deltas = log?.patches ?? [];
+            if (value && (value.schema !== 1 || value.projectId !== scope.projectId || !Array.isArray(value.entries) || !Array.isArray(value.periods) || !Array.isArray(value.plans))) throw new Error('Base incompleta ou incompatível. Edição bloqueada.');
+            if (value && log && log.baseRevision !== value.revision) throw new Error('Checkpoint local incompatível; confira a nuvem.');
+            if (!value && deltas.length) throw new Error('Checkpoint local ausente; confira a Medição na nuvem.');
+            for (const delta of deltas.sort((a, b) => a.revision - b.revision)) {
+              if (!value || delta.revision !== value.revision + 1 || delta.patch.event.id === undefined)
+                throw new Error('Sequência local da Medição incompleta; confira a nuvem.');
+              const replacements = new Map(delta.patch.entries.map(entry => [`${entry.measurementId}:${entry.serviceId}`, entry]));
+              const existing = new Set(value.entries.map(entry => `${entry.measurementId}:${entry.serviceId}`));
+              value = { ...value, revision: delta.revision,
+                entries: [...value.entries.map(entry => replacements.get(`${entry.measurementId}:${entry.serviceId}`) ?? entry),
+                  ...delta.patch.entries.filter(entry => !existing.has(`${entry.measurementId}:${entry.serviceId}`))],
+                audit: [...value.audit, delta.patch.event] };
+            }
+            resolve(value);
+          } catch (error) { reject(error); }
+        };
+        tx.onabort = tx.onerror = () => { db.close(); reject(tx.error ?? new Error('Leitura local interrompida.')); };
+      });
     },
     backup: () => read<IncorporationBackup>('backups'),
     pending: async () => (await read<StoredMeasurementPending[]>('pending'))?.find((p): p is PendingMeasurementSave => !p.archivedAt && 'candidate' in p) ?? null,

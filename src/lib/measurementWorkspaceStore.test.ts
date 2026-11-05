@@ -13,7 +13,7 @@ it('migra o IndexedDB v1 e grava pendência compacta sem regravar um pending leg
   const legacy = { baseRevision: 1, candidate: { audit: [{ id: 'old-operation' }] } } as PendingMeasurementSave;
   stores.get('pending')!.set(key, [legacy]);
   vi.stubGlobal('indexedDB', { open: (_name: string, version: number) => {
-    expect(version).toBe(2);
+    expect(version).toBe(3);
     const request = {} as IDBOpenDBRequest;
     queueMicrotask(() => {
       const db = {

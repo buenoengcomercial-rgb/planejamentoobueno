@@ -8,25 +8,25 @@ import type { TakeoffCatalogPlan } from './planTakeoff';
 afterEach(() => vi.unstubAllGlobals());
 
 function isolatedCache() {
-  const stores = new Map<string, Map<string, unknown>>(['workspaces', 'backups', 'pending', 'drafts', 'pending_entry_patches']
+  const stores = new Map<string, Map<string, unknown>>(['workspaces', 'backups', 'pending', 'drafts', 'pending_entry_patches', 'confirmed_entry_patches']
     .map(name => [name, new Map()]));
   const writes: string[] = [];
   const scope = { environment: 'isolated' as const, userId: 'cloud:user', projectId: 'work' };
   vi.stubGlobal('indexedDB', { open: (_name: string, version: number) => {
-    expect(version).toBe(2);
+    expect(version).toBe(3);
     const request = {} as IDBOpenDBRequest;
     queueMicrotask(() => {
       const db = {
         objectStoreNames: { contains: (name: string) => stores.has(name) },
         close: () => undefined,
-        transaction: (name: string) => {
+        transaction: (_names: string | string[]) => {
           const tx = {} as IDBTransaction;
           let pending = 0, completed = false, aborted = false;
           Object.defineProperty(tx, 'abort', { value: () => {
             aborted = true; completed = true;
             queueMicrotask(() => tx.onabort?.(new Event('abort') as Event & { target: IDBTransaction }));
           } });
-          const operation = (kind: 'get' | 'put', key: string, value?: unknown) => {
+          const operation = (name: string, kind: 'get' | 'put', key: string, value?: unknown) => {
             pending++;
             const row = {} as IDBRequest;
             queueMicrotask(() => {
@@ -40,7 +40,7 @@ function isolatedCache() {
             });
             return row;
           };
-          Object.defineProperty(tx, 'objectStore', { value: () => ({ get: (key: string) => operation('get', key), put: (value: unknown, key: string) => operation('put', key, value) }) });
+          Object.defineProperty(tx, 'objectStore', { value: (name: string) => ({ get: (key: string) => operation(name, 'get', key), put: (value: unknown, key: string) => operation(name, 'put', key, value) }) });
           return tx;
         },
       } as unknown as IDBDatabase;
@@ -76,7 +76,29 @@ it('o checkpoint de metadados preserva arquivos locais atuais e históricos apen
   expect(saved.plans[1].file).toBeUndefined();
   await repo.cacheSnapshot!(before);
   expect((await repo.load())!.revision).toBe(8);
-  expect(writes.every(name => name === 'workspaces')).toBe(true);
+  expect(writes.filter(name => name === 'workspaces')).toHaveLength(2);
+});
+
+it('reabre 2 quantitativos confirmados sem regravar a planilha a cada item', async () => {
+  const { repo, writes } = isolatedCache();
+  const base = fixture();
+  await repo.cacheSnapshot!(base);
+  writes.length = 0;
+  let current = base;
+  for (const [index, quantity] of [2, 6].entries()) {
+    const previous = current.entries[0];
+    const entry = { ...previous, rows: [{ ...previous.rows[0], multiplier: quantity }] };
+    const event = { id: `edit-${index}`, at: '2026-11-05', actor: { id: 'user', name: 'User' },
+      action: 'Editar detalhe', affected: [{ measurementId: 'm1', serviceId: 's1' }], before: [previous], after: [entry] };
+    expect(await repo.cacheEntryPatch!(current.revision + 1, { entries: [entry], event })).toBe(index + 1);
+    current = { ...current, revision: current.revision + 1, entries: [entry], audit: [...current.audit, event] };
+  }
+  expect(writes).toEqual(['confirmed_entry_patches', 'confirmed_entry_patches']);
+  expect(await repo.load()).toEqual(current);
+  await repo.cacheSnapshot!(current);
+  expect(await repo.load()).toEqual(current);
+  await expect(repo.cacheEntryPatch!(current.revision + 2, { entries: [current.entries[0]], event: current.audit.at(-1)! }))
+    .rejects.toThrow('Checkpoint local desatualizado');
 });
 
 it('armazenar o arquivo baixado não muda a revisão, as quantidades nem outra versão da mesma planta', async () => {
@@ -91,7 +113,7 @@ it('armazenar o arquivo baixado não muda a revisão, as quantidades nem outra v
     if (plan.storagePath === 'work/plan/current.dxf') expect(await plan.file!.text()).toBe('DXF real já baixado');
     else expect(plan.file).toBeUndefined();
   }
-  expect(writes).toEqual(['workspaces', 'workspaces']);
+  expect(writes.filter(name => name === 'workspaces')).toHaveLength(2);
 });
 
 it('arquivo vazio ou pertencente a outro ID/caminho não substitui o catálogo confirmado', async () => {
