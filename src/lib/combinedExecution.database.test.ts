@@ -53,7 +53,8 @@ beforeEach(async () => {
   }
   await db.exec(await readFile(new URL('../../supabase/audits/execution_protection_preflight.sql',import.meta.url),'utf8'));
   await db.exec(`CREATE FUNCTION public.has_org_role(uuid,uuid,public.org_role[]) RETURNS boolean LANGUAGE sql AS $$ SELECT true $$;`);
-  for (const migration of ['20261016120000_concurrent_field_merge.sql','20261016122000_concurrent_project_domains.sql']) {
+  for (const migration of ['20261016120000_concurrent_field_merge.sql','20261016122000_concurrent_project_domains.sql',
+    '20261016130000_concurrent_audit_stamps.sql','20261105090000_additive_schedule_timestamp_merge.sql']) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${migration}`,import.meta.url),'utf8'));
   }
 }, 20000);
@@ -61,6 +62,30 @@ afterEach(async () => { await db.close(); });
 
 const log = (id: string, qty: number, number = 1) => ({ id, task_id: 't', log_date: null, data: { id, date: '', plannedQuantity: 0, actualQuantity: qty, measurementPeriod: { number, startDate: `2026-${number + 9}-01`, endDate: `2026-${number + 9}-${number === 2 ? 30 : 31}` } } });
 describe('proteções combinadas com a versão atual do Lovable',()=>{
+ it('mescla datas distintas do Cronograma do Aditivo sem conflitar no updatedAt',async()=>{
+  const base={id:'add-1',name:'Aditivo',compositions:[{id:'item-1',total:100}],scheduleDraft:{
+   updatedAt:'2026-10-01T12:00:00Z',plannedTasks:[
+    {id:'task-1',startDate:'2026-10-01'},{id:'task-2',startDate:'2026-10-01'},
+   ],
+  }};
+  await db.query('insert into additives(project_id,id,name,version,data) values($1,$2,$3,$4,$5)',[project,base.id,base.name,1,json(base)]);
+  const request=(id:string,date:string,stamp:string)=>({domain:'additive',origin:'additiveSchedule',changes:[{
+   table:'additives',upserts:[{id:base.id,expected:{id:base.id,data:{scheduleDraft:base.scheduleDraft}},
+    row:{id:base.id,data:{scheduleDraft:{...base.scheduleDraft,updatedAt:stamp,
+     plannedTasks:base.scheduleDraft.plannedTasks.map(task=>task.id===id?{...task,startDate:date}:task),
+    }}}}],deletes:[],
+  }],audits:[]});
+  const commit=(operation:string,payload:unknown)=>db.query('select commit_project_fields($1,$2,$3,$4)',[project,org,operation,json(payload)]);
+  await commit('planning-first',request('task-1','2026-10-02','2026-10-01T12:01:00Z'));
+  await commit('planning-second',request('task-2','2026-10-03','2026-10-01T12:02:00Z'));
+  const saved=(await db.query<{data:typeof base}>('select data from additives where id=$1',[base.id])).rows[0].data;
+  expect(saved.compositions).toEqual(base.compositions);
+  expect(saved.scheduleDraft.updatedAt).toBe('2026-10-01T12:02:00Z');
+  expect(saved.scheduleDraft.plannedTasks).toEqual([
+   {id:'task-1',startDate:'2026-10-02'},{id:'task-2',startDate:'2026-10-03'},
+  ]);
+  await expect(commit('planning-collision',request('task-1','2026-10-04','2026-10-01T12:03:00Z'))).rejects.toThrow('Conflito no campo');
+ });
  it('patch pequeno do cronograma preserva orçamento, concilia outra gravação e mantém recibo',async()=>{
   const original={id:'add-1',name:'Aditivo',compositions:[{id:'item-1',total:100}],scheduleDraft:{plannedTasks:[{id:'task-1',startDate:'2026-10-01'}]}};
   await db.query('insert into additives(project_id,id,name,version,data) values($1,$2,$3,$4,$5)',[project,'add-1','Aditivo',1,json(original)]);
