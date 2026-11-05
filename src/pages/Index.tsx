@@ -691,11 +691,15 @@ export default function Index() {
           setRawProject(effectiveProject);
         }
       }
-      if (seq === saveRequestSeqRef.current && !saveTimerRef.current && !partialSync) {
+      const currentMatchesReceipt = rawProjectRef.current?.id === effectiveProject.id
+        && serializeProject(rawProjectRef.current) === effectiveJson;
+      if (seq === saveRequestSeqRef.current && !saveTimerRef.current && !partialSync && currentMatchesReceipt) {
         if (!options.retainDraftUntilVerified) discardProjectDraft(effectiveProject.id);
         setSaveStatus('saved');
       } else if (partialSync) {
         setSaveStatus('error');
+      } else if (!currentMatchesReceipt) {
+        setSaveStatus('pending');
       }
       setCloudList(prev => {
         const idx = prev.findIndex(p => p.id === effectiveProject.id);
@@ -877,18 +881,19 @@ export default function Index() {
     });
   }, [appliedWorkStart, editor, measurementWorkStart, partialSyncIssue, rawProject?.id, scheduleProjectDraft, synchronizeLoadedProjectSchedule]);
 
-  const flushPendingSave = useCallback((useLatestProject = false) => flushPendingProjectSave({
+  const flushPendingSave = useCallback((useLatestProject = false, requireCloudConfirmation = false) => flushPendingProjectSave({
     userId: user?.id, orgId, project: useLatestProject ? rawProjectRef.current : rawProject, initialLoadRef, canPersistProject,
     productionCaptureBusyRef, conflictDetectedRef, warehouseClientOperationInFlightRef,
     pendingDailyReportSavesRef, dailyReportSaveQueueRef, warehouseOperationInFlightRef,
     warehouseScopedOperationInFlightRef, saveTimerRef, inFlightSaveRef, partialSyncPendingRef,
-    rawProjectRef, persistProject, handleCloudConflict, setSaveStatus,
+    rawProjectRef, lastSavedProjectJsonRef, requireCloudConfirmation,
+    persistProject, handleCloudConflict, setSaveStatus,
   }), [user?.id, orgId, rawProject, canPersistProject, persistProject, handleCloudConflict]);
 
   const saveAdditiveScheduleNow = useCallback(async () => {
     flushPendingEditCommits();
     await new Promise<void>(resolve => window.setTimeout(resolve, 0));
-    return flushPendingSave(true);
+    return flushPendingSave(true, true);
   }, [flushPendingSave]);
 
   const runProtectedNavigation = useCallback(<T,>(action: () => Promise<T>): Promise<T | undefined> => (
@@ -1543,7 +1548,9 @@ export default function Index() {
           onViewChange={nextView => navigateToProjectView({
             role, currentView: safeCurrentView,
             warehouseClientOperationInFlightRef, warehouseOperationInFlightRef,
-            warehouseScopedOperationInFlightRef, pendingDraftRef, conflictDetectedRef,
+            warehouseScopedOperationInFlightRef, navigationInFlightRef,
+            flushPendingAdditiveSave: saveAdditiveScheduleNow,
+            pendingDraftRef, conflictDetectedRef,
             cancelScheduledDraft, writeProtectedProjectDraft,
             setProductionWorkspaceInitialTab, setDailyReportInitialFilter,
             setCurrentView, setSidebarOpen, confirmDiscardPendingForm,
