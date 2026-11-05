@@ -1,5 +1,7 @@
 # Architecture rules
 
+- Authentication context identity lives in a non-component module shared by provider and hook; hot refresh must not split mounted providers from consumers or bypass the missing-provider guard.
+
 - Period daily-report PDFs read all confirmed reports using paginated inclusive date queries before rendering; partial page state must not omit saved diaries.
 
 - Legacy private role checks delegate to the canonical public membership helper through a non-public compatibility function; this preserves trigger checks without duplicating authorization rules.

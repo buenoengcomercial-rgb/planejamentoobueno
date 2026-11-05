@@ -913,35 +913,6 @@ export type Database = {
           },
         ]
       }
-      warehouse_project_state: {
-        Row: {
-          project_id: string
-          state_json: Json
-          warehouse_updated_at: string
-          warehouse_version: number
-        }
-        Insert: {
-          project_id: string
-          state_json?: Json
-          warehouse_updated_at?: string
-          warehouse_version?: number
-        }
-        Update: {
-          project_id?: string
-          state_json?: Json
-          warehouse_updated_at?: string
-          warehouse_version?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "warehouse_project_state_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: true
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       stock_movements: {
         Row: {
           created_at: string
@@ -1307,6 +1278,35 @@ export type Database = {
           },
         ]
       }
+      warehouse_project_state: {
+        Row: {
+          project_id: string
+          state_json: Json
+          warehouse_updated_at: string
+          warehouse_version: number
+        }
+        Insert: {
+          project_id: string
+          state_json?: Json
+          warehouse_updated_at?: string
+          warehouse_version?: number
+        }
+        Update: {
+          project_id?: string
+          state_json?: Json
+          warehouse_updated_at?: string
+          warehouse_version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "warehouse_project_state_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       warehouse_requisitions: {
         Row: {
           created_at: string
@@ -1411,10 +1411,16 @@ export type Database = {
         Args: { p_items: Json; p_project_id: string }
         Returns: Json
       }
-      checkpoint_measurement_workspace: {
-        Args: { p_project_id: string }
-        Returns: boolean
-      }
+      checkpoint_measurement_workspace:
+        | { Args: { p_project_id: string }; Returns: boolean }
+        | {
+            Args: {
+              p_expected_data_md5: string
+              p_expected_revision: number
+              p_project_id: string
+            }
+            Returns: Json
+          }
       commit_measurement_command_v2: {
         Args: {
           p_command: Json
