@@ -178,7 +178,7 @@ export default function AdditiveHeaderInfo({
             </Field>
             <Field label="Data de Vigência Contratual">
               <Input
-                type="date" value={draft.effectiveDate} disabled={isLocked}
+                type="date" aria-label="Data de Vigência Contratual" value={draft.effectiveDate} disabled={!!active.isContracted && !active.editUnlocked}
                 onChange={e => set('effectiveDate', e.target.value)}
               />
             </Field>

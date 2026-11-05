@@ -55,8 +55,12 @@ function timed<T>(calculate: () => T): { value: T; durationMs: number } {
 function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[], additive: Additive): Record<string, AdditiveScheduleSuspensionMeta> {
   const result: Record<string, AdditiveScheduleSuspensionMeta> = {};
   const legacyFullySuppressed = getFullySuppressedTaskIds(additive);
+  const contractedNewServices = new Set(additive.isContracted
+    ? additive.compositions.filter(composition => composition.isNewService).map(composition => composition.id)
+    : []);
   rows.forEach(row => {
     if (row.description.startsWith('Impacto do aditivo - ')) return;
+    if (row.classification === 'proposed_addition' && row.compositionId && contractedNewServices.has(row.compositionId)) return;
     const fallbackState = legacyFullySuppressed.has(row.taskId) ? 'fully_suppressed' : resolveAdditiveScheduleState(row);
     if (fallbackState === 'scheduled' && row.classification === 'contracted_released' && !row.quantityRestriction) return;
     const isManual = row.classification === 'contracted_suspended' && !!row.blockingCompositions?.length;

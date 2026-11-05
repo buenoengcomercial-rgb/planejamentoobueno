@@ -62,6 +62,25 @@ afterEach(async () => { await db.close(); });
 
 const log = (id: string, qty: number, number = 1) => ({ id, task_id: 't', log_date: null, data: { id, date: '', plannedQuantity: 0, actualQuantity: qty, measurementPeriod: { number, startDate: `2026-${number + 9}-01`, endDate: `2026-${number + 9}-${number === 2 ? 30 : 31}` } } });
 describe('proteções combinadas com a versão atual do Lovable',()=>{
+ it('contrata o aditivo e registra serviço novo sem alterar a tarefa original',async()=>{
+  await db.exec('ALTER TABLE budget_items ADD COLUMN item text, ADD COLUMN code text, ADD COLUMN source text, ADD COLUMN task_id text, ADD COLUMN additive_id text, ADD COLUMN created_by uuid; ALTER TABLE budget_items ADD CONSTRAINT budget_items_id_key UNIQUE(id)');
+  const originalTask=(await db.query<{data:unknown}>('select data from tasks where id=$1',['t'])).rows[0].data;
+  const approved={id:'add-1',name:'Aditivo',status:'aprovado',version:1,compositions:[{id:'new-1',isNewService:true}]};
+  await db.query('insert into additives(project_id,id,name,status,version,data) values($1,$2,$3,$4,$5,$6)',
+   [project,approved.id,approved.name,approved.status,approved.version,json(approved)]);
+  const contracted={...approved,status:'aditivo_contratado',isContracted:true,effectiveDate:'2026-11-05',contractRevisionId:'revision-1'};
+  const newItem={id:'add-add-1-new-1',source:'aditivo',additiveId:'add-1',quantity:1};
+  const request={domain:'additive',metadata:{expected:{},next:{contractRevisions:[{id:'revision-1',status:'contracted'}]}},
+   changes:[{table:'additives',upserts:[{id:'add-1',expected:{id:'add-1',name:'Aditivo',status:'aprovado',version:1,data:approved},
+    row:{id:'add-1',name:'Aditivo',status:'aditivo_contratado',version:1,data:contracted}}],deletes:[]},
+    {table:'budget_items',upserts:[{id:newItem.id,expected:null,row:{id:newItem.id,source:'aditivo',additive_id:'add-1',data:newItem}}],deletes:[]}],
+   audits:[{id:'audit-contract',data:{id:'audit-contract',entityType:'additive',entityId:'add-1',action:'contracted',at:'2026-11-05T00:00:00Z'}}]};
+  await db.query('select commit_project_fields($1,$2,$3,$4)',[project,org,'contract-add-1',json(request)]);
+  expect((await db.query<{data:unknown}>('select data from tasks where id=$1',['t'])).rows[0].data).toEqual(originalTask);
+  expect((await db.query<{data:typeof contracted}>('select data from additives where id=$1',['add-1'])).rows[0].data)
+   .toMatchObject({status:'aditivo_contratado',isContracted:true,contractRevisionId:'revision-1'});
+  expect((await db.query('select id from budget_items where id=$1',[newItem.id])).rows).toHaveLength(1);
+ });
  it('mescla datas distintas do Cronograma do Aditivo sem conflitar no updatedAt',async()=>{
   const base={id:'add-1',name:'Aditivo',compositions:[{id:'item-1',total:100}],scheduleDraft:{
    updatedAt:'2026-10-01T12:00:00Z',plannedTasks:[

@@ -14,12 +14,13 @@ import {
   importAdditiveFromExcel, exportAdditiveToExcel, exportAdditiveToPdf,
   additiveTotals, getApprovedAdditiveBudgetItems,
   buildAdditiveFromSyntheticBudgetItems,
-  createNewServiceComposition, contractAdditive,
+  createNewServiceComposition,
   applyAdditiveAnalyticImport,
   resolveAdditivePricingRule,
   type AnalyticBlock,
   type AdditiveAnalyticImportPreview,
 } from '@/lib/additiveImport';
+import { contractAdditiveKeepingBase } from '@/lib/additiveContractSeparation';
 import { calculateLineTotal, trunc2 } from '@/lib/financialEngine';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import {
@@ -48,7 +49,7 @@ const loadAdditiveReports = () => import('@/lib/additiveReports');
 interface Params {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
-  onSaveNow?: (expectedApproval?: { additiveId: string; version: number }) => Promise<boolean>;
+  onSaveNow?: (expectedApproval?: import('@/lib/additiveCloudConfirmation').AdditiveCloudExpectation) => Promise<boolean>;
   state: AdditiveStateApi;
   canFormalize?: boolean;
 }
@@ -1137,28 +1138,32 @@ export function useAdditiveActions({ project, onProjectChange, onSaveNow, state,
     toast.success('Edicao liberada. Ajuste o aditivo e clique em Reintegrar ao projeto para atualizar as abas vinculadas.');
   };
 
-  const handleContractAdditive = () => {
-    if (!active) return;
+  const handleContractAdditive = async (effectiveDate: string): Promise<boolean> => {
+    if (!active) return false;
     if (!canFormalize) {
       toast.error('Somente Proprietario ou Administrador pode contratar um aditivo.');
-      return;
+      return false;
     }
     if (active.status !== 'aprovado' && !active.isContracted) {
       toast.error('O aditivo precisa estar Aprovado para ser contratado.');
-      return;
+      return false;
     }
-    if (!active.effectiveDate) {
-      toast.error('Informe e salve a data de vigencia contratual antes de contratar o aditivo.');
-      return;
+    const parsedEffectiveDate = new Date(`${effectiveDate}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)
+      || Number.isNaN(parsedEffectiveDate.getTime())
+      || parsedEffectiveDate.toISOString().slice(0, 10) !== effectiveDate) {
+      toast.error('Informe a data de vigência contratual para integrar o aditivo.');
+      return false;
     }
     const scheduleIssues = validateAdditiveSchedule(project, active);
     if (scheduleIssues.length > 0) {
       toast.error(`Conclua o Cronograma do Aditivo antes da contratação: ${scheduleIssues.slice(0, 3).join(' ')}`);
-      return;
+      return false;
     }
     const isReintegration = !!active.isContracted;
     const novosServicos = active.compositions.filter(c => c.isNewService);
-    onProjectChange(prev => {
+    try {
+      flushSync(() => onProjectChange(prev => {
       const settledProject = settleAdditiveScheduleDraft(prev, active.id, obraConfig);
       const currentAdditive = (settledProject.additives ?? []).find(item => item.id === active.id);
       if (!currentAdditive?.scheduleDraft) return settledProject;
@@ -1174,6 +1179,7 @@ export function useAdditiveActions({ project, onProjectChange, onSaveNow, state,
         additives: (settledProject.additives ?? []).map(item => item.id === active.id
           ? {
               ...item,
+              effectiveDate,
               scheduleSnapshots: [
                 ...(item.scheduleSnapshots ?? []).filter(existing => existing.id !== snapshot.id),
                 snapshot,
@@ -1181,7 +1187,7 @@ export function useAdditiveActions({ project, onProjectChange, onSaveNow, state,
             }
           : item),
       };
-      const next = contractAdditive(prepared, active.id, auditUser?.userName || auditUser?.userEmail, obraConfig);
+      const next = contractAdditiveKeepingBase(prepared, active.id, auditUser?.userName || auditUser?.userEmail, obraConfig);
       return logToProject(next, {
         ...auditUser,
         entityType: 'additive',
@@ -1196,8 +1202,18 @@ export function useAdditiveActions({ project, onProjectChange, onSaveNow, state,
           budgetItemsCriados: (next.budgetItems ?? []).filter(b => b.additiveId === active.id).length,
         },
       });
-    });
-    toast.success('Aditivo integrado ao projeto — composições vinculadas a Tarefas, Cronograma, Medição e Diário.');
+      }));
+      const expectedVersion = active.isContracted ? (active.version ?? 0) + 1 : (active.version ?? 0);
+      if (!onSaveNow || !await onSaveNow({ additiveId: active.id, version: expectedVersion, status: 'aditivo_contratado' })) {
+        toast.warning('A integração ainda não foi confirmada na nuvem. A tentativa local foi preservada; use “Salvar agora” antes de sair.');
+        return false;
+      }
+      toast.success('Aditivo contratado e confirmado na nuvem.');
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao confirmar a integração na nuvem.');
+      return false;
+    }
   };
 
   // ----- Memória de cálculo -----

@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Additive, AdditiveComposition, Project } from '@/types/project';
-import { syncAdditiveScheduleDraft } from '@/lib/additiveSchedule';
+import { buildAdditiveSchedulePreviewProject, confirmAdditiveScheduleDates, createAdditiveScheduleSnapshot, syncAdditiveScheduleDraft } from '@/lib/additiveSchedule';
+import { contractAdditiveKeepingBase } from '@/lib/additiveContractSeparation';
 import AdditiveSchedule from './AdditiveSchedule';
 
 const contractedComposition: AdditiveComposition = {
@@ -122,5 +123,24 @@ describe('AdditiveSchedule - composições bloqueadoras', () => {
     const reopened = screen.getByRole('dialog');
     expect(within(reopened).getByRole('checkbox', { name: /HID-458/i })).toBeChecked();
     expect(within(reopened).getByRole('checkbox', { name: /HID-BASE/i })).toBeChecked();
+  });
+
+  it('mostra a barra do serviço novo no histórico do aditivo contratado', () => {
+    const drafted = confirmAdditiveScheduleDates(
+      syncAdditiveScheduleDraft(baseProject, additive.id, '2026-08-14T12:00:00.000Z'), additive.id);
+    const active = drafted.additives![0];
+    const preview = buildAdditiveSchedulePreviewProject(drafted, active, active.scheduleDraft!);
+    const snapshot = createAdditiveScheduleSnapshot(drafted, active, preview, 'Fiscal');
+    const prepared: Project = {
+      ...drafted,
+      additives: [{ ...active, scheduleSnapshots: [snapshot] }],
+    };
+    const contracted = contractAdditiveKeepingBase(prepared, additive.id, 'Administrador');
+    expect(contracted.phases).toEqual(prepared.phases);
+    expect(contracted.budgetItems?.some(item => item.additiveId === additive.id)).toBe(true);
+
+    render(<AdditiveSchedule project={contracted} onProjectChange={vi.fn()} />);
+    expect(screen.getByTestId('gantt-bar-add-add-1-new-hydrant-458')).toBeInTheDocument();
+    expect(screen.queryByTestId('gantt-proposed-label-add-add-1-new-hydrant-458')).not.toBeInTheDocument();
   });
 });

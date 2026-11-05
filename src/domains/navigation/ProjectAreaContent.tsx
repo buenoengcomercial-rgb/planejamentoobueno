@@ -59,7 +59,7 @@ export interface ProjectAreaContentProps {
   dailyReportSetter: ProjectSetter;
   additiveSetter: ProjectSetter;
   additiveScheduleSetter: ProjectSetter;
-  onSaveAdditiveScheduleNow: (expectedApproval?: { additiveId: string; version: number }) => Promise<boolean>;
+  onSaveAdditiveScheduleNow: (expectedApproval?: import('@/lib/additiveCloudConfirmation').AdditiveCloudExpectation) => Promise<boolean>;
   realCostSetter: ProjectSetter;
   materialsSetter: ProjectSetter;
   warehouseSetter: ProjectSetter;

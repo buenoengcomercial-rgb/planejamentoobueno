@@ -37,7 +37,7 @@ import { shouldDismissAdditiveDetail } from '@/components/additive/additiveDetai
 interface Props {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
-  onSaveNow?: (expectedApproval?: { additiveId: string; version: number }) => Promise<boolean>;
+  onSaveNow?: (expectedApproval?: import('@/lib/additiveCloudConfirmation').AdditiveCloudExpectation) => Promise<boolean>;
   undoButton?: React.ReactNode;
   canFormalize?: boolean;
 }
@@ -81,6 +81,8 @@ export default function Additive({ project, onProjectChange, onSaveNow, undoButt
     .filter(phase => phase.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().includes('SERVICOS - ITENS NOVOS'))
     .map(phase => phase.id), [project.phases]);
   const [contractConfirmOpen, setContractConfirmOpen] = useState(false);
+  const [contractEffectiveDate, setContractEffectiveDate] = useState('');
+  const [contractSaving, setContractSaving] = useState(false);
   const [detailSelection, setDetailSelection] = useState<AdditiveDetailSelection | null>(null);
   const [subchapterParentId, setSubchapterParentId] = useState<string | null>(null);
   const [subchapterName, setSubchapterName] = useState('Novo Subcapítulo');
@@ -131,7 +133,10 @@ export default function Additive({ project, onProjectChange, onSaveNow, undoButt
         onOpenImport={() => setImportDialogOpen(true)}
         onUseSynthetic={actions.handleUseSyntheticFromMeasurement}
         onUnlockIntegrated={actions.handleUnlockIntegratedAdditive}
-        onContract={() => setContractConfirmOpen(true)}
+        onContract={() => {
+          setContractEffectiveDate((active?.effectiveDate ?? '').slice(0, 10));
+          setContractConfirmOpen(true);
+        }}
         onExportExcel={actions.handleExportExcel}
         onExportSyntheticComplete={actions.handleExportSyntheticCompleteExcel}
         onExportNewServices={actions.handleExportNewServicesExcel}
@@ -339,25 +344,43 @@ export default function Additive({ project, onProjectChange, onSaveNow, undoButt
             <AlertDialogDescription>
               {isReintegration && (
                 <span>
-                  A revisao atual vai atualizar as abas vinculadas usando apenas as diferencas: supressoes, acrescimos, novos servicos alterados e novas composicoes excluidas desta revisao.
+                  A revisão atual vai atualizar o Cronograma do Aditivo e seus itens próprios, preservando a EAP e os quantitativos originais.
                 </span>
               )}
               {!isReintegration && (
                 <>
-              Após integrar, este aditivo passará a compor o contrato da obra e será vinculado às abas
-              Tarefas, Cronograma, Medição e Diário de Obra. Novos serviços virarão tarefas reais e
-              quantidades acrescidas/suprimidas atualizarão as composições existentes. Esta ação não pode ser desfeita.
+              A contratação libera os serviços novos como barras no Cronograma do Aditivo e registra
+              seus itens próprios. A EAP e os quantitativos do contrato original serão preservados.
                 </>
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="additive-contract-effective-date">Data de vigência contratual</Label>
+            <Input
+              id="additive-contract-effective-date"
+              type="date"
+              value={contractEffectiveDate}
+              onChange={event => setContractEffectiveDate(event.target.value)}
+              disabled={contractSaving}
+            />
+            {!contractEffectiveDate && <p className="text-xs text-amber-700">Informe a vigência para confirmar a contratação na nuvem.</p>}
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction
               className="bg-primary text-primary-foreground hover:bg-primary/90"
-              onClick={() => { setContractConfirmOpen(false); actions.handleContractAdditive(); }}
+              disabled={!contractEffectiveDate || contractSaving}
+              onClick={event => {
+                event.preventDefault();
+                setContractSaving(true);
+                void actions.handleContractAdditive(contractEffectiveDate).finally(() => {
+                  setContractSaving(false);
+                  setContractConfirmOpen(false);
+                });
+              }}
             >
-              {isReintegration ? 'Reintegrar ao projeto' : 'Integrar ao Projeto'}
+              {contractSaving ? 'Confirmando na nuvem...' : isReintegration ? 'Reintegrar ao projeto' : 'Integrar ao Projeto'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
