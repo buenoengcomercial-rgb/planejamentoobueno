@@ -184,6 +184,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [periodOpen, setPeriodOpen] = useState(false), [fiscalOpen, setFiscalOpen] = useState(false);
   const [lifecycle, setLifecycle] = useState<LifecycleSelection | null>(null);
   const [drafts, setDrafts] = useState<WorkspaceDraft[]>([]), [recovery, setRecovery] = useState(false);
+  const [resolvingDraft, setResolvingDraft] = useState<string | null>(null);
   const [legacyRemaining, setLegacyRemaining] = useState<string[]>([]);
   const [, markDraftChange] = useState(0);
   const captureDraftWrite = useRef<Promise<boolean>>(Promise.resolve(true));
@@ -758,6 +759,64 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     },
   }), [actor, persist, repository]);
   const draftKey = (mid: string, sid: string, rid: string) => JSON.stringify([mid, sid, rid]);
+  const resolveLocalDraft = async (draft: WorkspaceDraft, choice: 'cloud' | 'local') => {
+    const key = draftKey(draft.measurementId, draft.serviceId, draft.rowId);
+    const latest = current.current;
+    if (!latest || resolvingDraft || !repository.concurrentEntries || repository.loadedOffline?.()) return;
+    if (busy.current || detailQueue.current.length || bufferedDetail.current || draftChanges.current.size) {
+      setError('Aguarde os lançamentos em andamento antes de conferir o rascunho.'); return;
+    }
+    const period = latest.periods.find(value => value.id === draft.measurementId);
+    const service = latest.services.find(value => value.id === draft.serviceId);
+    if (!period || !service) { setError('O item deste rascunho não está mais disponível.'); return; }
+    if (choice === 'local' && (!actor.canEdit || isPeriodLocked(period))) {
+      setError('Esta medição está bloqueada para alterar o quantitativo.'); return;
+    }
+    const label = `${period.number}ª medição · item ${service.item}`;
+    if (!window.confirm(choice === 'cloud'
+      ? `Manter o valor confirmado na nuvem para ${label} e remover apenas este rascunho deste navegador?`
+      : `Enviar o valor deste rascunho para a nuvem em ${label}? Confira os dois valores exibidos antes de confirmar.`)) return;
+    setResolvingDraft(key); setError('');
+    try {
+      // Recheck the confirmed sheet after confirmation; another editor may have changed it.
+      const remote = await repository.load();
+      if (!remote || repository.loadedOffline?.()) throw new Error('Não foi possível conferir a versão atual da nuvem. O rascunho foi preservado.');
+      const before = entryFor(latest, draft.measurementId, draft.serviceId);
+      const now = entryFor(remote, draft.measurementId, draft.serviceId);
+      if (JSON.stringify(before) !== JSON.stringify(now)) throw new Error('Este item mudou na nuvem. Reabra a Medição e confira os valores antes de decidir.');
+      if (choice === 'local') {
+        const numeric = new Set(['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD']);
+        const fields = Object.entries(draft.changes).filter(([field]) => field !== 'createdRowId');
+        if (!fields.length || fields.some(([field]) => !numeric.has(field))) throw new Error('Este rascunho exige conferência manual no detalhe do item.');
+        const changes = Object.fromEntries(fields.map(([field, value]) => {
+          const parsed = typeof value === 'number' ? value : Number(String(value).replace(',', '.'));
+          if (!Number.isFinite(parsed) || parsed < 0) throw new Error('O valor local não é um quantitativo válido.');
+          return [field, parsed];
+        }));
+        let row;
+        if (draft.rowId === '__manual__') {
+          const existing = now.rows[0];
+          if (now.rows.length > 1 || existing && existing.origin?.kind !== 'manual') throw new Error('O detalhe deste item mudou. Confira a linha manual antes de aplicar.');
+          row = { ...newMeasuredRow(existing?.id), ...existing, origin: existing?.origin ?? { kind: 'manual' as const }, ...changes };
+        } else if (draft.rowId === '__new__') {
+          const id = draft.changes.createdRowId;
+          if (typeof id !== 'string' || now.rows.some(value => value.id === id)) throw new Error('A nova linha mudou. Confira o detalhe antes de aplicar.');
+          row = { ...newMeasuredRow(id), ...changes };
+        } else {
+          const existing = now.rows.find(value => value.id === draft.rowId);
+          if (!existing) throw new Error('A linha deste rascunho não existe mais na nuvem.');
+          row = { ...existing, ...changes };
+        }
+        const saved = await repository.commit(editMeasuredRow(remote, actor, draft.measurementId, draft.serviceId, row), remote.revision);
+        if (!confirmedRowDraft(saved, draft)) throw new Error('A nuvem não confirmou o valor local. O rascunho foi preservado.');
+        adopt(saved);
+        setConfirmedAt(new Date().toISOString());
+      } else adopt(remote);
+      await repository.clearDraft(draft.measurementId, draft.serviceId, draft.rowId);
+      setDrafts(await repository.drafts());
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setResolvingDraft(null); }
+  };
   const hasPendingFiscalDraft = (measurementId: string) => drafts.some(d => d.measurementId === measurementId && !(d.serviceId === bulletinDraftKey && d.rowId === 'number'))
     || [...draftChanges.current.keys()].some(key => key.startsWith(`[${JSON.stringify(measurementId)},`));
   const clearDraft = (mid: string, sid: string, rid?: string, expectedVersion?: number) => {
@@ -1245,6 +1304,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
               : entryFor(workspace, draft.measurementId, draft.serviceId).rows.find(row => row.id === draft.rowId || draft.rowId === '__manual__')?.[field as keyof ReturnType<typeof entryFor>['rows'][number]];
             return <span key={field} className="mr-3">{field}: local {String(value)}{saved !== undefined ? ` · nuvem ${String(saved)}` : ''}</span>;
           })}</div>
+          {repository.concurrentEntries && <div className="mt-1 flex gap-3">
+            <button className="underline disabled:opacity-50" disabled={!!resolvingDraft || saving} onClick={() => void resolveLocalDraft(draft, 'cloud')}>Manter valor da nuvem</button>
+            <button className="underline disabled:opacity-50" disabled={!!resolvingDraft || saving || !actor.canEdit} onClick={() => void resolveLocalDraft(draft, 'local')}>Enviar valor local</button>
+          </div>}
         </li>;
       })}</ul>
     </details>}

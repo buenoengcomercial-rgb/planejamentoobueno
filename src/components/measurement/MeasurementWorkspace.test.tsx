@@ -48,6 +48,51 @@ describe('Tela própria de Medição', () => {
     expect(repository.clearDraft).not.toHaveBeenCalled();
     expect(repository.commit).not.toHaveBeenCalled();
   });
+  it('permite manter a nuvem e remover somente o rascunho conferido', async () => {
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), measuredQuantity: 3 }] }];
+    const drafts = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'r', changes: { measuredQuantity: '4' } }];
+    repository.drafts = vi.fn(async () => [...drafts]);
+    repository.clearDraft = vi.fn(async () => { drafts.splice(0, 1); });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByText('1 rascunho(s) local(is) da Medição aguardando conferência'));
+    fireEvent.click(screen.getByRole('button', { name: 'Manter valor da nuvem' }));
+    await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', 's', 'r'));
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(screen.queryByText('1 rascunho(s) local(is) da Medição aguardando conferência')).not.toBeInTheDocument();
+  });
+  it('envia o valor local somente após escolha explícita e confirmação da nuvem', async () => {
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), measuredQuantity: 3 }] }];
+    let cloud = w;
+    repository.load = vi.fn(async () => cloud);
+    repository.commit = vi.fn(async next => { cloud = next; return next; });
+    const drafts = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'r', changes: { measuredQuantity: '4' } }];
+    repository.drafts = vi.fn(async () => [...drafts]);
+    repository.clearDraft = vi.fn(async () => { drafts.splice(0, 1); });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByText('1 rascunho(s) local(is) da Medição aguardando conferência'));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar valor local' }));
+    await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', 's', 'r'));
+    expect(cloud.entries[0].rows[0].measuredQuantity).toBe(4);
+    expect(screen.queryByText('1 rascunho(s) local(is) da Medição aguardando conferência')).not.toBeInTheDocument();
+  });
+  it('preserva o rascunho quando o item mudou na nuvem durante a conferência', async () => {
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), measuredQuantity: 3 }] }];
+    const changed = structuredClone(w); changed.entries[0].rows[0].measuredQuantity = 5;
+    repository.load = vi.fn().mockResolvedValueOnce(w).mockResolvedValue(changed);
+    repository.drafts = vi.fn(async () => [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'r', changes: { measuredQuantity: '4' } }]);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByText('1 rascunho(s) local(is) da Medição aguardando conferência'));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar valor local' }));
+    expect(await screen.findByText(/Este item mudou na nuvem/)).toBeVisible();
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(repository.clearDraft).not.toHaveBeenCalled();
+  });
   it('reconhece como confirmado um campo numérico salvo como texto no rascunho', async () => {
     const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
     w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), measuredQuantity: 4 }] }];
