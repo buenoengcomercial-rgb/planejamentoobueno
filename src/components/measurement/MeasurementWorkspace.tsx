@@ -773,9 +773,15 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       setError('Esta medição está bloqueada para alterar o quantitativo.'); return;
     }
     const label = `${period.number}ª medição · item ${service.item}`;
+    const linkedRow = entryFor(latest, draft.measurementId, draft.serviceId).rows.find(row => row.id === draft.rowId);
+    const detachesDrawing = choice === 'local' && !!linkedRow && ([
+      ['multiplier', 'multiplierSource'], ['measuredQuantity', 'source'],
+      ['dimensionC', 'dimensionCSource'], ['dimensionD', 'dimensionDSource'],
+    ] as const).some(([quantity, source]) => !!linkedRow[source] && quantity in draft.changes
+      && Number(String(draft.changes[quantity]).replace(',', '.')) !== linkedRow[quantity]);
     if (!window.confirm(choice === 'cloud'
       ? `Manter o valor confirmado na nuvem para ${label} e remover apenas este rascunho deste navegador?`
-      : `Enviar o valor deste rascunho para a nuvem em ${label}? Confira os dois valores exibidos antes de confirmar.`)) return;
+      : `Enviar o valor deste rascunho para a nuvem em ${label}? Confira os dois valores exibidos antes de confirmar.${detachesDrawing ? ' A marcação vinculada também será desvinculada na mesma gravação.' : ''}`)) return;
     setResolvingDraft(key); setError('');
     try {
       // Recheck the confirmed sheet after confirmation; another editor may have changed it.
@@ -806,6 +812,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           const existing = now.rows.find(value => value.id === draft.rowId);
           if (!existing) throw new Error('A linha deste rascunho não existe mais na nuvem.');
           row = { ...existing, ...changes };
+          // A recovered numeric draft may predate a failed drawing unlink. A
+          // quantity cannot disagree with the geometry still linked to it.
+          for (const [quantity, source] of [
+            ['multiplier', 'multiplierSource'], ['measuredQuantity', 'source'],
+            ['dimensionC', 'dimensionCSource'], ['dimensionD', 'dimensionDSource'],
+          ] as const) {
+            if (quantity in changes && existing[source] && row[quantity] !== existing[quantity]) delete row[source];
+          }
         }
         const saved = await repository.commit(editMeasuredRow(remote, actor, draft.measurementId, draft.serviceId, row), remote.revision);
         if (!confirmedRowDraft(saved, draft)) throw new Error('A nuvem não confirmou o valor local. O rascunho foi preservado.');
