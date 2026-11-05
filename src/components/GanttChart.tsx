@@ -64,6 +64,8 @@ interface GanttChartProps {
   /** Tarefas exibidas a partir de uma prévia de aditivo e editáveis somente nela. */
   lockedTaskLabels?: Record<string, string>;
   readOnly?: boolean;
+  /** Allows planning dates of blocked work in an approved additive without releasing execution. */
+  allowSuspendedDateEditing?: boolean;
   collapsedPhaseIds?: string[];
   onCollapsedPhaseIdsChange?: (phaseIds: string[]) => void;
   canRequestReschedule?: boolean;
@@ -88,6 +90,7 @@ export default function GanttChart({
   monthlyFinancialForecast,
   lockedTaskLabels = {},
   readOnly = false,
+  allowSuspendedDateEditing = false,
   collapsedPhaseIds: controlledCollapsedPhaseIds,
   onCollapsedPhaseIdsChange,
   canRequestReschedule = false,
@@ -2089,6 +2092,7 @@ export default function GanttChart({
                         .map((task, idx) => {
                           const suspension = suspensionMap[task.id];
                           const statusOnly = isStatusOnlyTask(task.id);
+                          const editablePlanningDate = context === 'additive-preview' && allowSuspendedDateEditing && statusOnly && !readOnly;
                           const endDate = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig);
                           const taskNum = taskNumbering.get(task.id) || 0;
                           const violations = statusOnly ? [] : getViolations(task);
@@ -2280,7 +2284,7 @@ export default function GanttChart({
                               </div>
                               
                               <div className="flex flex-col gap-0.5">
-                                {statusOnly ? <span className="text-center text-[10px] text-muted-foreground">—</span> : (() => {
+                                {statusOnly && !editablePlanningDate ? <span className="text-center text-[10px] text-muted-foreground">—</span> : (() => {
                                   const hasLogs = (task.dailyLogs?.length ?? 0) > 0;
                                   const hasRealData = (task.dailyLogs || []).some(l => (l.actualQuantity ?? 0) > 0) && !!task.current?.startDate;
                                   const startNonUtil = scheduleWorkdayWeight(parseISODateLocal(task.startDate), obraConfig) <= 0;
@@ -2298,7 +2302,7 @@ export default function GanttChart({
                                       Real: {formatDateFull(task.current!.startDate)}
                                     </span>
                                   ) : null;
-                                  if (hasLogs) {
+                                  if (hasLogs && !editablePlanningDate) {
                                     return (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
@@ -2337,7 +2341,7 @@ export default function GanttChart({
                                 })()}
                               </div>
                               <div className="flex flex-col gap-0.5">
-                                {statusOnly ? <span className="text-center text-[10px] text-muted-foreground">—</span> : (() => {
+                                {statusOnly && !editablePlanningDate ? <span className="text-center text-[10px] text-muted-foreground">—</span> : (() => {
                                   const hasLogs = (task.dailyLogs?.length ?? 0) > 0;
                                   const hasRealData = (task.dailyLogs || []).some(l => (l.actualQuantity ?? 0) > 0) && !!task.current?.startDate;
                                   const endNonUtil = scheduleWorkdayWeight(parseISODateLocal(endDate), obraConfig) <= 0;
@@ -2360,7 +2364,7 @@ export default function GanttChart({
                                       Prev: {formatDateFull(previsto)}
                                     </span>
                                   ) : null;
-                                  if (hasLogs) {
+                                  if (hasLogs && !editablePlanningDate) {
                                     return (
                                       <Tooltip>
                                         <TooltipTrigger asChild>
@@ -2400,7 +2404,7 @@ export default function GanttChart({
                               </div>
                               {/* Duração (editável — força modo Manual) */}
                               <div className="text-center">
-                                {statusOnly ? <span className="text-[10px] text-muted-foreground">—</span> : <input
+                                {statusOnly && !editablePlanningDate ? <span className="text-[10px] text-muted-foreground">—</span> : <input
                                   type="number"
                                   min={1}
                                   step={1}

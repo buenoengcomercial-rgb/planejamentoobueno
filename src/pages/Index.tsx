@@ -891,10 +891,17 @@ export default function Index() {
     persistProject, handleCloudConflict, setSaveStatus,
   }), [user?.id, orgId, rawProject, canPersistProject, persistProject, handleCloudConflict]);
 
-  const saveAdditiveScheduleNow = useCallback(async () => {
+  const saveAdditiveScheduleNow = useCallback(async (expectedApproval?: { additiveId: string; version: number }) => {
     flushPendingEditCommits();
     await new Promise<void>(resolve => window.setTimeout(resolve, 0));
-    return flushPendingSave(true, true);
+    const confirmed = await flushPendingSave(true, true);
+    if (!confirmed || !expectedApproval) return confirmed;
+    const latest = rawProjectRef.current;
+    return Boolean(latest?.additives?.some(additive =>
+      additive.id === expectedApproval.additiveId
+      && additive.status === 'aprovado'
+      && additive.version === expectedApproval.version,
+    ) && serializeProject(latest) === lastSavedProjectJsonRef.current);
   }, [flushPendingSave]);
 
   const runProtectedNavigation = useCallback(<T,>(action: () => Promise<T>): Promise<T | undefined> => (
