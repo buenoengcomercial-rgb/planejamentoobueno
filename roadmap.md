@@ -1,5 +1,7 @@
 # Proteção dos dados e desempenho
 
+- [x] Estabilizar o contexto de autenticação contra divergência durante atualização de módulos; testes de sessão e regressão passaram, Medição autenticada abriu sem o erro e sem editar dados.
+
 - [x] Separar os botões PDF do dia e PDF da medição do aviso de salvamento; ambos acessíveis no Diário autenticado.
 - [x] Exportar todos os diários preenchidos confirmados na nuvem no intervalo inclusivo da medição selecionada, sem incluir dias vazios; Medição Nº 1 verificada com 31 diários em PDF de 91 páginas.
 
