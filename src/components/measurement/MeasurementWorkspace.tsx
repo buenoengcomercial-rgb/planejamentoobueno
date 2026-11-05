@@ -199,6 +199,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const detailDrain = useRef<Promise<boolean>>(Promise.resolve(true));
   const drainDetailQueueRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   const retryPendingSaveRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
+  const retryFailedTaskRef = useRef<(key: string) => Promise<boolean>>(() => Promise.resolve(false));
   const recoveryAction = useRef(false);
   const automaticRecoveryAttempted = useRef(false);
   const detailQueue = useRef<DetailOperation[]>([]);
@@ -1186,7 +1187,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     const affected = failed.operation.candidate?.audit.at(-1)?.affected ?? [];
     const groupKeys = affected.map(task => `${task.measurementId}:${task.serviceId}`);
     try {
-      const latest = await repository.load();
+      const latest = await (repository.loadForRetry?.() ?? repository.load());
       if (!latest || repository.loadedOffline?.()) throw new Error('Sem conexão com a nuvem. Tente novamente quando ela voltar.');
       const priorEvent = failed.operation.candidate?.audit.at(-1);
       const firstConfirmed = !!priorEvent && !!await repository.confirmedOperation?.(priorEvent.id, failed.operation.candidate!.revision);
@@ -1227,6 +1228,18 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       setRetryingFailedKey(null);
     }
   };
+  retryFailedTaskRef.current = retryFailedTask;
+  useEffect(() => {
+    const retryTransient = () => {
+      if (busy.current || retryingFailedTask.current || !navigator.onLine) return;
+      const pending = [...failedTaskEdits.current].find(([, failed]) =>
+        /Sem conexão|versão reconciliada não pôde ser conferida|versão mais recente não pôde ser carregada/i.test(failed.message));
+      if (pending) void retryFailedTaskRef.current(pending[0]);
+    };
+    window.addEventListener('online', retryTransient);
+    const timer = window.setInterval(retryTransient, 15_000);
+    return () => { window.removeEventListener('online', retryTransient); window.clearInterval(timer); };
+  }, []);
   if (loading) return <p className="p-6">Carregando a base de Medição…</p>;
   if (!workspace && error) return <section className="mx-auto max-w-5xl rounded-lg border border-red-200 bg-white p-6" role="alert">
     <h1 className="text-xl font-semibold">Não foi possível carregar a Medição</h1>
