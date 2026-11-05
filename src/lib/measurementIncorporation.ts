@@ -144,14 +144,40 @@ export function prepareIncorporation(backup: IncorporationBackup): Incorporation
   return { candidate, issues, inventory, reconciliation };
 }
 
-/** Only NEW services from the approved immutable snapshot; never replace existing terms. */
+/** Apply the approved contract changes from the selected period, preserving earlier quantities. */
 export function incorporateApprovedAdditive(w: MeasurementWorkspace, actor: MeasurementActor, additive: Additive, firstNumber: number) {
   if (!['aprovado', 'contratado', 'aditivo_contratado'].includes(additive.status ?? '') || additive.editUnlocked) throw new Error('Aditivo ainda não aprovado ou em revisão.');
   const snapshot = additive.approvalSnapshots?.find(s => s.version === additive.version);
   if (!snapshot) throw new Error('Snapshot aprovado do aditivo não encontrado.');
-  const warnings = snapshot.compositions.filter(c => !c.isNewService).map(c => `${c.description}: alteração de serviço existente não incorporada; exige decisão contratual separada.`);
-  const next = transactMeasurement(w, actor, `Incorporar novos serviços do aditivo ${additive.id} v${snapshot.version}`, draft => {
-    if (draft.periods.some(p => isPeriodLocked(p) && p.number >= firstNumber)) throw new Error('Novos serviços não podem entrar retroativamente em uma medição fechada.');
+  const warnings: string[] = [];
+  const next = transactMeasurement(w, actor, `Incorporar aditivo ${additive.id} v${snapshot.version}`, draft => {
+    if (!draft.periods.some(p => p.number === firstNumber)) throw new Error('Medição de início do aditivo não encontrada.');
+    if (draft.periods.some(p => isPeriodLocked(p) && p.number >= firstNumber)) throw new Error('Aditivo não pode entrar retroativamente em uma medição fechada.');
+    const adjustedServices = new Set<string>();
+    for (const c of snapshot.compositions.filter(c => !c.isNewService)) {
+      const desiredNet = Math.round(((c.addedQuantity ?? 0) - (c.suppressedQuantity ?? 0)) * 100) / 100;
+      if (!desiredNet) continue;
+      const key = `additive-adjustment:${additive.id}:${snapshot.version}:${c.id}`;
+      if (draft.importedKeys.includes(key)) continue;
+      const matches = draft.services.filter(s =>
+        [c.baseTaskId, c.taskId, c.linkedTaskId].some(id => id && (s.sourceTaskId === id || s.id === id))
+        || !!c.baseBudgetItemId && s.sourceBudgetId === c.baseBudgetItemId);
+      if (matches.length !== 1) throw new Error(`${c.description}: vínculo contratual ${matches.length ? 'ambíguo' : 'não encontrado'} na Medição.`);
+      const service = matches[0];
+      if (adjustedServices.has(service.id)) throw new Error(`${c.description}: mais de uma composição altera o mesmo serviço; revise o vínculo no Aditivo.`);
+      adjustedServices.add(service.id);
+      if (service.unit !== c.unit) throw new Error(`${c.description}: unidade diferente do contrato da Medição.`);
+      if (service.additiveAdjustments?.some(a => a.firstNumber > firstNumber)) throw new Error(`${c.description}: já existe ajuste do aditivo em medição posterior.`);
+      const previousNet = (service.additiveAdjustments ?? []).filter(a => a.additiveId === additive.id)
+        .reduce((sum, a) => sum + a.net, 0);
+      const net = Math.round((desiredNet - previousNet) * 100) / 100;
+      if (service.contracted + net < 0) throw new Error(`${c.description}: supressão excede o quantitativo contratado.`);
+      if (net) {
+        service.contracted = Math.round((service.contracted + net) * 100) / 100;
+        (service.additiveAdjustments ??= []).push({ additiveId: additive.id, additiveVersion: snapshot.version, compositionId: c.id, firstNumber, net });
+        draft.importedKeys.push(key);
+      }
+    }
     for (const c of snapshot.compositions.filter(c => c.isNewService)) {
       const key = `additive:${additive.id}:${c.id}`; if (draft.importedKeys.includes(key)) continue;
       if (draft.services.some(s => s.id === c.linkedTaskId || s.id === c.taskId)) throw new Error(`${c.description}: já é um serviço existente. Nenhum preço ou quantidade foi substituído.`);
@@ -162,5 +188,10 @@ export function incorporateApprovedAdditive(w: MeasurementWorkspace, actor: Meas
     }
     draft.services.sort((a, b) => a.item.localeCompare(b.item, 'pt-BR', { numeric: true }));
   });
-  return { workspace: next, warnings, contractedValue: sumMoney(next.services.map(s => calculateLineTotal(s.priceWithBDI, s.contracted))) };
+  const contractedValue = sumMoney(next.services.map(s => calculateLineTotal(s.priceWithBDI, s.contracted)));
+  const approvedValue = (snapshot.totals as { valorFinal?: number } | null)?.valorFinal;
+  if (typeof approvedValue === 'number' && Math.abs(contractedValue - approvedValue) > 0.01) {
+    throw new Error(`Valor final da Medição (${contractedValue.toFixed(2)}) diverge do Aditivo aprovado (${approvedValue.toFixed(2)}). Confira preços e vínculos antes de incorporar.`);
+  }
+  return { workspace: next, warnings, contractedValue };
 }

@@ -157,6 +157,36 @@ describe('Medição independente', () => {
     expect(again).toEqual(w); expect(monthlyLines(w, 'm1')).toHaveLength(3); expect(monthlyLines(w, 'm2')).toHaveLength(4);
     expect(() => incorporateApprovedAdditive(w, actor, { ...additive, status: 'rascunho' }, 2)).toThrow('aprovado');
   });
+  it('aplica acréscimo e supressão desde a medição escolhida sem alterar as anteriores', async () => {
+    const original = (await setup()).plan.candidate;
+    const signs = original.services.find(s => s.id === 'signs')!;
+    const repeaters = original.services.find(s => s.id === 'repeaters')!;
+    const compositions = [
+      { id: 'more', item: signs.item, code: '', bank: '', description: signs.description, quantity: signs.contracted,
+        unit: signs.unit, unitPriceNoBDI: signs.priceNoBDI, unitPriceWithBDI: signs.priceWithBDI, total: 0,
+        inputs: [], baseTaskId: signs.sourceTaskId, addedQuantity: 4, suppressedQuantity: 0 },
+      { id: 'less', item: repeaters.item, code: '', bank: '', description: repeaters.description, quantity: repeaters.contracted,
+        unit: repeaters.unit, unitPriceNoBDI: repeaters.priceNoBDI, unitPriceWithBDI: repeaters.priceWithBDI, total: 0,
+        inputs: [], baseTaskId: repeaters.sourceTaskId, addedQuantity: 0, suppressedQuantity: 2 },
+    ];
+    const additive: Additive = { id: 'ad-qty', name: 'Aditivo', importedAt: '', compositions: [], status: 'aprovado', version: 1,
+      approvalSnapshots: [{ version: 1, approvedAt: '2026-10-09', bdiPercent: 25, globalDiscountPercent: 0,
+        totals: {}, issues: [], compositions }] };
+    const result = incorporateApprovedAdditive(original, actor, additive, 3);
+    const next = result.workspace;
+    expect(result.warnings).toEqual([]);
+    expect(next.services.find(s => s.id === 'signs')?.contracted).toBe(signs.contracted + 4);
+    expect(next.services.find(s => s.id === 'repeaters')?.contracted).toBe(repeaters.contracted - 2);
+    expect(monthlyLines(next, 'm1').map(l => l.service.contracted)).toEqual(monthlyLines(original, 'm1').map(l => l.service.contracted));
+    expect(monthlyLines(next, 'm2').map(l => l.service.contracted)).toEqual(monthlyLines(original, 'm2').map(l => l.service.contracted));
+    expect(monthlyLines(next, 'm3').find(l => l.service.id === 'signs')?.service.contracted).toBe(signs.contracted + 4);
+    expect(incorporateApprovedAdditive(next, actor, additive, 3).workspace).toEqual(next);
+    expect(next.entries).toEqual(original.entries);
+    expect(next.periods).toEqual(original.periods);
+    const wrongTotal = structuredClone(additive);
+    wrongTotal.approvalSnapshots![0].totals = { valorFinal: 1 };
+    expect(() => incorporateApprovedAdditive(original, actor, wrongTotal, 3)).toThrow('diverge do Aditivo aprovado');
+  });
   it('inventário não trunca acima de mil registros', async () => {
     const f = measurementFixture(); f.project.phases[1].tasks[0].dailyLogs = Array.from({ length: 1200 }, (_, i) => ({ id: `l${i}`, date: '2026-09-21', actualQuantity: 0, plannedQuantity: 0 }));
     const p = prepareIncorporation(await createIncorporationBackup(f.project, f.plans, []));
