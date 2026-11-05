@@ -52,7 +52,29 @@ describe('Tela própria de Medição', () => {
   });
   it('permite manter a nuvem e remover somente o rascunho conferido', async () => {
     const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    repository.loadForDraftResolution = vi.fn(async () => w);
     w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), measuredQuantity: 3 }] }];
+    const drafts = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'r', changes: { measuredQuantity: '4' } }];
+    repository.drafts = vi.fn(async () => [...drafts]);
+    repository.clearDraft = vi.fn(async () => { drafts.splice(0, 1); });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByText('1 rascunho(s) local(is) da Medição aguardando conferência'));
+    fireEvent.click(screen.getByRole('button', { name: 'Manter valor da nuvem' }));
+    await waitFor(() => expect(repository.clearDraft).toHaveBeenCalledWith('m1', 's', 'r'));
+    expect(repository.loadForDraftResolution).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(screen.queryByText('1 rascunho(s) local(is) da Medição aguardando conferência')).not.toBeInTheDocument();
+  });
+  it('permite conferir o rascunho após uma leitura inicial recuperada do cache', async () => {
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), measuredQuantity: 3 }] }];
+    let cached = true, reads = 0;
+    repository.loadedOffline = () => cached;
+    repository.loadState = () => cached ? { source: 'cache', checking: false, error: { kind: 'timeout', message: 'A consulta demorou.' } }
+      : { source: 'cloud', checking: false };
+    repository.load = vi.fn(async () => { if (++reads > 1) cached = false; return w; });
     const drafts = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'r', changes: { measuredQuantity: '4' } }];
     repository.drafts = vi.fn(async () => [...drafts]);
     repository.clearDraft = vi.fn(async () => { drafts.splice(0, 1); });
@@ -141,6 +163,24 @@ describe('Tela própria de Medição', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Tentar consultar novamente' }));
     expect(await screen.findByText('Salvo e conferido na nuvem')).toBeVisible();
     expect(repository.commit).not.toHaveBeenCalled();
+  });
+  it('permite repetir a conferência da nuvem mesmo com rascunhos locais pendentes', async () => {
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+    let cached = true;
+    repository.loadedOffline = () => cached;
+    repository.loadState = () => cached ? { source: 'cache', checking: false, error: { kind: 'timeout', message: 'A consulta demorou.' } }
+      : { source: 'cloud', checking: false };
+    let reads = 0;
+    repository.load = vi.fn(async () => { if (++reads > 1) cached = false; return w; });
+    repository.drafts = vi.fn(async () => [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: 'r', changes: { measuredQuantity: '4' } }]);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    expect(await screen.findByText('1 rascunho(s) local(is) da Medição aguardando conferência')).toBeVisible();
+    // The read may have failed earlier; the local draft must not disable recovery.
+    const retry = screen.getByRole('button', { name: 'Tentar consultar novamente' });
+    expect(retry).toBeEnabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(repository.load).toHaveBeenCalledTimes(2));
+    expect(repository.clearDraft).not.toHaveBeenCalled();
   });
   it('mostra Sem internet somente quando o navegador informa desconexão', async () => {
     const { repository } = fixture(); repository.savedLabel = 'Salvo na nuvem';

@@ -128,6 +128,43 @@ describe('Abertura da Medição com plantas sob demanda', () => {
     expect(repo.loadState!()).toMatchObject({source:'cache',error:{kind:'authorization'}});
   });
 
+  it('reconfere uma cópia local pela revisão sem repetir a leitura pesada da planilha', async () => {
+    const base = await fixture(); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    expect(await repo.load()).toEqual(base);
+    expect(repo.loadedOffline!()).toBe(true);
+    mocks.revision = base.revision;
+    expect(await repo.load()).toEqual(base);
+    expect(repo.loadedOffline!()).toBe(false);
+    expect(repo.loadState!()).toMatchObject({ source: 'cloud', checking: false });
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+  });
+  it('busca a planilha atual quando a revisão remota avançou após a falha', async () => {
+    const base = await fixture(); mocks.cached = structuredClone(base); mocks.revision = base.revision + 1;
+    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    expect(await repo.load()).toEqual(base);
+    const latest = { ...base, revision: base.revision + 1 };
+    loaded(latest);
+    expect(await repo.load()).toEqual(latest);
+    expect(repo.loadedOffline!()).toBe(false);
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
+  it('confere a revisão no primeiro clique do rascunho sem ler novamente a planilha', async () => {
+    const base = await fixture(); loaded(base);
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    expect(await repo.load()).toEqual(base);
+    mocks.revision = base.revision;
+    expect(await repo.loadForDraftResolution!()).toEqual(base);
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+    mocks.revision = base.revision + 1;
+    const latest = { ...base, revision: base.revision + 1 };
+    loaded(latest);
+    expect(await repo.loadForDraftResolution!()).toEqual(latest);
+    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
+
   it('carrega quantidades e todo o histórico sem baixar plantas atuais ou históricas', async () => {
     const base = await fixture(true);
     const historical = { ...base.plans[0], id: 'archived-plan', name: 'Histórico.dxf', kind: 'dxf' as const,
