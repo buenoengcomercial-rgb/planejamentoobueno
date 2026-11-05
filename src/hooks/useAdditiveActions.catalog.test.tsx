@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react';
+import { toast } from 'sonner';
 import { describe, expect, it, vi } from 'vitest';
 import type { Additive, AdditiveComposition, Project } from '@/types/project';
 import type { AdditiveStateApi } from './useAdditiveState';
@@ -31,6 +32,30 @@ function additiveWith(compositions: AdditiveComposition[]): Additive {
 }
 
 describe('useAdditiveActions catálogo atual da obra', () => {
+  it('não anuncia aprovação na nuvem antes de receber a confirmação da gravação', async () => {
+    const additive = { ...additiveWith([target]), status: 'em_analise' } as Additive;
+    let currentProject = { id: 'project-approval', name: 'Obra', phases: [], additives: [additive], budgetItems: [] } as unknown as Project;
+    const onProjectChange = vi.fn((next: Project | ((previous: Project) => Project)) => {
+      currentProject = typeof next === 'function' ? next(currentProject) : next;
+    });
+    const onSaveNow = vi.fn().mockResolvedValue(false);
+    const success = vi.spyOn(toast, 'success');
+    const warning = vi.spyOn(toast, 'warning');
+    const state = { active: additive, activeId: additive.id, isLocked: true,
+      setReviewDialogOpen: vi.fn(), setApprovedBy: vi.fn(), setReviewNotes: vi.fn(),
+      approvedBy: 'Fiscal', reviewNotes: '' } as unknown as AdditiveStateApi;
+    const { result } = renderHook(() => useAdditiveActions({ project: currentProject, onProjectChange, onSaveNow, state }));
+
+    await act(async () => { await result.current.handleApprove(); });
+
+    expect(currentProject.additives?.[0].status).toBe('aprovado');
+    expect(onSaveNow).toHaveBeenCalledTimes(1);
+    expect(onSaveNow).toHaveBeenCalledWith({ additiveId: additive.id, version: (additive.version ?? 0) + 1 });
+    expect(success).not.toHaveBeenCalledWith(expect.stringContaining('Aditivo aprovado'));
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('ainda não foi confirmada'));
+    success.mockRestore();
+    warning.mockRestore();
+  });
   it('não grava ao abrir nem permite reconciliação quando o aditivo está bloqueado', () => {
     const additive={...additiveWith([target]),status:'aprovado'} as Additive;
     const project={id:'p',phases:[],additives:[additive]} as unknown as Project;

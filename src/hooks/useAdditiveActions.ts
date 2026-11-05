@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { toast } from 'sonner';
 import {
   hasAdditiveUserWork,
@@ -47,6 +48,7 @@ const loadAdditiveReports = () => import('@/lib/additiveReports');
 interface Params {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
+  onSaveNow?: (expectedApproval?: { additiveId: string; version: number }) => Promise<boolean>;
   state: AdditiveStateApi;
   canFormalize?: boolean;
 }
@@ -63,7 +65,8 @@ const createPhaseId = () => {
   return `phase-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 };
 
-export function useAdditiveActions({ project, onProjectChange, state, canFormalize = false }: Params) {
+export function useAdditiveActions({ project, onProjectChange, onSaveNow, state, canFormalize = false }: Params) {
+  const [savingApproval, setSavingApproval] = useState(false);
   const { user } = useAuth();
   const auditUser = useMemo(() => userInfoFromSupabaseUser(user), [user]);
   const obraConfig = useMemo(() => resolveObraConfig(project), [project]);
@@ -709,8 +712,9 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     setReviewNotes('');
   };
 
-  const handleApprove = () => {
-    if (!active) return;
+  const handleApprove = async () => {
+    if (!active || savingApproval) return;
+    setSavingApproval(true);
     const totals = additiveTotals(active, project);
     const pricingRuleVersion = resolveAdditivePricingRule(active);
     const nextVersion = (active.version ?? 0) + 1;
@@ -737,7 +741,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
       version: nextVersion,
       approvalSnapshots: [...(active.approvalSnapshots ?? []), snapshot],
     };
-    onProjectChange(prev => {
+    flushSync(() => onProjectChange(prev => {
       const nextAdditives = (prev.additives ?? []).map(a =>
         a.id === active.id ? approvedAdditive : a,
       );
@@ -764,11 +768,21 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
           percentImpactoLiquido: totals.percentImpactoLiquido,
         },
       });
-    });
-    toast.success('Aditivo aprovado — pronto para integração ao projeto.');
+    }));
     setReviewDialogOpen(false);
     setApprovedBy('');
     setReviewNotes('');
+    try {
+      if (onSaveNow && await onSaveNow({ additiveId: active.id, version: nextVersion })) {
+        toast.success('Aditivo aprovado e confirmado na nuvem — pronto para integração ao projeto.');
+      } else {
+        toast.warning('A aprovação ainda não foi confirmada na nuvem. Preserve esta aba e use “Salvar agora”.');
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao confirmar a aprovação na nuvem. Use “Salvar agora”.');
+    } finally {
+      setSavingApproval(false);
+    }
   };
 
   const handleBackToDraft = () => {
@@ -1260,6 +1274,7 @@ export function useAdditiveActions({ project, onProjectChange, state, canFormali
     handleSendForReview,
     handleReject,
     handleApprove,
+    savingApproval,
     handleBackToDraft,
     handleUseSyntheticFromMeasurement,
     handleChangeGlobalDiscount,

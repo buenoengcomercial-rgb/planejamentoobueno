@@ -59,7 +59,7 @@ export interface ProjectAreaContentProps {
   dailyReportSetter: ProjectSetter;
   additiveSetter: ProjectSetter;
   additiveScheduleSetter: ProjectSetter;
-  onSaveAdditiveScheduleNow: () => Promise<boolean>;
+  onSaveAdditiveScheduleNow: (expectedApproval?: { additiveId: string; version: number }) => Promise<boolean>;
   realCostSetter: ProjectSetter;
   materialsSetter: ProjectSetter;
   warehouseSetter: ProjectSetter;
@@ -226,7 +226,7 @@ export default function ProjectAreaContent({
         />
       );
     case 'additive':
-      return <Additive project={project} onProjectChange={additiveSetter} canFormalize={role === 'owner' || role === 'admin'} undoButton={<UndoButton canUndo={canUndo('additive')} onUndo={() => handleUndo('additive')} />} />;
+      return <Additive project={project} onProjectChange={additiveSetter} onSaveNow={editor ? onSaveAdditiveScheduleNow : undefined} canFormalize={role === 'owner' || role === 'admin'} undoButton={<UndoButton canUndo={canUndo('additive')} onUndo={() => handleUndo('additive')} />} />;
     case 'additiveSchedule':
       return <AdditiveSchedule project={project} onProjectChange={additiveScheduleSetter} onSaveNow={editor ? onSaveAdditiveScheduleNow : undefined} canManageCalendar={role === 'owner' || role === 'admin'} auditActor={auditActor} undoButton={<UndoButton canUndo={canUndo('additiveSchedule')} onUndo={() => handleUndo('additiveSchedule')} />} />;
     case 'realCost':

@@ -3,7 +3,8 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Upload } from 'lucide-react';
+import { Save, Upload } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -36,13 +37,27 @@ import { shouldDismissAdditiveDetail } from '@/components/additive/additiveDetai
 interface Props {
   project: Project;
   onProjectChange: (next: Project | ((prev: Project) => Project)) => void;
+  onSaveNow?: (expectedApproval?: { additiveId: string; version: number }) => Promise<boolean>;
   undoButton?: React.ReactNode;
   canFormalize?: boolean;
 }
 
-export default function Additive({ project, onProjectChange, undoButton, canFormalize = false }: Props) {
+export default function Additive({ project, onProjectChange, onSaveNow, undoButton, canFormalize = false }: Props) {
   const state = useAdditiveState(project);
-  const actions = useAdditiveActions({ project, onProjectChange, state, canFormalize });
+  const actions = useAdditiveActions({ project, onProjectChange, onSaveNow, state, canFormalize });
+  const [savingNow, setSavingNow] = useState(false);
+  const saveNow = async () => {
+    if (!onSaveNow || savingNow) return;
+    setSavingNow(true);
+    try {
+      if (await onSaveNow()) toast.success('Aditivo confirmado na nuvem.');
+      else toast.warning('O Aditivo ainda não foi confirmado na nuvem. Preserve esta aba e tente novamente.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Falha ao salvar o Aditivo na nuvem.');
+    } finally {
+      setSavingNow(false);
+    }
+  };
   const { banks, filteredComps, groupTree, orphanRows, hasEapLink } = useAdditiveGroups(
     project, state.active, state.search, state.bankFilter,
   );
@@ -162,6 +177,11 @@ export default function Additive({ project, onProjectChange, undoButton, canForm
             editUnlocked={!!active.editUnlocked}
             onUnlockIntegrated={actions.handleUnlockIntegratedAdditive}
           />
+          {onSaveNow && <div className="flex justify-end">
+            <Button type="button" size="sm" variant="outline" disabled={savingNow || actions.savingApproval} onClick={() => void saveNow()}>
+              <Save className="mr-2 h-4 w-4" /> {savingNow || actions.savingApproval ? 'Salvando…' : 'Salvar agora'}
+            </Button>
+          </div>}
 
           <AdditiveHeaderInfo
             project={project}

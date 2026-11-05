@@ -340,6 +340,7 @@ export default function AdditiveSchedule({ project, onProjectChange, onSaveNow, 
           }}
           onEditSuspension={isArchived ? undefined : openBlockDialog}
           readOnly={isArchived}
+          allowSuspendedDateEditing={active.status === 'aprovado'}
           calendarConfig={obraConfig}
           canManageCalendar={canManageCalendar}
           auditActor={auditActor}

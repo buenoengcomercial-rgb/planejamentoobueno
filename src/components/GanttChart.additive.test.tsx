@@ -126,6 +126,22 @@ const suspensionMap: Record<string, AdditiveScheduleSuspensionMeta> = {
 describe('GanttChart no Cronograma do Aditivo', () => {
   beforeEach(() => localStorage.clear());
 
+  it('após aprovação permite planejar datas de item suspenso sem liberar sua execução', () => {
+    const onProjectChange = vi.fn();
+    render(<GanttChart project={project} context="additive-preview" suspensionMap={suspensionMap}
+      allowSuspendedDateEditing onProjectChange={onProjectChange} />);
+    const row = within(screen.getByTestId('gantt-sidebar-row-suspended-1d'));
+    expect(row.getAllByText('03/08/2026')[0].closest('button')).toBeEnabled();
+    const duration = row.getByTitle('Duração em dias (modo Manual)') as HTMLInputElement;
+    fireEvent.change(duration, { target: { value: '3' } });
+    fireEvent.blur(duration);
+    expect(onProjectChange).toHaveBeenCalled();
+    const next = onProjectChange.mock.lastCall![0] as Project;
+    expect(next.phases[0].tasks.find(task => task.id === 'suspended-1d')?.duration).toBe(3);
+    expect(screen.getByTestId('gantt-status-only-suspended-1d')).toHaveTextContent('Aguardando aditivo');
+    expect(screen.queryByTestId('gantt-bar-suspended-1d')).not.toBeInTheDocument();
+  });
+
   it('mostra suspensões e serviços novos somente como advertência no cronograma do aditivo', () => {
     render(
       <GanttChart
