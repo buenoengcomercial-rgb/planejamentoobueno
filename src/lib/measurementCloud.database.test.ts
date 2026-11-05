@@ -73,6 +73,7 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261016124000_concurrent_measurement_commands.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261105010000_measurement_manual_unlink_targeted.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261105090000_measurement_nondestructive_checkpoint.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261105120000_measurement_additive_quantity_adjustments.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -1077,6 +1078,7 @@ describe('transação da Medição na nuvem',()=>{
   expect(newResult).toEqual(oldResult);
   expect(newFirst).toEqual(oldFirst);
   expect(newMalformed).toEqual(oldMalformed);
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261105120000_measurement_additive_quantity_adjustments.sql',import.meta.url),'utf8'));
   const fiscalLines=newResult as Array<{service:{id:string};qty:number;prior:number}>;
   expect(fiscalLines.find(line=>line.service.id===services[4].id)?.qty).toBe(50.5);
   expect(fiscalLines.find(line=>line.service.id===services[0].id)?.prior)
@@ -1353,6 +1355,28 @@ describe('transação da Medição na nuvem',()=>{
   await db.query('INSERT INTO additives VALUES($1,$2,$3)',[projectId,additive.id,JSON.stringify(additive)]);
   const next=incorporateApprovedAdditive(base,actor,additive,2).workspace;
   expect((await commit(next)).services.length).toBe(base.services.length+1);
+ });
+ it('grava acréscimo e supressão aprovados mantendo as medições anteriores e rejeita adulteração',async()=>{
+  await seed();
+  const original=base.services.find(s=>s.id==='signs')!;
+  const composition={id:'qty1',item:original.item,code:'',bank:'',description:original.description,
+   quantity:original.contracted,unit:original.unit,unitPriceNoBDI:original.priceNoBDI,
+   unitPriceWithBDI:original.priceWithBDI,total:0,inputs:[],baseTaskId:original.sourceTaskId,
+   addedQuantity:5,suppressedQuantity:2};
+  const additive={id:'adqty',name:'Aditivo',importedAt:'',compositions:[],status:'aprovado' as const,
+   version:1,approvalSnapshots:[{version:1,approvedAt:'2026-10-09',bdiPercent:25,
+   globalDiscountPercent:0,totals:{},issues:[],compositions:[composition]}]};
+  await db.query('INSERT INTO additives VALUES($1,$2,$3)',[projectId,additive.id,JSON.stringify(additive)]);
+  const next=incorporateApprovedAdditive(base,actor,additive,3).workspace;
+  expect(monthlyLines(next,'m1').find(l=>l.service.id==='signs')?.service.contracted).toBe(original.contracted);
+  const tampered=structuredClone(next); tampered.services.find(s=>s.id==='signs')!.contracted++;
+  await expect(commit(tampered)).rejects.toThrow('Quantidade do aditivo');
+  const saved=await commit(next);
+  expect(saved.services.find(s=>s.id==='signs')?.contracted).toBe(original.contracted+3);
+  expect(monthlyLines(saved,'m2').find(l=>l.service.id==='signs')?.service.contracted).toBe(original.contracted);
+  const fiscal=await db.query<{line:{service:{id:string;contracted:number}}}>('SELECT measurement_fiscal_line_rows($1::jsonb,$2::jsonb) AS line',
+   [JSON.stringify(saved),JSON.stringify(saved.periods.find(p=>p.id==='m2'))]);
+  expect(fiscal.rows.map(row=>row.line).find(line=>line.service.id==='signs').service.contracted).toBe(original.contracted);
  });
 
  it('confirma valores/histórico juntos, repete recibo e bloqueia revisão concorrente',async()=>{

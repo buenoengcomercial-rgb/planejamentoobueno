@@ -13,6 +13,7 @@ export interface MeasuredService {
   priceNoBDI: number; priceWithBDI: number; bdi: number; importedPrice: boolean;
   chapterId: string; chapter: string; path: string; sourceTaskId?: string; sourceBudgetId?: string;
   additiveId?: string; additiveVersion?: number; availableFromNumber: number;
+  additiveAdjustments?: { additiveId: string; additiveVersion: number; compositionId: string; firstNumber: number; net: number }[];
 }
 export interface MeasuredRow extends ProductionQuantityDetail {
   origin?: { logId?: string; date?: string; kind: 'daily' | 'period' | 'snapshot' | 'manual'; originalRowId?: string };
@@ -83,18 +84,28 @@ export function monthlyLines(w: MeasurementWorkspace, measurementId: string): Mo
   return w.services.filter(s => s.availableFromNumber <= period.number).map(service => {
     const qty = entryQuantity(w, measurementId, service.id);
     const prior = w.periods.filter(p => p.number < period.number).reduce((sum, p) => sum + (p.status === 'approved' ? p.frozen?.find(l => l.service.id === service.id)?.qty ?? entryQuantity(w, p.id, service.id) : entryQuantity(w, p.id, service.id)), 0);
-    const financial = calculateMeasurementLine({ quantityContracted: service.contracted, quantityPeriod: qty, quantityPriorAccum: prior, unitPriceNoBDI: service.priceNoBDI, bdiPercent: service.bdi });
+    const contracted = service.contracted - (service.additiveAdjustments ?? [])
+      .filter(adjustment => adjustment.firstNumber > period.number)
+      .reduce((sum, adjustment) => sum + adjustment.net, 0);
+    const periodService = contracted === service.contracted ? service : { ...service, contracted };
+    const financial = calculateMeasurementLine({ quantityContracted: contracted, quantityPeriod: qty, quantityPriorAccum: prior, unitPriceNoBDI: service.priceNoBDI, bdiPercent: service.bdi });
     // Imported contractual prices/totals follow the existing synthetic-budget branch.
     if (service.importedPrice) {
-      financial.totalContracted = calculateLineTotal(service.priceWithBDI, service.contracted);
-      financial.totalContractedNoBDI = calculateLineTotal(service.priceNoBDI, service.contracted);
+      financial.totalContracted = calculateLineTotal(service.priceWithBDI, contracted);
+      financial.totalContractedNoBDI = calculateLineTotal(service.priceNoBDI, contracted);
       financial.totalBalance = Math.max(0, money2(financial.totalContracted - financial.totalAccumulated));
       financial.totalBalanceNoBDI = Math.max(0, money2(financial.totalContractedNoBDI - financial.totalAccumulatedNoBDI));
     }
-    return { service, qty, prior, accumulated: financial.quantityCurrentAccum, balance: financial.quantityBalance, financial };
+    return { service: periodService, qty, prior, accumulated: financial.quantityCurrentAccum, balance: financial.quantityBalance, financial };
   });
 }
 export const monthlyTotal = (w: MeasurementWorkspace, id: string) => sumMoney(monthlyLines(w, id).map(l => l.financial.totalPeriod));
+export function additiveQuantityExcesses(w: MeasurementWorkspace, id: string): MonthlyLine[] {
+  const number = w.periods.find(p => p.id === id)?.number;
+  if (number == null) return [];
+  return monthlyLines(w, id).filter(line => line.service.additiveAdjustments?.some(adjustment => adjustment.firstNumber <= number)
+    && line.accumulated > line.service.contracted + 1e-8);
+}
 
 /** A second send is useful only after the proposal or its evidence changed. */
 export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): boolean {

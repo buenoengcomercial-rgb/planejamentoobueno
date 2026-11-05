@@ -953,6 +953,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setSaving(false); }
   };
   const calculatedLines = useMemo(() => workspace && workspace.periods.some(p => p.id === active) ? monthlyLines(workspace, active) : [], [workspace, active]);
+  const activeNumber = workspace?.periods.find(p => p.id === active)?.number ?? 0;
+  const additiveExcesses = useMemo(() => calculatedLines.filter(line => line.service.additiveAdjustments?.some(adjustment => adjustment.firstNumber <= activeNumber)
+    && line.accumulated > line.service.contracted + 1e-8), [calculatedLines, activeNumber]);
   const fiscalCurrent = useMemo(() => !!workspace && !!active && fiscalSubmissionCurrent(workspace, active), [workspace, active]);
   const fiscalIssues = useMemo(() => fiscalOpen && workspace && workspace.periods.some(p => p.id === active)
     ? fiscalReviewIssuesForWorkspace(workspace, active) : [], [fiscalOpen, workspace, active]);
@@ -1305,12 +1308,17 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         <button className={button} disabled={!actor.canEdit || !!deletionBlock || !!commandInFlight} title={deletionBlock ?? 'Excluir a última medição'} onClick={() => { setError(''); setLifecycle({ kind: 'delete', id: active }); }}>Excluir medição</button>
         {lastDeleted && <button className={button} disabled={!actor.canEdit || !!commandInFlight} onClick={() => { setError(''); setLifecycle({ kind: 'restore', id: lastDeleted.id }); }}>Restaurar medição excluída</button>}
 
-        {approvedAdditives.filter(a => ['aprovado', 'contratado', 'aditivo_contratado'].includes(a.status ?? '') && !a.editUnlocked).map(additive => <button key={additive.id} className={button} disabled={!!locked} onClick={() => apply(w => { const result = incorporateApprovedAdditive(w, actor, additive, period!.number); if (result.warnings.length) setError(result.warnings.join(' ')); return result.workspace; })}>Incorporar novos serviços · {additive.name}</button>)}
+        {approvedAdditives.filter(a => ['aprovado', 'contratado', 'aditivo_contratado'].includes(a.status ?? '') && !a.editUnlocked).map(additive => <button key={additive.id} className={button} disabled={!!locked} onClick={() => apply(w => incorporateApprovedAdditive(w, actor, additive, period!.number).workspace)}>Incorporar serviços e quantitativos · {additive.name} (a partir da {period!.number}ª medição)</button>)}
         <button className={`${button} ml-auto`} disabled={locked || !actor.canReview || !!commandInFlight || fiscalCurrent && !fiscalPending} title={fiscalCurrent && !fiscalPending ? 'Nenhuma alteração desde o último envio à fiscalização' : undefined} onClick={() => { setError(''); setFiscalOpen(true); }}><FileCheck2 className="h-3.5 w-3.5"/>{period?.status === 'in_review' ? 'Reenviar para fiscalização' : 'Enviar para fiscalização'}</button>
         {period?.status === 'in_review' && <button className={button} disabled={locked || !actor.canReview || !!commandInFlight || fiscalPending} title={fiscalPending ? 'Confirme todos os lançamentos desta medição na nuvem antes da aprovação' : undefined} onClick={() => { setError(''); setLifecycle({ kind: 'approve', id: active }); }}>Aprovado pela fiscalização</button>}
       </div>
     </section>
     {error && <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
+    {additiveExcesses.length > 0 && <div role="alert" className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950">
+      <strong>Revisão fiscal: {additiveExcesses.length} item(ns) medido(s) acima do quantitativo final do Aditivo.</strong>
+      <ul className="mt-1 list-disc pl-5">{additiveExcesses.map(line => <li key={line.service.id}>Item {line.service.item}: {line.accumulated} {line.service.unit} medidos; {line.service.contracted} {line.service.unit} contratados após o Aditivo.</li>)}</ul>
+      <p className="mt-1">Os lançamentos anteriores permanecem registrados para conferência fiscal.</p>
+    </div>}
     {failedVisible.length > 0 && <div role="status" className="flex flex-wrap gap-2 px-2 py-1 text-[11px] text-red-800">{failedVisible.map(([key, failed]) => <div key={key} className="flex flex-wrap items-center gap-1 rounded border border-red-200 bg-red-50 px-2 py-1"><button className="underline disabled:no-underline disabled:opacity-60" disabled={saving || retryingFailedKey !== null} onClick={() => void retryFailedTask(key)}>Reenviar {workspace.services.find(service => service.id === failed.serviceId)?.item ?? 'tarefa'}</button><span>· {failed.message}</span></div>)}{saving && <span className="self-center text-amber-800">Aguarde a gravação em andamento para reenviar.</span>}</div>}
     {lifecycle && <MeasurementLifecycleDialog key={`${lifecycle.kind}:${lifecycle.id}`} selection={lifecycle} workspace={workspace} actor={actor} busy={saving || !!commandInFlight} error={error}
       hasDraft={drafts.some(d => d.measurementId === lifecycle.id)} onClose={() => setLifecycle(null)} onConfirm={(edit, id) => { if (lifecycle.kind === 'approve' && fiscalPending) { setError('Aguarde a confirmação dos lançamentos na nuvem antes da aprovação.'); return; } queueCommand(`${lifecycle.kind}:${id}`, edit, () => {
