@@ -5,8 +5,14 @@ import type { Project } from '@/types/project';
 import { CloudProjectConflictError } from '@/lib/cloudProjects';
 import { serializeProject } from '@/lib/cloudProjectDraftCore';
 import { cloudRetryDelay, isTransientCloudError } from '@/lib/cloudRetry';
+import { projectWriteOrigin } from '@/lib/projectOperations';
 
 const SAVE_DEBOUNCE_MS = 4000;
+const ADDITIVE_SCHEDULE_DEBOUNCE_MS = 1800;
+
+export function projectAutoSaveDelay(project: Project): number {
+  return projectWriteOrigin(project) === 'additiveSchedule' ? ADDITIVE_SCHEDULE_DEBOUNCE_MS : SAVE_DEBOUNCE_MS;
+}
 
 interface ProjectAutoSaveOptions {
   project: Project | null;
@@ -86,7 +92,7 @@ export function useProjectAutoSave({
           }
         }
       }
-    }, SAVE_DEBOUNCE_MS);
+    }, projectAutoSaveDelay(project));
     return () => {
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
       if (saveRetryTimerRef.current !== null) window.clearTimeout(saveRetryTimerRef.current);

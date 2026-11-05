@@ -877,13 +877,19 @@ export default function Index() {
     });
   }, [appliedWorkStart, editor, measurementWorkStart, partialSyncIssue, rawProject?.id, scheduleProjectDraft, synchronizeLoadedProjectSchedule]);
 
-  const flushPendingSave = useCallback(() => flushPendingProjectSave({
-    userId: user?.id, orgId, project: rawProject, initialLoadRef, canPersistProject,
+  const flushPendingSave = useCallback((useLatestProject = false) => flushPendingProjectSave({
+    userId: user?.id, orgId, project: useLatestProject ? rawProjectRef.current : rawProject, initialLoadRef, canPersistProject,
     productionCaptureBusyRef, conflictDetectedRef, warehouseClientOperationInFlightRef,
     pendingDailyReportSavesRef, dailyReportSaveQueueRef, warehouseOperationInFlightRef,
     warehouseScopedOperationInFlightRef, saveTimerRef, inFlightSaveRef, partialSyncPendingRef,
     rawProjectRef, persistProject, handleCloudConflict, setSaveStatus,
   }), [user?.id, orgId, rawProject, canPersistProject, persistProject, handleCloudConflict]);
+
+  const saveAdditiveScheduleNow = useCallback(async () => {
+    flushPendingEditCommits();
+    await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+    return flushPendingSave(true);
+  }, [flushPendingSave]);
 
   const runProtectedNavigation = useCallback(<T,>(action: () => Promise<T>): Promise<T | undefined> => (
     runProtectedProjectNavigation(navigationInFlightRef, flushPendingSave, action)
@@ -1693,6 +1699,7 @@ export default function Index() {
             dailyReportSetter={dailyReportSetter}
             additiveSetter={additiveSetter}
             additiveScheduleSetter={additiveScheduleSetter}
+            onSaveAdditiveScheduleNow={saveAdditiveScheduleNow}
             realCostSetter={realCostSetter}
             materialsSetter={materialsSetter}
             warehouseSetter={warehouseSetter}

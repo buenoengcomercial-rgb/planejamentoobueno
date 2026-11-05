@@ -61,6 +61,23 @@ afterEach(async () => { await db.close(); });
 
 const log = (id: string, qty: number, number = 1) => ({ id, task_id: 't', log_date: null, data: { id, date: '', plannedQuantity: 0, actualQuantity: qty, measurementPeriod: { number, startDate: `2026-${number + 9}-01`, endDate: `2026-${number + 9}-${number === 2 ? 30 : 31}` } } });
 describe('proteções combinadas com a versão atual do Lovable',()=>{
+ it('patch pequeno do cronograma preserva orçamento, concilia outra gravação e mantém recibo',async()=>{
+  const original={id:'add-1',name:'Aditivo',compositions:[{id:'item-1',total:100}],scheduleDraft:{plannedTasks:[{id:'task-1',startDate:'2026-10-01'}]}};
+  await db.query('insert into additives(project_id,id,name,version,data) values($1,$2,$3,$4,$5)',[project,'add-1','Aditivo',1,json(original)]);
+  const request={domain:'additive',origin:'additiveSchedule',changes:[{table:'additives',upserts:[{
+   id:'add-1',expected:{id:'add-1',data:{scheduleDraft:original.scheduleDraft}},
+   row:{id:'add-1',data:{scheduleDraft:{plannedTasks:[{id:'task-1',startDate:'2026-10-02'}]}}},
+  }],deletes:[]}],audits:[]};
+  const commit=async(id:string)=>(await db.query<{value:{replayed:boolean}}>('select commit_project_fields($1,$2,$3,$4) value',[project,org,id,json(request)])).rows[0].value;
+  await db.query('update additives set data=jsonb_set(data,$1,$2::jsonb) where id=$3',[
+   '{scheduleDraft,plannedTasks}',json([{id:'task-1',startDate:'2026-10-01'},{id:'task-2',startDate:'2026-10-03'}]),'add-1']);
+  await commit('planning-1');
+  const saved=(await db.query<{data:typeof original}>('select data from additives where id=$1',['add-1'])).rows[0].data;
+  expect(saved.compositions).toEqual(original.compositions);
+  expect(saved.scheduleDraft.plannedTasks[0].startDate).toBe('2026-10-02');
+  expect(saved.scheduleDraft.plannedTasks).toContainEqual({id:'task-2',startDate:'2026-10-03'});
+  expect((await commit('planning-1')).replayed).toBe(true);
+ });
  it('capturas independentes preservam marcas e recibo após outra gravação',async()=>{
   const send=async(id:string)=>{
    const mark={id:`mark-${id}`,taskId:'t',logId:id,kind:'count',page:1,points:[{x:1,y:2}]};

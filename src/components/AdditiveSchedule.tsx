@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Download, FileSpreadsheet, LockKeyhole } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, Download, FileSpreadsheet, LockKeyhole, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Additive, AdditiveScheduleSnapshotRow, Project } from '@/types/project';
 import { logToProject, type AuditUserInfo } from '@/lib/audit';
@@ -39,6 +39,7 @@ import { exportAdditiveScheduleExcel, exportAdditiveSchedulePdf } from '@/lib/ad
 interface Props {
   project: Project;
   onProjectChange: (next: Project | ((previous: Project) => Project)) => void;
+  onSaveNow?: () => Promise<boolean>;
   undoButton?: React.ReactNode;
   canManageCalendar?: boolean;
   auditActor?: AuditUserInfo;
@@ -75,13 +76,19 @@ function snapshotSuspensionMap(rows: AdditiveScheduleSnapshotRow[], additive: Ad
   return result;
 }
 
-export default function AdditiveSchedule({ project, onProjectChange, undoButton, canManageCalendar = false, auditActor = {} }: Props) {
+export default function AdditiveSchedule({ project, onProjectChange, onSaveNow, undoButton, canManageCalendar = false, auditActor = {} }: Props) {
   const additives = project.additives ?? [];
   const preferred = additives.find(additive => !additive.isContracted || additive.editUnlocked) ?? additives[0];
   const [activeId, setActiveId] = useState(preferred?.id ?? '');
   const [blockTaskId, setBlockTaskId] = useState<string | null>(null);
   const [blockerIds, setBlockerIds] = useState<string[]>([]);
   const [blockerNote, setBlockerNote] = useState('');
+  const [savingNow, setSavingNow] = useState(false);
+  const saveNow = useCallback(async () => {
+    if (!onSaveNow || savingNow) return;
+    setSavingNow(true);
+    try { await onSaveNow(); } finally { setSavingNow(false); }
+  }, [onSaveNow, savingNow]);
   const active = additives.find(additive => additive.id === activeId) ?? preferred;
   const visualKey = `${project.id}:${active?.id ?? ''}`;
   const [collapsedPreference, setCollapsedPreference] = useState<{ key: string; ids: string[] }>(() => ({
@@ -111,6 +118,17 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton,
       toast.error(error instanceof Error ? error.message : 'Não foi possível sincronizar o Cronograma do Aditivo.');
     }
   }, [active, obraConfig, onProjectChange, project]);
+
+  useEffect(() => {
+    if (!onSaveNow || !active || (active.isContracted && !active.editUnlocked)) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return;
+      event.preventDefault();
+      void saveNow();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [active, onSaveNow, saveNow]);
 
   const isArchived = !!active?.isContracted && !active.editUnlocked;
   const latestSnapshot = useMemo(() => active?.scheduleSnapshots?.slice().sort((a, b) => b.version - a.version)[0], [active?.scheduleSnapshots]);
@@ -222,6 +240,11 @@ export default function AdditiveSchedule({ project, onProjectChange, undoButton,
         )}
         <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
           {undoButton}
+          {!isArchived && active && onSaveNow && (
+            <Button size="sm" variant="outline" disabled={savingNow} onClick={() => void saveNow()}>
+              <Save className="mr-2 h-4 w-4" /> {savingNow ? 'Salvando…' : 'Salvar agora'}
+            </Button>
+          )}
           {!isArchived && active && (
             <Button size="sm" variant="outline" onClick={() => onProjectChange(confirmAdditiveScheduleDates(project, active.id))}>
               <CheckCircle2 className="mr-2 h-4 w-4" /> Confirmar datas
