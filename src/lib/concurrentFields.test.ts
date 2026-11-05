@@ -41,3 +41,36 @@ it('mescla campos de registro sem disputar carimbo e autor gerados pela edição
   expect(mergeConcurrentFields(base,{...local,notes:'Collision'},remote).conflicts).toEqual(['/notes']);
   expect(mergeConcurrentFields({updatedAt:'a'},{updatedAt:'b'},{updatedAt:'c'}).conflicts).toEqual(['/updatedAt']);
 });
+
+it('concilia datas posteriores do cronograma do aditivo sem restaurar planos removidos', () => {
+  const base = { additives: [{ id: 'aditivo', data: { scheduleDraft: {
+    updatedAt: 't0', contractedTaskPlans: [
+      { taskId: 'removido', startDate: '2026-09-01' },
+      { taskId: 'editado', startDate: '2026-09-01' },
+      { taskId: 'confirmado', startDate: '2026-09-01' },
+    ],
+  } } }] };
+  const local = structuredClone(base);
+  local.additives[0].data.scheduleDraft.updatedAt = 't2';
+  local.additives[0].data.scheduleDraft.contractedTaskPlans[1].startDate = '2026-09-29';
+  const remote = structuredClone(base);
+  remote.additives[0].data.scheduleDraft.updatedAt = 't1';
+  remote.additives[0].data.scheduleDraft.contractedTaskPlans = [
+    { taskId: 'editado', startDate: '2026-09-01' },
+    { taskId: 'confirmado', startDate: '2026-10-01' },
+  ];
+
+  expect(mergeConcurrentFields(base, local, remote)).toEqual({
+    value: { additives: [{ id: 'aditivo', data: { scheduleDraft: {
+      updatedAt: 't2', contractedTaskPlans: [
+        { taskId: 'editado', startDate: '2026-09-29' },
+        { taskId: 'confirmado', startDate: '2026-10-01' },
+      ],
+    } } }] },
+    conflicts: [],
+  });
+  const competing = structuredClone(remote);
+  competing.additives[0].data.scheduleDraft.contractedTaskPlans[0].startDate = '2026-10-02';
+  expect(mergeConcurrentFields(base, local, competing).conflicts)
+    .toEqual(['/additives/aditivo/data/scheduleDraft/contractedTaskPlans/editado/startDate']);
+});

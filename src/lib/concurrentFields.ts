@@ -15,14 +15,15 @@ export function mergeConcurrentFields<T>(base: T, local: T, remote: T): { value:
           // These stamps describe the accepted edit, not an independently editable field.
           const identified = ['id', 'key'].some(id => typeof before[id] === 'string'
             && before[id] === proposed[id] && before[id] === confirmed[id]);
-          const value = identified && ['updatedAt', 'updatedBy'].includes(key)
+          const scheduleDraftStamp = path.endsWith('/scheduleDraft') && key === 'updatedAt';
+          const value = (identified && ['updatedAt', 'updatedBy'].includes(key)) || scheduleDraftStamp
             ? (same(proposed[key], before[key]) ? confirmed[key] : proposed[key])
             : merge(before[key], proposed[key], confirmed[key], `${path}/${key}`);
           return value === undefined ? [] : [[key, value]];
         }));
     }
     if (Array.isArray(before) && Array.isArray(proposed) && Array.isArray(confirmed)) {
-      const identity = ['id', 'key'].find(key => [before, proposed, confirmed].every(rows =>
+      const identity = ['id', 'key', 'taskId'].find(key => [before, proposed, confirmed].every(rows =>
         rows.every(row => record(row) && typeof row[key] === 'string' && row[key] !== '')
         && new Set(rows.map(row => row[key])).size === rows.length));
       if (identity) {
