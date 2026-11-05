@@ -1374,7 +1374,7 @@ describe('transação da Medição na nuvem',()=>{
   const saved=await commit(next);
   expect(saved.services.find(s=>s.id==='signs')?.contracted).toBe(original.contracted+3);
   expect(monthlyLines(saved,'m2').find(l=>l.service.id==='signs')?.service.contracted).toBe(original.contracted);
-  const fiscal=await db.query('SELECT measurement_fiscal_line_rows($1::jsonb,$2::jsonb) AS line',
+  const fiscal=await db.query<{line:{service:{id:string;contracted:number}}}>('SELECT measurement_fiscal_line_rows($1::jsonb,$2::jsonb) AS line',
    [JSON.stringify(saved),JSON.stringify(saved.periods.find(p=>p.id==='m2'))]);
   expect(fiscal.rows.map(row=>row.line).find(line=>line.service.id==='signs').service.contracted).toBe(original.contracted);
  });
