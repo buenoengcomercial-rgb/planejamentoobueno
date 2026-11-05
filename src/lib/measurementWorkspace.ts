@@ -13,7 +13,7 @@ export interface MeasuredService {
   priceNoBDI: number; priceWithBDI: number; bdi: number; importedPrice: boolean;
   chapterId: string; chapter: string; path: string; sourceTaskId?: string; sourceBudgetId?: string;
   additiveId?: string; additiveVersion?: number; availableFromNumber: number;
-  additiveAdjustments?: { additiveId: string; additiveVersion: number; compositionId: string; firstNumber: number; net: number }[];
+  additiveAdjustments?: { additiveId: string; additiveVersion: number; compositionId: string; firstNumber: number; net: number; valueDeltaWithBDI: number; valueDeltaNoBDI: number }[];
 }
 export interface MeasuredRow extends ProductionQuantityDetail {
   origin?: { logId?: string; date?: string; kind: 'daily' | 'period' | 'snapshot' | 'manual'; originalRowId?: string };
@@ -93,6 +93,14 @@ export function monthlyLines(w: MeasurementWorkspace, measurementId: string): Mo
     if (service.importedPrice) {
       financial.totalContracted = calculateLineTotal(service.priceWithBDI, contracted);
       financial.totalContractedNoBDI = calculateLineTotal(service.priceNoBDI, contracted);
+      financial.totalBalance = Math.max(0, money2(financial.totalContracted - financial.totalAccumulated));
+      financial.totalBalanceNoBDI = Math.max(0, money2(financial.totalContractedNoBDI - financial.totalAccumulatedNoBDI));
+    }
+    if (service.additiveAdjustments?.length) {
+      const originalQuantity = service.contracted - service.additiveAdjustments.reduce((sum, adjustment) => sum + adjustment.net, 0);
+      const active = service.additiveAdjustments.filter(adjustment => adjustment.firstNumber <= period.number);
+      financial.totalContracted = sumMoney([calculateLineTotal(service.priceWithBDI, originalQuantity), ...active.map(adjustment => adjustment.valueDeltaWithBDI)]);
+      financial.totalContractedNoBDI = sumMoney([calculateLineTotal(service.priceNoBDI, originalQuantity), ...active.map(adjustment => adjustment.valueDeltaNoBDI)]);
       financial.totalBalance = Math.max(0, money2(financial.totalContracted - financial.totalAccumulated));
       financial.totalBalanceNoBDI = Math.max(0, money2(financial.totalContractedNoBDI - financial.totalAccumulatedNoBDI));
     }

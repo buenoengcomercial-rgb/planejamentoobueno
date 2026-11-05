@@ -23,7 +23,7 @@ describe('Tela própria de Medição', () => {
   it('sinaliza após recarga o excedente causado pelo aditivo sem alterar medições anteriores', async () => {
     const { w, repository } = fixture();
     w.services[0].contracted = 14;
-    w.services[0].additiveAdjustments = [{ additiveId: 'ad1', additiveVersion: 1, compositionId: 'c1', firstNumber: 3, net: -86 }];
+    w.services[0].additiveAdjustments = [{ additiveId: 'ad1', additiveVersion: 1, compositionId: 'c1', firstNumber: 3, net: -86, valueDeltaWithBDI: -1075, valueDeltaNoBDI: -860 }];
     w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('prior'), multiplier: 16 }] }];
     render(<MeasurementWorkspace repository={repository} actor={actor}/>);
     const selection = await screen.findByRole('combobox', { name: 'Medição selecionada' });

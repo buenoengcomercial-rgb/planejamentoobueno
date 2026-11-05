@@ -50,7 +50,11 @@ BEGIN
       WHERE x.value->>'additiveId'=a->>'id'),0),2);
   key:='additive-adjustment:'||(a->>'id')||':'||(a->>'version')||':'||(c->>'id');
   IF inp IS DISTINCT FROM jsonb_build_object('additiveId',a->>'id','additiveVersion',(a->>'version')::int,
-    'compositionId',c->>'id','firstNumber',(inp->>'firstNumber')::int,'net',qty)
+    'compositionId',c->>'id','firstNumber',(inp->>'firstNumber')::int,'net',qty,
+    'valueDeltaWithBDI',public.measurement_money((s->>'priceWithBDI')::numeric*trunc(coalesce((c->>'addedQuantity')::numeric,0),2))
+      -public.measurement_money((s->>'priceWithBDI')::numeric*trunc(coalesce((c->>'suppressedQuantity')::numeric,0),2)),
+    'valueDeltaNoBDI',public.measurement_money((s->>'priceNoBDI')::numeric*trunc(coalesce((c->>'addedQuantity')::numeric,0),2))
+      -public.measurement_money((s->>'priceNoBDI')::numeric*trunc(coalesce((c->>'suppressedQuantity')::numeric,0),2)))
     OR (prior->>'contracted')::numeric IS DISTINCT FROM (s->>'contracted')::numeric+qty
     OR (prior->>'contracted')::numeric < 0 OR qty=0
     OR NOT candidate->'importedKeys' @> jsonb_build_array(key)
@@ -92,6 +96,17 @@ RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path='' AS $$
    FROM jsonb_array_elements(coalesce(s->'additiveAdjustments','[]'::jsonb)) adjustment(value)
    WHERE (adjustment.value->>'firstNumber')::int > period_number
  ),0)),false);
+$$;
+CREATE OR REPLACE FUNCTION public.measurement_contract_total_for_period(s jsonb, period_number integer, price numeric, value_key text)
+RETURNS numeric LANGUAGE sql IMMUTABLE SET search_path='' AS $$
+ SELECT CASE WHEN jsonb_array_length(coalesce(s->'additiveAdjustments','[]'::jsonb))=0
+   THEN public.measurement_money(price*(s->>'contracted')::numeric)
+   ELSE public.measurement_money(price*((s->>'contracted')::numeric-coalesce((
+     SELECT sum((a.value->>'net')::numeric) FROM jsonb_array_elements(s->'additiveAdjustments') a(value)
+     WHERE (a.value->>'firstNumber')::int <= period_number),0)))
+     +coalesce((SELECT sum((a.value->>value_key)::numeric) FROM jsonb_array_elements(s->'additiveAdjustments') a(value)
+       WHERE (a.value->>'firstNumber')::int <= period_number),0)
+ END;
 $$;
 -- Compute quantities once per entry (or approved frozen line) before walking
 -- the service catalog. The previous implementation scanned every entry for
@@ -158,10 +173,10 @@ BEGIN
     accum:=q+prior; balance:=greatest(0,(s->>'contracted')::numeric-accum);
     u:=public.measurement_money((s->>'priceNoBDI')::numeric);
     ub:=public.measurement_money(u*(1+(s->>'bdi')::numeric/100));
-    tc:=public.measurement_money((CASE WHEN (s->>'importedPrice')::boolean
-      THEN (s->>'priceWithBDI')::numeric ELSE ub END)*(s->>'contracted')::numeric);
-    tn:=public.measurement_money((CASE WHEN (s->>'importedPrice')::boolean
-      THEN (s->>'priceNoBDI')::numeric ELSE u END)*(s->>'contracted')::numeric);
+    tc:=public.measurement_contract_total_for_period(s,(period->>'number')::int,
+      CASE WHEN s ? 'additiveAdjustments' OR (s->>'importedPrice')::boolean THEN (s->>'priceWithBDI')::numeric ELSE ub END,'valueDeltaWithBDI');
+    tn:=public.measurement_contract_total_for_period(s,(period->>'number')::int,
+      CASE WHEN s ? 'additiveAdjustments' OR (s->>'importedPrice')::boolean THEN (s->>'priceNoBDI')::numeric ELSE u END,'valueDeltaNoBDI');
     f:=jsonb_build_object('unitPriceNoBDI',u,'unitPriceWithBDI',ub,
       'quantityCurrentAccum',accum,'quantityBalance',balance,
       'totalContracted',tc,'totalContractedNoBDI',tn,
