@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { clearCloudSnapshot, confirmProjectCollectionsSnapshot, getLoadedProjectCollections, setCloudSnapshot, stripNormalizedCollections, syncNormalizedDomainAtomically } from '@/lib/projectSync';
+import { applyProjectOperation } from '@/lib/projectOperations';
 
 const rpc = vi.hoisted(() => vi.fn());
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { rpc } }));
@@ -19,9 +20,26 @@ const save = (project: Project) => syncNormalizedDomainAtomically(
   project, stripNormalizedCollections(project), 'org-1', '2026-09-30T23:00:00Z',
 );
 
-afterEach(() => { clearCloudSnapshot(base.id); rpc.mockReset(); });
+afterEach(() => { clearCloudSnapshot(base.id); rpc.mockReset(); localStorage.clear(); });
 
 describe('transações por domínio normalizado', () => {
+  it('envia só o planejamento alterado na transação concorrente do Aditivo', async () => {
+    const original = { ...base, additives: [{ ...base.additives![0], compositions: [{ id: 'budget-1', total: 100 }],
+      scheduleDraft: { plannedTasks: [{ id: 'task-1', startDate: '2026-10-01' }] } }] } as unknown as Project;
+    setCloudSnapshot(base.id, original);
+    const candidate = { ...original, additives: [{ ...original.additives![0],
+      scheduleDraft: { plannedTasks: [{ id: 'task-1', startDate: '2026-10-02' }] } }] } as unknown as Project;
+    const next = applyProjectOperation('additiveSchedule', original, original, candidate);
+    rpc.mockResolvedValue({ data: null, error: { message: 'network unavailable' } });
+    await expect(syncNormalizedDomainAtomically(next, stripNormalizedCollections(next), 'org-1',
+      '2026-09-30T23:00:00Z', { actorId: 'actor-1', onConfirmed: vi.fn() })).rejects.toEqual({ message: 'network unavailable' });
+    const request = rpc.mock.calls[0][1].p_request;
+    expect(rpc.mock.calls[0][0]).toBe('commit_project_fields');
+    expect(request.origin).toBe('additiveSchedule');
+    expect(request.changes[0].upserts[0].row.data).toEqual({ scheduleDraft: candidate.additives![0].scheduleDraft });
+    expect(request.changes[0].upserts[0].expected.data).toEqual({ scheduleDraft: original.additives![0].scheduleDraft });
+    expect(JSON.stringify(request)).not.toContain('budget-1');
+  });
   it('confirma Medição e auditoria nova com histórico não carregado', async () => {
     confirmProjectCollectionsSnapshot(base, ['measurements'], { replaceExisting: true });
     const next = { ...base, measurements: [{ ...base.measurements![0], status: 'approved' }], auditLogs: [{ id: 'new-audit', entityType: 'measurement', entityId: 'measurement-1', action: 'approved', at: '2026-10-09', title: 'Aprovada' }] } as Project;

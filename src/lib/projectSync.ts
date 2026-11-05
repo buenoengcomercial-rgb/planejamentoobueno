@@ -1,4 +1,5 @@
 import { inheritProjectWriteOrigin, projectWriteOrigin } from '@/lib/projectOperations';
+import { additivePlanningPatch } from '@/lib/additivePlanningPatch';
 import { mergeConcurrentFields } from '@/lib/concurrentFields';
 import { commitProjectFields, type ProjectFieldBatch, type ProjectFieldReceipt, type ProjectFieldRequest } from '@/lib/projectFieldCommit';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
@@ -1620,8 +1621,15 @@ export async function syncNormalizedDomainAtomically(
         const diff = changes.get(collection);
         const before = previous[SNAPSHOT_MAP_BY_COLLECTION[collection]] as Map<string, unknown>;
         return diff ? [{ table: DOMAIN_TABLES[collection],
-          upserts: diff.upserts.map(({ id, row }) => ({ id, row: domainRow(collection, id, row),
-            expected: before.has(id) ? domainRow(collection, id, before.get(id)) : null })),
+          upserts: diff.upserts.map(({ id, row }) => {
+            const prior = before.get(id);
+            const patch = collection === 'additives' && domain === 'additive'
+              && projectWriteOrigin(project) === 'additiveSchedule' && before.has(id)
+              ? additivePlanningPatch(prior, row) : null;
+            return { id, row: patch ? { id, data: patch.row } : domainRow(collection, id, row),
+              expected: patch ? { id, data: patch.expected }
+                : before.has(id) ? domainRow(collection, id, prior) : null };
+          }),
           deletes: diff.deletes.map(id => ({ id, expected: domainRow(collection, id, before.get(id)) })),
         }] : [];
       }), audits: (audit?.upserts ?? []).map(({ id, row }) => ({ id, data: row })),

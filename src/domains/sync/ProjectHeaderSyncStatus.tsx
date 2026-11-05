@@ -24,7 +24,7 @@ export default function ProjectHeaderSyncStatus({
   if (independentMeasurement && ['idle', 'saved'].includes(status)
     && !dailyReportHasErrors && !partialSyncPending) return null;
 
-  const indicatorStatus = dailyReportHasErrors && status !== 'saving' ? 'error' : status;
+  const indicatorStatus = dailyReportHasErrors && activeView !== 'additiveSchedule' && status !== 'saving' ? 'error' : status;
   const otherAreaLabel = independentMeasurement
     ? 'Outras áreas da obra'
     : dailyReportHasErrors && activeView !== 'dailyReport' ? 'Pendência no Diário de Obra' : null;

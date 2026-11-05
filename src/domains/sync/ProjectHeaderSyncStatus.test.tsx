@@ -30,4 +30,10 @@ describe('status de sincronização por área', () => {
     expect(screen.getByText('Pendência no Diário de Obra')).toBeInTheDocument();
     expect(screen.getByTestId('general-save-status')).toHaveTextContent('error');
   });
+
+  it('mantém a confirmação do Aditivo quando só o Diário tem pendência', () => {
+    render(<ProjectHeaderSyncStatus {...base} activeView="additiveSchedule" independentMeasurement={false} dailyReportHasErrors />);
+    expect(screen.getByText('Pendência no Diário de Obra')).toBeInTheDocument();
+    expect(screen.getByTestId('general-save-status')).toHaveTextContent('saved');
+  });
 });

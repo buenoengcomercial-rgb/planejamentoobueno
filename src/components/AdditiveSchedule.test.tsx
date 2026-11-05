@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Additive, AdditiveComposition, Project } from '@/types/project';
 import { syncAdditiveScheduleDraft } from '@/lib/additiveSchedule';
@@ -60,6 +60,25 @@ describe('AdditiveSchedule - composições bloqueadoras', () => {
     view.unmount();
     render(<AdditiveSchedule project={project} onProjectChange={onProjectChange} />);
     expect(screen.queryByTestId('gantt-bar-door-task')).not.toBeInTheDocument();
+  });
+
+  it('abrir um rascunho já conciliado não inicia nova gravação', () => {
+    const project = syncAdditiveScheduleDraft(baseProject, additive.id, '2026-08-14T12:00:00.000Z');
+    const onProjectChange = vi.fn();
+    render(<AdditiveSchedule project={project} onProjectChange={onProjectChange} />);
+    expect(onProjectChange).not.toHaveBeenCalled();
+  });
+
+  it('oferece salvamento imediato somente ao aditivo editável', async () => {
+    const project = syncAdditiveScheduleDraft(baseProject, additive.id, '2026-08-14T12:00:00.000Z');
+    const onSaveNow = vi.fn().mockResolvedValue(true);
+    render(<AdditiveSchedule project={project} onProjectChange={vi.fn()} onSaveNow={onSaveNow} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar agora' }));
+    expect(onSaveNow).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Salvar agora' })).toBeEnabled());
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+    expect(onSaveNow).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Salvar agora' })).toBeEnabled());
   });
 
   it('lista itens novos antes dos contratados, salva ambos e restaura a seleção', () => {
