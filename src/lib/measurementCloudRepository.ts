@@ -455,14 +455,21 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       const capturePatch = !lifecyclePatch && !catalogPatch && confirmed?.revision === baseRevision
         && ['Capturar / editar planta', 'Apagar captura'].includes(latestEvent?.action ?? '')
         ? measurementCapturePatch(confirmed, next) : null;
-      let patch = !lifecyclePatch && !catalogPatch && !capturePatch && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
+      // A manual edit can detach drawing marks. Detect the compact plan + entry
+      // operation before the generic entry checker serializes the workspace.
+      const manualUnlinkPatch = !lifecyclePatch && !catalogPatch && !capturePatch
+        && latestEvent?.action === 'Editar detalhe' && !!latestEvent.beforePlans
+        && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
+      let patch = !lifecyclePatch && !catalogPatch && !capturePatch && !manualUnlinkPatch
+        && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
       if (!patch && !lifecyclePatch && !catalogPatch && !capturePatch) {
         const stored = (await local.storedPendingSaves!()).find(value => 'format' in value && value.format === 'entry-patch-v1'
           && value.operationId === operationId && value.baseRevision === baseRevision);
         if (stored && 'format' in stored && stored.format === 'entry-patch-v1'
           && JSON.stringify(stored.patch.event) === JSON.stringify(latestEvent)) patch = stored.patch;
       }
-      const deletionPatch = !lifecyclePatch && !catalogPatch && !capturePatch && !patch && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
+      const deletionPatch = manualUnlinkPatch ?? (!lifecyclePatch && !catalogPatch && !capturePatch && !patch
+        && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null);
       const send = () => lifecyclePatch
         ? supabase.rpc('commit_measurement_lifecycle' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(lifecyclePatch),

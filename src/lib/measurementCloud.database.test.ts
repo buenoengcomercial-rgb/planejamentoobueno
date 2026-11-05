@@ -71,6 +71,7 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261016131000_measurement_history_assembly.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261016120000_concurrent_field_merge.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261016124000_concurrent_measurement_commands.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261105010000_measurement_manual_unlink_targeted.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -78,6 +79,41 @@ afterAll(async()=>{await db.close();});
 describe('transação da Medição na nuvem',()=>{
   const commandCommit=async(previous:MeasurementWorkspace,next:MeasurementWorkspace)=>(await db.query<{value:{revision:number;replayed?:boolean}}>(
     'SELECT commit_measurement_command_v2($1,$2,$3) value',[projectId,previous.revision,JSON.stringify(measurementConcurrentCommand(previous,next))])).rows[0].value;
+  it('grava 6 para 2 em uma célula vinculada sem reenviar a medição completa',async()=>{
+    const ready=editMeasuredRow(base,actor,'m1','signs',newMeasuredRow('manual-unlink'));
+    await seed(ready);
+    const mark={id:'manual-six',name:'Contagem',kind:'count' as const,page:1,
+      points:Array.from({length:6},(_,index)=>({x:index,y:1})),projectId,measurementId:'m1',serviceId:'signs'};
+    const captured=captureMeasurement(ready,actor,{measurementId:'m1',serviceId:'signs',rowId:'manual-unlink',field:'multiplier'},
+      {...ready.plans[0],measures:[mark]},mark);
+    await db.query('SELECT patch_measurement_capture($1,$2,$3)',
+      [projectId,ready.revision,JSON.stringify(encodeMeasurementWorkspace(measurementCapturePatch(ready,captured)))]);
+    const saved=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    const oldRow=entryFor(saved,'m1','signs').rows.find(row=>row.id==='manual-unlink')!;
+    const changed=editMeasuredRow(saved,actor,'m1','signs',{...oldRow,multiplier:2,multiplierSource:undefined});
+    const patch=measurementDeletionPatch(saved,changed);
+    expect(patch).toBeTruthy();
+    expect(patch?.entries).toHaveLength(1);
+    expect(patch?.plans).toHaveLength(1);
+    expect(JSON.stringify(patch).length).toBeLessThan(JSON.stringify(changed).length);
+    expect(measurementConcurrentCommand(saved,changed)?.kind).toBe('deletion');
+    const tampered=structuredClone(patch)!;
+    tampered.entries[0].rows.find(row=>row.id==='manual-unlink')!.comment='Alteração indevida';
+    tampered.event.id=crypto.randomUUID();
+    tampered.event.after=structuredClone(tampered.entries);
+    await expect(db.query('SELECT patch_measurement_row_deletion($1,$2,$3)',
+      [projectId,saved.revision,JSON.stringify(encodeMeasurementWorkspace(tampered))])).rejects.toThrow('Edição alterou outra célula');
+    const receipt=(await db.query<{value:{revision:number;replayed?:boolean}}>(
+      'SELECT patch_measurement_row_deletion($1,$2,$3) value',
+      [projectId,saved.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value;
+    expect(receipt.revision).toBe(changed.revision);
+    const loaded=(await db.query<{value:MeasurementWorkspace}>('SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+    expect(loaded).toEqual(JSON.parse(wire(changed)));
+    expect(entryFor(loaded,'m1','signs').rows.find(row=>row.id==='manual-unlink')?.multiplier).toBe(2);
+    expect(loaded.plans[0].measures).toEqual([]);
+    expect((await db.query<{value:{replayed:boolean}}>('SELECT patch_measurement_row_deletion($1,$2,$3) value',
+      [projectId,saved.revision,JSON.stringify(encodeMeasurementWorkspace(patch))])).rows[0].value.replayed).toBe(true);
+  });
   it('comando de planta preserva quantitativo concorrente e campos distintos do catálogo',async()=>{
     await seed();
     const quantity=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('command-independent'),multiplier:1});

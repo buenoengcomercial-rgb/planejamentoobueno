@@ -17,7 +17,8 @@ export function measurementDeletionPatch(base: MeasurementWorkspace, next: Measu
     || next.audit.length !== base.audit.length + 1 || next.plans.length !== base.plans.length
     || next.services.length !== base.services.length || next.periods.length !== base.periods.length) return null;
   const event = next.audit.at(-1);
-  if (event?.action !== 'Excluir linha / desvincular referência' || !event.beforePlans || !event.afterPlans
+  const manualUnlink = event?.action === 'Editar detalhe';
+  if (!['Excluir linha / desvincular referência', 'Editar detalhe'].includes(event?.action ?? '') || !event?.beforePlans || !event.afterPlans
     || event.affected.length !== 1 || event.before.length !== 1 || event.after.length !== 1) return null;
   const previous = encodeMeasurementWorkspace(base) as MeasurementWorkspace;
   const candidate = encodeMeasurementWorkspace(next) as MeasurementWorkspace;
@@ -36,12 +37,41 @@ export function measurementDeletionPatch(base: MeasurementWorkspace, next: Measu
   const before = event.before[0], after = changedEntries[0];
   const remaining = new Map(after.rows.map(row => [row.id, row]));
   const removedRows = before.rows.filter(row => !remaining.has(row.id));
-  if (!removedRows.length || after.rows.length !== before.rows.length - removedRows.length
+  const detachedSources = manualUnlink ? before.rows.flatMap((row, index) => {
+    const updated = after.rows[index];
+    if (!updated || row.id !== updated.id) return [];
+    return sourceFields.flatMap(field => row[field] && !updated[field] ? [row[field]!] : []);
+  }) : [];
+  if (manualUnlink) {
+    if (before.rows.length !== after.rows.length || !detachedSources.length) return null;
+    for (let index = 0; index < before.rows.length; index++) {
+      const old = before.rows[index], row = after.rows[index];
+      if (old.id !== row.id) return null;
+      const prior = structuredClone(old) as unknown as Record<string, unknown>;
+      const next = structuredClone(row) as unknown as Record<string, unknown>;
+      for (const [source, quantity] of [
+        ['multiplierSource', 'multiplier'], ['source', 'measuredQuantity'],
+        ['dimensionCSource', 'dimensionC'], ['dimensionDSource', 'dimensionD'],
+      ] as const) {
+        if (!same(prior[source], next[source])) {
+          if (!prior[source] || next[source]) return null;
+          delete prior[source]; delete next[source];
+          delete prior[quantity]; delete next[quantity];
+        } else if (!prior[source] && !next[source] && !same(prior[quantity], next[quantity])) {
+          delete prior[quantity]; delete next[quantity];
+        }
+      }
+      if (!same(prior, next)) return null;
+    }
+  } else if (!removedRows.length || after.rows.length !== before.rows.length - removedRows.length
     || after.rows.some(row => !same(row, before.rows.find(old => old.id === row.id)))) return null;
 
   const key = (planId: string, measureId: string) => JSON.stringify([planId, measureId]);
-  const linked = new Set(removedRows.flatMap(row => sourceFields.flatMap(field =>
-    row[field] ? [key(row[field]!.planId, row[field]!.measureId)] : [])));
+  const linked = new Set([
+    ...removedRows.flatMap(row => sourceFields.flatMap(field =>
+      row[field] ? [key(row[field]!.planId, row[field]!.measureId)] : [])),
+    ...detachedSources.map(source => key(source.planId, source.measureId)),
+  ]);
   const used = new Set(candidate.entries.flatMap(entry => entry.rows.flatMap(row => sourceFields.flatMap(field =>
     row[field] ? [key(row[field]!.planId, row[field]!.measureId)] : []))));
   const changedPlans: TakeoffCatalogPlan[] = [];
