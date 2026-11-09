@@ -13,7 +13,8 @@ vi.mock('./WarehouseBudgetMaterialsTab', () => ({ default: () => <div>Conteúdo 
 vi.mock('./WarehouseWithdrawnMaterialsTab', () => ({ default: () => <div>Conteúdo de materiais retirados</div> }));
 vi.mock('./WarehouseMovementsTab', () => ({ default: () => <div>Conteúdo de movimentações</div> }));
 vi.mock('./WarehouseRequisitionsTab', () => ({ default: () => <div>Conteúdo de retiradas</div> }));
-vi.mock('./WarehouseEquipmentsTab', () => ({ default: () => <div>Conteúdo de equipamentos</div> }));
+vi.mock('./WarehouseEquipmentsTab', () => ({ default: ({ canArchive, canEdit }: { canArchive: boolean; canEdit: boolean }) =>
+  <div>Conteúdo de equipamentos<span data-testid="equipment-permissions">{String(canArchive)}:{String(canEdit)}</span></div> }));
 vi.mock('./WarehouseInventoryTab', () => ({ default: () => <div>Conteúdo do inventário</div> }));
 vi.mock('./WarehouseFiscalNotesTab', () => ({ default: () => <div>Conteúdo de entrada</div> }));
 
@@ -82,6 +83,13 @@ describe('controle de acesso do almoxarifado', () => {
     expect(desktopLabels).toEqual(expectedLabels);
     expect(mobileLabels).toEqual(expectedLabels);
     expect(mobileSelect).toHaveValue('notas');
+  });
+
+  it('impede arquivar equipamentos sem bloquear a edição autorizada', async () => {
+    render(<Warehouse project={project} onProjectChange={vi.fn()} canViewPanel={false}
+      canArchiveWarehouseRecords={false} canManageFiscalNotes />);
+    fireEvent.change(screen.getByLabelText('Área do almoxarifado'), { target: { value: 'equipamentos' } });
+    expect(await screen.findByTestId('equipment-permissions')).toHaveTextContent('false:true');
   });
 
   it('não inicia uma gravação geral ao normalizar dados antigos para exibição', async () => {
