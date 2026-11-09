@@ -8,6 +8,7 @@ import { lazyWithReload } from '@/lib/lazyWithReload';
 import { scopeKey } from '@/lib/planTakeoff';
 import { resolveObraConfig } from '@/lib/obraConfig';
 import { logToProject } from '@/lib/audit';
+import { canArchiveWarehouseRecords } from '@/lib/warehouseArchivePermission';
 import { Button } from '@/components/ui/button';
 import { Loader2 } from 'lucide-react';
 import UndoButton from '@/components/UndoButton';
@@ -248,7 +249,7 @@ export default function ProjectAreaContent({
           canReviewFiscalCosts={role === 'owner' || role === 'admin'}
           canViewPanel={role !== 'warehouse_operator' && role !== 'engineer'}
           canApproveInventory={role === 'owner' || role === 'admin'}
-          canArchiveWarehouseRecords={warehouseEditor}
+          canArchiveWarehouseRecords={canArchiveWarehouseRecords(role, warehouseEditor)}
           canEditPostedWarehouseRecords={role === 'owner'}
           canCorrectDeliveredRequisitions={warehouseEditor}
           canSupplementRequisitions={warehouseEditor}
