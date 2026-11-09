@@ -1768,7 +1768,7 @@ export default function Index() {
         </Suspense>
       )}
 
-      {orgId && <MigrationDialog organizationId={orgId} onMigrated={async () => { await refreshCloudList(); }} />}
+      {orgId && (role === 'owner' || role === 'admin') && <MigrationDialog organizationId={orgId} onMigrated={async () => { await refreshCloudList(); }} />}
 
       {draftConflictProjectId === rawProject.id && diaryConflictDismissed && (
         <div role="alert" className="fixed bottom-4 left-4 right-4 z-40 flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/50 bg-background p-3 text-sm shadow-lg sm:right-auto sm:max-w-xl">

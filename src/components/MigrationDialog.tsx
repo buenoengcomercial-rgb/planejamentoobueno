@@ -1,28 +1,36 @@
 import { useEffect, useState } from 'react';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { listProjects as listLocalProjects, loadProject as loadLocalProject } from '@/lib/projectStorage';
-import { upsertCloudProject } from '@/lib/cloudProjects';
+import { listCloudProjects, upsertCloudProject } from '@/lib/cloudProjects';
+import { localProjectsNeedingMigration } from '@/lib/localProjectMigration';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
+import type { ProjectMeta } from '@/lib/projectStorage';
 
 const MIGRATION_FLAG_PREFIX = 'obraplanner-migration-asked-';
 
 export default function MigrationDialog({ organizationId, onMigrated }: { organizationId: string; onMigrated: () => void }) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
-  const [count, setCount] = useState(0);
+  const [candidates, setCandidates] = useState<ProjectMeta[]>([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!user) return;
     const askedKey = `${MIGRATION_FLAG_PREFIX}${user.id}`;
     if (localStorage.getItem(askedKey)) return;
-    const local = listLocalProjects();
-    if (local.length > 0) {
-      setCount(local.length);
-      setOpen(true);
-    }
+    let active = true;
+    void listCloudProjects().then(cloud => {
+      if (!active) return;
+      const candidates = localProjectsNeedingMigration(listLocalProjects(), cloud, loadLocalProject);
+      setCandidates(candidates);
+      setOpen(candidates.length > 0);
+    }).catch(() => {
+      // An unavailable cloud list cannot authorize copying local projects.
+      if (active) setOpen(false);
+    });
+    return () => { active = false; };
   }, [user]);
 
   const dismiss = () => {
@@ -34,7 +42,13 @@ export default function MigrationDialog({ organizationId, onMigrated }: { organi
     if (!user) return;
     setBusy(true);
     try {
-      const local = listLocalProjects();
+      const cloud = await listCloudProjects();
+      const local = localProjectsNeedingMigration(listLocalProjects(), cloud, loadLocalProject);
+      if (!local.length) {
+        toast.info('As obras locais já estão na nuvem ou não precisam de migração.');
+        dismiss();
+        return;
+      }
       let ok = 0;
       for (const meta of local) {
         const proj = loadLocalProject(meta.id);
@@ -62,7 +76,7 @@ export default function MigrationDialog({ organizationId, onMigrated }: { organi
         <AlertDialogHeader>
           <AlertDialogTitle>Enviar obras para a nuvem?</AlertDialogTitle>
           <AlertDialogDescription>
-            Encontramos <strong>{count}</strong> obra(s) salva(s) neste navegador. Deseja enviá-las para sua conta na nuvem? Os dados locais serão mantidos como backup.
+            Encontramos <strong>{candidates.length}</strong> obra(s) deste navegador que não aparecem na nuvem. Confira antes de enviar: {candidates.map(project => project.name).join(', ')}. Os dados locais serão mantidos como backup.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
