@@ -213,7 +213,17 @@ export async function createMemberWithPassword(
   });
   const response = data as { ok?: boolean; error?: string } | null;
   if (error) {
-    const msg = response?.error || error.message;
+    let msg = response?.error || error.message;
+    const ctx = (error as { context?: unknown }).context;
+    if (ctx instanceof Response) {
+      try {
+        const body = await ctx.clone().json() as { error?: string };
+        if (body?.error) msg = body.error;
+      } catch { /* corpo não-JSON */ }
+    }
+    if (/weak|easy to guess|pwned/i.test(msg ?? '')) {
+      msg = 'Senha fraca ou já vazada na internet. Escolha uma senha mais forte (misture letras, números e símbolos).';
+    }
     if (msg === 'already_member') return { ok: false, reason: 'already_member' };
     return { ok: false, reason: 'error', message: msg };
   }
