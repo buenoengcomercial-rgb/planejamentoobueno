@@ -44,6 +44,11 @@ export default function TeamManagement() {
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
   const [nameSavingId, setNameSavingId] = useState<string | null>(null);
 
+  const goBack = () => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+    if (idx > 0) navigate(-1);
+    else navigate('/', { replace: true });
+  };
   useEffect(() => {
     if (!authLoading && !user) navigate('/auth', { replace: true });
   }, [authLoading, user, navigate]);
@@ -240,7 +245,7 @@ export default function TeamManagement() {
         <div className="space-y-4 max-w-md">
           <h1 className="text-xl font-semibold">Acesso restrito</h1>
           <p className="text-sm text-muted-foreground">Apenas administradores ou proprietários podem gerenciar usuários.</p>
-          <Button variant="outline" onClick={() => navigate(-1)}>Voltar</Button>
+          <Button variant="outline" onClick={goBack}>Voltar</Button>
         </div>
       </div>
     );
@@ -251,7 +256,7 @@ export default function TeamManagement() {
       <div className="max-w-4xl mx-auto space-y-6">
         <ModulePageHeader
           eyebrow={(
-            <Button variant="ghost" size="sm" onClick={() => navigate(-1)} className="-ml-2">
+            <Button variant="ghost" size="sm" onClick={goBack} className="-ml-2">
               <ArrowLeft className="w-4 h-4 mr-1" /> Voltar
             </Button>
           )}
