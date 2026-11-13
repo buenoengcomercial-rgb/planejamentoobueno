@@ -41,6 +41,7 @@ export interface MeasurementAudit {
   planDelta?: { kind: 'add' | 'update' | 'archive'; planId: string; beforePlan?: TakeoffCatalogPlan; afterPlan?: TakeoffCatalogPlan };
   beforePeriods?: MeasuredPeriod[]; afterPeriods?: MeasuredPeriod[];
   beforeServices?: MeasuredService[]; afterServices?: MeasuredService[];
+  additiveFirstNumber?: number;
   bulletinChange?: { measurementId: string; before: { number: number; bulletin: MeasuredBulletin }; after: { number: number; bulletin: MeasuredBulletin } };
 }
 export interface MeasurementWorkspace {
@@ -84,10 +85,16 @@ export function monthlyLines(w: MeasurementWorkspace, measurementId: string): Mo
   return w.services.filter(s => s.availableFromNumber <= period.number).map(service => {
     const qty = entryQuantity(w, measurementId, service.id);
     const prior = w.periods.filter(p => p.number < period.number).reduce((sum, p) => sum + (p.status === 'approved' ? p.frozen?.find(l => l.service.id === service.id)?.qty ?? entryQuantity(w, p.id, service.id) : entryQuantity(w, p.id, service.id)), 0);
-    const contracted = service.contracted - (service.additiveAdjustments ?? [])
+    const adjustments = service.additiveAdjustments ?? [];
+    const active = adjustments.filter(adjustment => adjustment.firstNumber <= period.number);
+    const contracted = service.contracted - adjustments
       .filter(adjustment => adjustment.firstNumber > period.number)
       .reduce((sum, adjustment) => sum + adjustment.net, 0);
-    const periodService = contracted === service.contracted ? service : { ...service, contracted };
+    const periodService = active.length === adjustments.length ? service : { ...service, contracted };
+    if (periodService !== service) {
+      if (active.length) periodService.additiveAdjustments = active;
+      else delete periodService.additiveAdjustments;
+    }
     const financial = calculateMeasurementLine({ quantityContracted: contracted, quantityPeriod: qty, quantityPriorAccum: prior, unitPriceNoBDI: service.priceNoBDI, bdiPercent: service.bdi });
     // Imported contractual prices/totals follow the existing synthetic-budget branch.
     if (service.importedPrice) {
@@ -96,9 +103,8 @@ export function monthlyLines(w: MeasurementWorkspace, measurementId: string): Mo
       financial.totalBalance = Math.max(0, money2(financial.totalContracted - financial.totalAccumulated));
       financial.totalBalanceNoBDI = Math.max(0, money2(financial.totalContractedNoBDI - financial.totalAccumulatedNoBDI));
     }
-    if (service.additiveAdjustments?.length) {
-      const originalQuantity = service.contracted - service.additiveAdjustments.reduce((sum, adjustment) => sum + adjustment.net, 0);
-      const active = service.additiveAdjustments.filter(adjustment => adjustment.firstNumber <= period.number);
+    if (active.length) {
+      const originalQuantity = service.contracted - adjustments.reduce((sum, adjustment) => sum + adjustment.net, 0);
       financial.totalContracted = sumMoney([calculateLineTotal(service.priceWithBDI, originalQuantity), ...active.map(adjustment => adjustment.valueDeltaWithBDI)]);
       financial.totalContractedNoBDI = sumMoney([calculateLineTotal(service.priceNoBDI, originalQuantity), ...active.map(adjustment => adjustment.valueDeltaNoBDI)]);
       financial.totalBalance = Math.max(0, money2(financial.totalContracted - financial.totalAccumulated));
@@ -121,7 +127,8 @@ export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): bo
   if (period?.status !== 'in_review') return false;
   const changedAfter = (event: MeasurementAudit) => event.affected.some(target => target.measurementId === id)
     || event.bulletinChange?.measurementId === id || !!event.beforePlans || !!event.afterPlans || !!event.planDelta
-    || !!event.beforeServices || !!event.afterServices
+    || ((!!event.beforeServices || !!event.afterServices)
+      && (event.additiveFirstNumber == null || event.additiveFirstNumber <= period.number))
     || event.periodDelta?.periodId === id
     || (!!event.beforePeriods && !sameData(event.beforePeriods.find(p => p.id === id), event.afterPeriods?.find(p => p.id === id)));
   let index = -1;

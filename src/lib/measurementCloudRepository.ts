@@ -4,6 +4,7 @@ import { assertMeasurementPlanPath, decodeMeasurementWorkspace, encodeMeasuremen
 import { withReadDeadline } from './readDeadline';
 import { TAKEOFF_BUCKET } from './planTakeoffCloud';
 import { measurementEntryPatch } from './measurementEntryPatch';
+import { measurementAdditiveCatalogPatch } from './measurementAdditiveCatalogPatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import { applyMeasurementLifecycleReceipt, measurementLifecyclePatch } from './measurementLifecyclePatch';
@@ -441,6 +442,11 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       // generic entry-patch fallback, which serializes the entire workspace.
       const lifecyclePatch = !needsPlanPaths && confirmed?.revision === baseRevision
         ? measurementLifecyclePatch(confirmed, next) : null;
+      const additivePatch = confirmed?.revision === baseRevision
+        ? measurementAdditiveCatalogPatch(confirmed, next) : null;
+      if (latestEvent?.action.startsWith('Incorporar aditivo ') && !additivePatch) {
+        throw new MeasurementCommitRejectedError('Confira a revisão atual antes de incorporar o aditivo.');
+      }
       const isLifecycleCommand = !!latestEvent && (['Criar medição', 'Enviar para fiscalização', 'Aprovado pela fiscalização'].includes(latestEvent.action)
         || latestEvent.lifecycle?.kind === 'delete' || latestEvent.lifecycle?.kind === 'restore');
       if (isLifecycleCommand && !lifecyclePatch && !command) throw new MeasurementCommitRejectedError('O ciclo da medição contém outras alterações ou uma revisão desatualizada. Confira a medição antes de repetir.');
@@ -498,9 +504,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       }
       // Check a DXF operation before the generic entry fallback: that fallback
       // serializes the entire workspace merely to discover the plan changed.
-      const catalogPatch = !lifecyclePatch && confirmed?.revision === baseRevision
+      const catalogPatch = !lifecyclePatch && !additivePatch && confirmed?.revision === baseRevision
         ? measurementPlanCatalogPatch(confirmed, next) : null;
-      const capturePatch = !lifecyclePatch && !catalogPatch && confirmed?.revision === baseRevision
+      const capturePatch = !lifecyclePatch && !additivePatch && !catalogPatch && confirmed?.revision === baseRevision
         && ['Capturar / editar planta', 'Apagar captura'].includes(latestEvent?.action ?? '')
         ? measurementCapturePatch(confirmed, next) : null;
       // A manual edit can detach drawing marks. Detect the compact plan + entry
@@ -508,19 +514,22 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       const manualUnlinkPatch = !lifecyclePatch && !catalogPatch && !capturePatch
         && latestEvent?.action === 'Editar detalhe' && !!latestEvent.beforePlans
         && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
-      let patch = !lifecyclePatch && !catalogPatch && !capturePatch && !manualUnlinkPatch
+      let patch = !lifecyclePatch && !additivePatch && !catalogPatch && !capturePatch && !manualUnlinkPatch
         && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
-      if (!patch && !lifecyclePatch && !catalogPatch && !capturePatch) {
+      if (!patch && !lifecyclePatch && !additivePatch && !catalogPatch && !capturePatch) {
         const stored = (await local.storedPendingSaves!()).find(value => 'format' in value && value.format === 'entry-patch-v1'
           && value.operationId === operationId && value.baseRevision === baseRevision);
         if (stored && 'format' in stored && stored.format === 'entry-patch-v1'
           && JSON.stringify(stored.patch.event) === JSON.stringify(latestEvent)) patch = stored.patch;
       }
-      const deletionPatch = manualUnlinkPatch ?? (!lifecyclePatch && !catalogPatch && !capturePatch && !patch
+      const deletionPatch = manualUnlinkPatch ?? (!lifecyclePatch && !additivePatch && !catalogPatch && !capturePatch && !patch
         && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null);
       const send = () => lifecyclePatch
         ? supabase.rpc('commit_measurement_lifecycle' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(lifecyclePatch),
+        } as never)
+        : additivePatch ? supabase.rpc('patch_measurement_additive_catalog' as never, {
+          p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: additivePatch.payload,
         } as never)
         : catalogPatch ? supabase.rpc('patch_measurement_plan_catalog' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(catalogPatch),
@@ -554,8 +563,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           ? Number(eventData.revision)
           : remoteRevision >= next.revision ? await compactedReceiptRevision(operationId) : null;
         if (savedRevision !== null && (savedRevision === next.revision || patch && savedRevision >= next.revision) && remoteRevision >= savedRevision) {
-          const latest = lifecyclePatch || catalogPatch || remoteRevision !== next.revision ? await loadRemote() : next;
-          if (!latest || latest.revision < remoteRevision) throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Mantenha esta página aberta.');
+          const needsReload = lifecyclePatch || catalogPatch || additivePatch || remoteRevision !== next.revision;
+          const latest = needsReload ? await loadRemote() : next;
+          if (!latest || (needsReload && loadedOffline) || latest.revision < remoteRevision) throw new Error('A operação foi confirmada, mas a versão mais recente não pôde ser carregada. Mantenha esta página aberta.');
           confirmed = latest;
           loadedOffline = false;
           state = { source: 'cloud', checking: !!loading };
@@ -572,7 +582,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
           throw new MeasurementCommitRejectedError(error.message);
         throw new Error(`${error.message}. A resposta da nuvem é incerta; confira esta operação antes de sair.`);
       }
-      const compactPatch = patch ?? (deletionPatch || capturePatch || catalogPatch ? encodeMeasurementWorkspace(deletionPatch ?? capturePatch ?? catalogPatch) : null);
+      const compactPatch = additivePatch?.payload ?? patch ?? (deletionPatch || capturePatch || catalogPatch ? encodeMeasurementWorkspace(deletionPatch ?? capturePatch ?? catalogPatch) : null);
       const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v)
         ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
       if (patch && (data as { reconciled?: boolean } | null)?.reconciled) {
@@ -627,13 +637,18 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const applied = applyMeasurementPlanCatalogReceipt(confirmed!, next, catalogPatch, data);
         if (!applied) throw new Error('A nuvem não confirmou o cadastro da planta. Mantenha esta página aberta.');
         saved = applied;
-      } else if (patch || deletionPatch || capturePatch) {
-        const receipt = data as { projectId?: string; revision?: number; patch?: unknown } | null;
+      } else if (patch || deletionPatch || capturePatch || additivePatch) {
+        const receipt = data as { projectId?: string; revision?: number; firstNumber?: number; patch?: unknown } | null;
         if (receipt?.projectId !== scope.projectId || receipt.revision !== next.revision || JSON.stringify(receipt.patch) !== JSON.stringify(compactPatch)) {
           // JSONB key order is not significant; compare the canonical payload.
           if (receipt?.projectId !== scope.projectId || receipt?.revision !== next.revision || canonical(receipt.patch) !== canonical(compactPatch)) throw new Error('A nuvem não confirmou esta operação. Mantenha esta página aberta.');
         }
-        saved = next;
+        if (additivePatch && receipt?.firstNumber !== additivePatch.firstNumber) {
+          throw new Error('A nuvem não confirmou o período inicial do aditivo. Mantenha esta página aberta.');
+        }
+        saved = additivePatch ? {
+          ...next, audit: [...next.audit.slice(0, -1), { ...latestEvent!, additiveFirstNumber: additivePatch.firstNumber }],
+        } : next;
       } else saved = await read(data);
       if (saved.revision !== next.revision || saved.audit.at(-1)?.id !== operationId) throw new Error('A nuvem não confirmou esta operação. Mantenha esta página aberta.');
       confirmed = saved;
