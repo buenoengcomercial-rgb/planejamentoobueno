@@ -102,6 +102,8 @@ export type { TeamCode, TeamDefinition } from '@/lib/teams';
 export interface TaskDependency {
   taskId: string;
   type: DependencyType;
+  /** Signed offset in working days; omitted means zero. */
+  lag?: number;
 }
 
 /** Operational dates for archived additive rows, without rewriting the approved archive. */

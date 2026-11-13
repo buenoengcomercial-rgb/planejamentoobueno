@@ -39,6 +39,7 @@ const FERIADOS_NACIONAIS_FIXOS: { mes: number; dia: number; nome: string }[] = [
   { mes: 9, dia: 12, nome: 'Nossa Senhora Aparecida' },
   { mes: 10, dia: 2, nome: 'Finados' },
   { mes: 10, dia: 15, nome: 'Proclamação da República' },
+  { mes: 10, dia: 20, nome: 'Dia Nacional de Zumbi e da Consciência Negra' },
   { mes: 11, dia: 25, nome: 'Natal' },
 ];
 
@@ -87,7 +88,7 @@ const FERIADOS_MUNICIPAIS: Record<string, { mes: number; dia: number; nome: stri
   'Belém': [{ mes: 0, dia: 12, nome: 'Aniversário de Belém' }],
   'Goiânia': [{ mes: 9, dia: 24, nome: 'Aniversário de Goiânia' }],
   'Brasília': [{ mes: 3, dia: 21, nome: 'Aniversário de Brasília' }],
-  'Porto Velho': [{ mes: 0, dia: 4, nome: 'Aniversário de Porto Velho' }, { mes: 9, dia: 2, nome: 'Dia do Evangélico' }],
+  'Porto Velho': [{ mes: 0, dia: 24, nome: 'Instalação do Município de Porto Velho' }, { mes: 4, dia: 24, nome: 'Nossa Senhora Auxiliadora' }, { mes: 9, dia: 2, nome: 'Criação do Município de Porto Velho' }],
   'Vitória': [{ mes: 8, dia: 8, nome: 'Aniversário de Vitória' }],
   'Natal': [{ mes: 11, dia: 25, nome: 'Aniversário de Natal' }],
   'Campo Grande': [{ mes: 7, dia: 26, nome: 'Aniversário de Campo Grande' }],
