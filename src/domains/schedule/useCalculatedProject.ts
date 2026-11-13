@@ -18,21 +18,7 @@ export function useCalculatedProject(rawProject: Project | null, settleDependenc
   const calculatedPhases = useMemo(() => {
     if (!rawProject) return null;
     const scheduleInput = { ...rawProject, phases: phases ?? [] };
-    const enriched = applyDailyLogsToProject(
-      syncBaselineWithRup(applyRupToProject(captureBaseline(scheduleInput))),
-    );
-    if (settleDependencies) {
-      const cfg = resolveObraConfig({ scheduleCalendar });
-      const cal = {
-        uf: cfg.uf,
-        municipio: cfg.municipio,
-        trabalhaSabado: cfg.trabalhaSabado,
-        jornadaDiaria: cfg.jornadaDiaria,
-        exceptions: cfg.exceptions,
-      };
-      return calculateCPM(settleAllDependencies(enriched, cal)).phases;
-    }
-    return calculateCPM(enriched).phases;
+    return calculateProjectSchedule(scheduleInput, settleDependencies).phases;
     // Only the schedule's inputs may invalidate this calculation. All other
     // project fields are passed through below without entering the task graph.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -41,4 +27,22 @@ export function useCalculatedProject(rawProject: Project | null, settleDependenc
   return useMemo(() => rawProject && calculatedPhases
     ? { ...rawProject, phases: calculatedPhases }
     : rawProject, [rawProject, calculatedPhases]);
+}
+
+export function calculateProjectSchedule(rawProject: Project, settleDependencies: boolean): Project {
+    const enriched = applyDailyLogsToProject(
+      syncBaselineWithRup(applyRupToProject(captureBaseline(rawProject))),
+    );
+    if (settleDependencies) {
+      const cfg = resolveObraConfig(rawProject);
+      const cal = {
+        uf: cfg.uf,
+        municipio: cfg.municipio,
+        trabalhaSabado: cfg.trabalhaSabado,
+        jornadaDiaria: cfg.jornadaDiaria,
+        exceptions: cfg.exceptions,
+      };
+      return calculateCPM(settleAllDependencies(enriched, cal));
+    }
+    return calculateCPM(enriched);
 }
