@@ -11,14 +11,18 @@ export default function ProjectOperationConflicts({ actorId, projectId, organiza
   const [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   const [downloaded, setDownloaded] = useState<string[]>([]);
   useEffect(() => {
-    const refresh = () => {
-      try { setOperations(pendingProjectFieldOperations(actorId, projectId)); setStorageError(false); }
-      catch { setStorageError(true); }
+    let generation = 0;
+    const refresh = async () => {
+      const read = ++generation;
+      try {
+        const result = await pendingProjectFieldOperations(actorId, projectId);
+        if (read === generation) { setOperations(result); setStorageError(false); }
+      } catch { if (read === generation) setStorageError(true); }
     };
-    refresh();
+    void refresh();
     window.addEventListener('storage', refresh);
     window.addEventListener('obraplanner:operation-conflicts', refresh);
-    return () => { window.removeEventListener('storage', refresh); window.removeEventListener('obraplanner:operation-conflicts', refresh); };
+    return () => { generation++; window.removeEventListener('storage', refresh); window.removeEventListener('obraplanner:operation-conflicts', refresh); };
   }, [actorId, projectId]);
   if (!operations.length && !storageError) return null;
   const download = (operation: PendingProjectFieldOperation) => {
@@ -31,9 +35,12 @@ export default function ProjectOperationConflicts({ actorId, projectId, organiza
     setBusy(true); setMessage('');
     try {
       await commitProjectFields(projectId, organizationId, actorId, operation.request, receipt => onRecovered(receipt, operation));
-      setOperations(pendingProjectFieldOperations(actorId, projectId));
+      setOperations(await pendingProjectFieldOperations(actorId, projectId));
     } catch (error) {
-      if (error instanceof ProjectFieldConflictError) preserveProjectFieldConflict(error, undefined);
+      if (error instanceof ProjectFieldConflictError) {
+        try { await preserveProjectFieldConflict(error, undefined); }
+        catch { setStorageError(true); }
+      }
       setMessage((error as { message?: string }).message ?? 'Não foi possível conferir a operação.');
     } finally { setBusy(false); }
   };
@@ -49,10 +56,12 @@ export default function ProjectOperationConflicts({ actorId, projectId, organiza
           {operation.conflict ? 'Tentar conciliar novamente' : 'Conferir salvamento pendente'}
         </button>
         <button className="my-1 underline" onClick={() => download(operation)}>Baixar tentativa preservada</button>
-        <button className="ml-3 underline disabled:opacity-50" disabled={busy || !downloaded.includes(operation.operationId)} onClick={() => {
+        <button className="ml-3 underline disabled:opacity-50" disabled={busy || !downloaded.includes(operation.operationId)} onClick={async () => {
           if (!window.confirm('Arquivar esta tentativa somente neste navegador? Confirme que o arquivo foi baixado e que os dados necessários já foram salvos na nuvem.')) return;
-          archiveProjectFieldOperation(actorId, projectId, operation.operationId);
-          setOperations(pendingProjectFieldOperations(actorId, projectId));
+          try {
+            await archiveProjectFieldOperation(actorId, projectId, operation.operationId);
+            setOperations(await pendingProjectFieldOperations(actorId, projectId));
+          } catch { setStorageError(true); }
         }}>Arquivar tentativa local</button>
       </div>)}
     </details>

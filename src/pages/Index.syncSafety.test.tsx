@@ -822,7 +822,7 @@ describe('segurança de sincronização da página da obra', () => {
     expect(screen.getByTestId('project-name')).toHaveTextContent('Primeira confirmação');
     expect(screen.queryByText('Conflito de cópia local')).not.toBeInTheDocument();
     expect(screen.getByRole('complementary', { name: 'Operações em conflito' })).toBeInTheDocument();
-    expect(pendingProjectFieldOperations('owner-1', 'project-1')[0].conflict?.attemptedProject).toMatchObject({ name: 'Alteração geral pendente' });
+    expect((await pendingProjectFieldOperations('owner-1', 'project-1'))[0].conflict?.attemptedProject).toMatchObject({ name: 'Alteração geral pendente' });
     fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
     expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);

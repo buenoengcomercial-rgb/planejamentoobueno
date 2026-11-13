@@ -602,7 +602,7 @@ export default function Index() {
           const latest = rawProjectRef.current;
           if (!latest || latest.id !== attempted.id) throw error;
           // Preserve the rejected operation and typing that continued during the request.
-          preserveProjectFieldConflict(error, latest, attempted);
+          await preserveProjectFieldConflict(error, latest, attempted);
           const domainCollections: Record<string, ProjectCollectionKey[]> = {
             production: ['eapChapters', 'tasks', 'taskDailyLogs', 'auditLogs'],
             measurement: ['measurements', 'auditLogs'], additive: ['additives', 'budgetItems', 'analyticCompositions', 'materialPriceHistory', 'auditLogs'],
@@ -614,7 +614,7 @@ export default function Index() {
           if (!record || rawProjectRef.current?.id !== latest.id) throw error;
           const remote = mergeHydratedProjectCollections(mergeProjectMetadata(attempted, record.project), record.project, collections);
           const merged = mergeConcurrentFields(attempted, rawProjectRef.current, remote);
-          preserveProjectFieldConflict(error, rawProjectRef.current, attempted);
+          await preserveProjectFieldConflict(error, rawProjectRef.current, attempted);
           confirmCloudProjectRecord(record);
           rawProjectRef.current = merged.value;
           skipNextAutoSaveRef.current = serializeProject(merged.value) === serializeProject(remote);
