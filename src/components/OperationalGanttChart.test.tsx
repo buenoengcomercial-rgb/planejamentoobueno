@@ -38,7 +38,7 @@ it('salva alteração de uma data derivada sem mudar tarefas ou medições não 
   const { project } = measurementFixture();
   const raw = structuredClone(project);
   const tasks = raw.phases[0].tasks;
-  tasks[0] = { id: 'pred', name: 'Predecessora', startDate: '2026-11-13', duration: 3, percentComplete: 0, dependencies: [] };
+  tasks[0] = { id: 'pred', name: 'Predecessora', phase: 'Teste', responsible: '', materials: [], level: 0, startDate: '2026-11-13', duration: 3, percentComplete: 0, dependencies: [] };
   tasks[0].isManual = true; tasks[0].manualDuration = 3; tasks[0].durationMode = 'manual';
   tasks[1] = { ...tasks[0], id: 'dependent', startDate: '2026-11-13', dependencies: [tasks[0].id],
     dependencyDetails: [{ taskId: tasks[0].id, type: 'TI' }] };
@@ -54,4 +54,3 @@ it('salva alteração de uma data derivada sem mudar tarefas ou medições não 
   expect(saved.phases[0].tasks[0]).toEqual(raw.phases[0].tasks[0]);
   expect(saved.measurements).toEqual(raw.measurements);
 });
-
