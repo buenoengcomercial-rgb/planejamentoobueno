@@ -141,7 +141,7 @@ END; $$;
 
 -- The request contains only the catalog and one audit header. The server
 -- assembles the new checkpoint from confirmed data and writes one receipt.
-CREATE FUNCTION public.patch_measurement_additive_catalog(
+CREATE OR REPLACE FUNCTION public.patch_measurement_additive_catalog(
   p_project_id uuid, p_expected_revision bigint, p_patch jsonb
 ) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path='' AS $$
 DECLARE
