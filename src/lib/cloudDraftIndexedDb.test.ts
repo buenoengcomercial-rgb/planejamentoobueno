@@ -74,6 +74,28 @@ describe('rascunho grande no IndexedDB', () => {
     expect(readStoredProjectDraft(project.id)).toBeNull();
   });
 
+  it('invalida uma leitura concorrente sem repovoar o cache após a purga', async () => {
+    const project = { id: 'indexed-project-read', name: 'Obra', phases: [], totalBudget: 0 } as Project;
+    await writeIndexedDbProjectDraft(createProjectDraft(project, null));
+    const reading = preloadIndexedDbProjectDraft(project.id);
+    const clearing = clearIndexedDbProjectDraft(project.id);
+    expect(await reading).toBeNull();
+    await clearing;
+    expect(getCachedIndexedDbProjectDraft(project.id)).toBeNull();
+  });
+
+  it('preserva uma nova edição agendada depois do descarte anterior', async () => {
+    const project = { id: 'indexed-project-new', name: 'Obra', phases: [], totalBudget: 0 } as Project;
+    const old = writeIndexedDbProjectDraft(createProjectDraft(project, 'old'));
+    const clearing = clearIndexedDbProjectDraft(project.id);
+    const latest = createProjectDraft({ ...project, name: 'Edição nova' }, 'new');
+    const writing = writeIndexedDbProjectDraft(latest);
+    expect(await old).toBeNull();
+    await clearing;
+    expect(await writing).toEqual(latest);
+    expect(await preloadIndexedDbProjectDraft(project.id)).toEqual(latest);
+  });
+
   it('não ressuscita uma gravação pendente depois que o rascunho é descartado', async () => {
     const project = { id: 'indexed-project-2', name: 'Obra', phases: [], totalBudget: 0 } as Project;
     const draft = createProjectDraft(project, null);

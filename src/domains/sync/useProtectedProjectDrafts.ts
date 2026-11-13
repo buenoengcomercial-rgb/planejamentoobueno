@@ -36,6 +36,7 @@ export function useProtectedProjectDrafts({
   savedProjectJsonRef, projectUpdatedAtRef,
   setPartialSyncIssue, setSaveStatus,
 }: ProtectedProjectDraftOptions) {
+  const activeDraftWrites = useRef(new Map<string, object>());
   const draftWriteTimerRef = useRef<number | null>(null);
   const pendingDraftRef = useRef<{ project: Project; baseUpdatedAt: string | null; baseProject: Project | null } | null>(null);
 
@@ -56,6 +57,8 @@ export function useProtectedProjectDrafts({
   }, []);
 
   const writeProtectedProjectDraft = useCallback((project: Project, baseUpdatedAt: string | null, baseProject = confirmedAncestor(project, baseUpdatedAt)) => {
+    const write = {};
+    activeDraftWrites.current.set(project.id, write);
     const partial = partialSyncPendingRef.current?.projectId === project.id
       ? partialSyncPendingRef.current
       : null;
@@ -69,7 +72,7 @@ export function useProtectedProjectDrafts({
         pendingNormalizedSync: true, loadedCollections, baseProject,
       } : { loadedCollections, baseProject });
       void writeIndexedDbProjectDraft(candidate).then(confirmed => {
-        if (!confirmed) return;
+        if (activeDraftWrites.current.get(project.id) !== write || !confirmed) return;
         const current = partialSyncPendingRef.current;
         if (current?.projectId === project.id && !current.draftProtected) {
           partialSyncPendingRef.current = { ...current, draftProtected: true };
@@ -109,8 +112,13 @@ export function useProtectedProjectDrafts({
           loadedCollections: partial?.loadedCollections ?? getLoadedProjectCollections(draft.project.id),
           baseProject: draft.baseProject,
         });
+        const write = {};
+        activeDraftWrites.current.set(draft.project.id, write);
         void writeIndexedDbProjectDraft(candidate).then(confirmed => {
-          if (!confirmed) writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt, draft.baseProject);
+          // IndexedDB also returns null when a confirmation invalidates this write.
+          if (!confirmed && activeDraftWrites.current.get(draft.project.id) === write) {
+            writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt, draft.baseProject);
+          }
         });
       }
     }, LOCAL_DRAFT_DEBOUNCE_MS);
@@ -118,7 +126,8 @@ export function useProtectedProjectDrafts({
 
   const discardProjectDraft = useCallback((projectId: string) => {
     cancelScheduledDraft(projectId);
-    clearProjectDraft(projectId);
+    activeDraftWrites.current.delete(projectId);
+    return clearProjectDraft(projectId);
   }, [cancelScheduledDraft]);
 
   useEffect(() => () => cancelScheduledDraft(), [cancelScheduledDraft]);

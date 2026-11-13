@@ -1,4 +1,5 @@
 import type { Project } from '@/types/project';
+import { mergeConcurrentFields, sameJsonStructure } from '@/lib/concurrentFields';
 import type { ProjectCollectionKey } from '@/lib/projectDataScope';
 import { clearIndexedDbProjectDraft, getCachedIndexedDbProjectDraft } from '@/lib/cloudDraftIndexedDb';
 
@@ -59,7 +60,8 @@ export function serializeProject(project: Project): string {
 }
 
 function defaultStorage(): Storage | null {
-  return typeof window === 'undefined' ? null : window.localStorage;
+  try { return typeof window === 'undefined' ? null : window.localStorage; }
+  catch { return null; }
 }
 
 export function readStoredProjectDraft(projectId: string, storage: Storage | null = defaultStorage()): StoredProjectDraft | null {
@@ -117,10 +119,27 @@ export function inspectProjectDraft(
   cloudProject: Project,
   cloudUpdatedAt: string | null,
   storage: Storage | null = defaultStorage(),
+  hasLoadedDraftCollections?: (collections: readonly ProjectCollectionKey[]) => boolean,
 ): ProjectDraftInspection {
   const draft = readStoredProjectDraft(cloudProject.id, storage);
   if (!draft) return { kind: 'none', reason: 'missing' };
-  if (serializeProject(draft.project) === serializeProject(cloudProject)) return { kind: 'identical', draft };
+  if (!draft.pendingNormalizedSync) {
+    const missingDraftCollections = draft.loadedCollections?.length
+      && hasLoadedDraftCollections?.(draft.loadedCollections) === false;
+    if (!missingDraftCollections && sameJsonStructure(draft.project, cloudProject)) return { kind: 'identical', draft };
+    const base = draft.baseProject;
+    if (base?.id === cloudProject.id) {
+      const cloudIsNewer = !!cloudUpdatedAt && Date.parse(cloudUpdatedAt) > Date.parse(draft.localDraftUpdatedAt);
+      if (cloudIsNewer && sameJsonStructure(draft.project, base)) return { kind: 'identical', draft };
+      if (draft.baseUpdatedAt !== cloudUpdatedAt && draft.loadedCollections?.length
+        && hasLoadedDraftCollections?.(draft.loadedCollections)) {
+        const merged = mergeConcurrentFields(base, draft.project, cloudProject);
+        if (merged.conflicts.length === 0 && sameJsonStructure(merged.value, cloudProject)) {
+          return { kind: 'identical', draft };
+        }
+      }
+    }
+  }
   if (draft.version !== PROJECT_DRAFT_VERSION) return { kind: 'candidate', draft, reason: 'legacy' };
   if (draft.baseUpdatedAt !== cloudUpdatedAt) return { kind: 'candidate', draft, reason: 'cloud_changed' };
   return { kind: 'recoverable', draft };
@@ -147,9 +166,10 @@ export function writeProjectDraft(
   }
 }
 
-export function clearProjectDraft(projectId: string, storage: Storage | null = defaultStorage()): void {
-  storage?.removeItem(projectDraftKey(projectId));
-  if (storage === defaultStorage()) void clearIndexedDbProjectDraft(projectId);
+export function clearProjectDraft(projectId: string, storage: Storage | null = defaultStorage()): Promise<void> {
+  try { storage?.removeItem(projectDraftKey(projectId)); }
+  catch { /* IndexedDB must still be cleared when localStorage is unavailable. */ }
+  return storage === defaultStorage() ? clearIndexedDbProjectDraft(projectId) : Promise.resolve();
 }
 
 export function projectHasLocalChanges(

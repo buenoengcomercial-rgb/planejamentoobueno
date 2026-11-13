@@ -1,11 +1,13 @@
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const canonical = (value: unknown): string | undefined => JSON.stringify(value, (_key, v) => record(v)
+    ? Object.fromEntries(Object.keys(v).sort().map(key => [key, v[key]])) : v);
+export const sameJsonStructure = (left: unknown, right: unknown) => canonical(left) === canonical(right);
+
 /** Three-way field merge. A real collision keeps the server value and reports its path.
  * Callers must preserve the original local attempt whenever conflicts is nonempty. */
 export function mergeConcurrentFields<T>(base: T, local: T, remote: T): { value: T; conflicts: string[] } {
   const conflicts: string[] = [];
-  const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
-  const canonical = (value: unknown): string | undefined => JSON.stringify(value, (_key, v) => record(v)
-    ? Object.fromEntries(Object.keys(v).sort().map(key => [key, v[key]])) : v);
-  const same = (left: unknown, right: unknown) => canonical(left) === canonical(right);
+  const same = sameJsonStructure;
   function merge(before: unknown, proposed: unknown, confirmed: unknown, path: string): unknown {
     if (same(proposed, before)) return confirmed;
     if (same(confirmed, before) || same(proposed, confirmed)) return proposed;
