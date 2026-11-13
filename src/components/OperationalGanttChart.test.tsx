@@ -32,3 +32,25 @@ it('permite editar e referenciar itens contratados sem transformar a projeção 
   expect(saved.phases).toEqual(project.phases);
   expect(additives[0].scheduleSnapshots[0].rows[0].startDate).toBe('2026-08-24');
 });
+
+it('salva alteração de uma data derivada sem mudar tarefas ou medições não editadas', async () => {
+  const { calculateProjectSchedule } = await import('@/domains/schedule/useCalculatedProject');
+  const { project } = measurementFixture();
+  const raw = structuredClone(project);
+  const tasks = raw.phases[0].tasks;
+  tasks[0] = { id: 'pred', name: 'Predecessora', phase: 'Teste', responsible: '', materials: [], level: 0, startDate: '2026-11-13', duration: 3, percentComplete: 0, dependencies: [] };
+  tasks[0].isManual = true; tasks[0].manualDuration = 3; tasks[0].durationMode = 'manual';
+  tasks[1] = { ...tasks[0], id: 'dependent', startDate: '2026-11-13', dependencies: [tasks[0].id],
+    dependencyDetails: [{ taskId: tasks[0].id, type: 'TI' }] };
+  const calculated = calculateProjectSchedule(raw, true);
+  expect(calculated.phases[0].tasks[1].startDate).not.toBe(raw.phases[0].tasks[1].startDate);
+  let saved = raw;
+  render(<OperationalGanttChart project={calculated}
+    onProjectChange={next => { saved = typeof next === 'function' ? next(saved) : next; }} />);
+  const updated = structuredClone(captured.props!.project);
+  updated.phases[0].tasks[1].startDate = '2026-12-01';
+  captured.props!.onProjectChange(updated);
+  expect(saved.phases[0].tasks[1].startDate).toBe('2026-12-01');
+  expect(saved.phases[0].tasks[0]).toEqual(raw.phases[0].tasks[0]);
+  expect(saved.measurements).toEqual(raw.measurements);
+});

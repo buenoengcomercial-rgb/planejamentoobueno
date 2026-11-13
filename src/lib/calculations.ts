@@ -650,7 +650,11 @@ function cascadeDependencyDates(
     }
 
     if (controlling) {
-      const nextStartDate = toISODateLocal(controlling.start);
+      // An approved remaining-work plan reserves crews/materials from this date.
+      // Dependency settling may delay it, but must not pull it ahead of that release.
+      const release = successor.operationalReschedule?.startDate;
+      const required = toISODateLocal(controlling.start);
+      const nextStartDate = release && /^\d{4}-\d{2}-\d{2}$/.test(release) && release > required ? release : required;
       if (nextStartDate !== successor.startDate) {
         taskMap.set(taskId, { ...successor, startDate: nextStartDate });
         changed = true;

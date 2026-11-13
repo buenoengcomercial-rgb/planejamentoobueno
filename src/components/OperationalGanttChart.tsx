@@ -1,4 +1,5 @@
-import { applyProjectOperation } from '@/lib/projectOperations';
+import { calculateProjectSchedule } from '@/domains/schedule/useCalculatedProject';
+import { applyProjectedProjectOperation } from '@/lib/projectOperations';
 import { useCallback, useMemo, useState, type ComponentProps } from 'react';
 import { applySchedulePlanImport, parseSchedulePlanImport, type SchedulePlanImport } from '@/lib/schedulePlanImport';
 
@@ -29,12 +30,14 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
   ]), [project]);
   const updateOperationalProject = useCallback((next: ProjectUpdate) => {
     onProjectChange(previous => {
-      const previousOperational = buildOperationalProjectFromPendingAdditives(previous);
+      const previousOperational = buildOperationalProjectFromPendingAdditives(calculateProjectSchedule(previous, true));
       const currentDisplay = includeContractedAdditiveTasks(previousOperational, confirmedAdditives).project;
       const nextOperational = typeof next === 'function' ? next(currentDisplay) : next;
       const planned = captureContractedTaskSchedules(display.project, display.project, nextOperational,
         confirmedAdditives, display.projectedTaskIds);
-      return mergeOperationalProjectIntoRaw(previous, applyProjectOperation('gantt', currentDisplay, display.project, planned));
+      return applyProjectedProjectOperation('gantt', previous, currentDisplay,
+        mergeOperationalProjectIntoRaw(previous, display.project),
+        mergeOperationalProjectIntoRaw(previous, planned));
     });
   }, [confirmedAdditives, display, onProjectChange]);
 

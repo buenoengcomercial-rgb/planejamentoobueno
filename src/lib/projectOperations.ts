@@ -53,17 +53,19 @@ function allowed(view: string, path: Path): boolean {
 }
 
 /** Three-way, ID-based patch. Only changed leaves are applied to the latest state. */
-function merge(current: unknown, before: unknown, after: unknown, path: Path, accept: (path: Path) => boolean): unknown {
+function merge(current: unknown, before: unknown, after: unknown, path: Path, accept: (path: Path) => boolean, comparison: unknown = current): unknown {
   if (same(before, after)) return current;
   if ((keyed(before) || before === undefined) && keyed(after) && (keyed(current) || current === undefined)) {
     const base = keyed(before) ? before : [];
     const live = keyed(current) ? current : [];
+    const compared = keyed(comparison) ? comparison : [];
     const ids = new Set([...base, ...after].map(row => row.id));
     const result = [...live];
     for (const id of ids) {
       const b = base.find(row => row.id === id), a = after.find(row => row.id === id);
       const index = result.findIndex(row => row.id === id);
       const c = index < 0 ? undefined : result[index];
+      const observed = compared.find(row => row.id === id);
       if (same(b, a)) continue;
       if (!b || !a) {
         if (!accept([...path, id])) continue;
@@ -73,26 +75,34 @@ function merge(current: unknown, before: unknown, after: unknown, path: Path, ac
         continue;
       }
       if (!c) throw new Error(`O registro ${id} foi removido depois desta operação.`);
-      result[index] = merge(c, b, a, [...path, id], accept) as typeof c;
+      result[index] = merge(c, b, a, [...path, id], accept, observed) as typeof c;
     }
     return result;
   }
   if (object(before) && object(after) && object(current)) {
     const result = { ...current };
     for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-      const value = merge(current[key], before[key], after[key], [...path, key], accept);
+      const value = merge(current[key], before[key], after[key], [...path, key], accept, object(comparison) ? comparison[key] : undefined);
       if (value === undefined) delete result[key]; else result[key] = value;
     }
     return result;
   }
   if (!accept(path)) return current;
-  if (!same(current, before) && !same(current, after)) throw new Error(`Conflito em ${path.join('.')}. Uma alteração posterior impede esta operação.`);
+  if (!same(comparison, before) && !same(comparison, after)) throw new Error(`Conflito em ${path.join('.')}. Uma alteração posterior impede esta operação.`);
   return after;
 }
 
 export function applyProjectOperation(view: string, current: Project, before: Project, after: Project): Project {
   if (current.id !== before.id || current.id !== after.id) throw new Error('A operação pertence a outra obra.');
   const result = merge(current, before, after, [], path => allowed(view, path)) as Project;
+  origins.set(result, view);
+  return result;
+}
+
+/** Compare a freshly calculated view, but persist only explicit edited leaves onto raw state. */
+export function applyProjectedProjectOperation(view: string, current: Project, currentProjection: Project, before: Project, after: Project): Project {
+  if ([currentProjection, before, after].some(project => project.id !== current.id)) throw new Error('A operação pertence a outra obra.');
+  const result = merge(current, before, after, [], path => allowed(view, path), currentProjection) as Project;
   origins.set(result, view);
   return result;
 }
