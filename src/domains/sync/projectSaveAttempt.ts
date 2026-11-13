@@ -26,7 +26,7 @@ export async function projectSaveAttempt({
   commit = upsertCloudProject,
 }: ProjectSaveAttemptOptions): Promise<ProjectSaveAttemptResult> {
   let effectiveProject = project;
-  let effectiveJson = serializeProject(project);
+  let effectiveJson: string | undefined;
   for (let attempt = 0; ; attempt += 1) {
     try {
       const submitted = effectiveProject;
@@ -35,7 +35,7 @@ export async function projectSaveAttempt({
         effectiveJson = serializeProject(accepted);
         onAccepted(submitted, accepted, effectiveJson);
       });
-      return { project: effectiveProject, json: effectiveJson, updatedAt };
+      return { project: effectiveProject, json: effectiveJson ?? serializeProject(effectiveProject), updatedAt };
     } catch (error) {
       if (error instanceof ProjectFieldConflictError) {
         const resolved = await onFieldConflict(error, effectiveProject);
@@ -45,12 +45,12 @@ export async function projectSaveAttempt({
         const rebased = await onVersionConflict(effectiveProject);
         if (rebased) {
           effectiveProject = rebased;
-          effectiveJson = serializeProject(rebased);
+          effectiveJson = undefined;
           continue;
         }
       }
       if (error instanceof CloudProjectPartialSyncError) {
-        return { project: effectiveProject, json: effectiveJson, updatedAt: error.updatedAt, partialSyncError: error };
+        return { project: effectiveProject, json: effectiveJson ?? serializeProject(effectiveProject), updatedAt: error.updatedAt, partialSyncError: error };
       }
       throw error;
     }

@@ -17,6 +17,7 @@ interface Props {
   partialSyncPending?: boolean;
   partialSyncDraftProtected?: boolean;
   syncRetrying?: boolean;
+  onSaveNow?: () => void;
   cloudReadStatus?: 'checking' | 'cached' | 'failed';
 }
 
@@ -27,7 +28,7 @@ function timeLabel(value?: string | null) {
   return parsed.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function SaveStatusIndicator({ status, className, confirmedAt, lastCheckedAt, projectId, live, remoteUpdateAt, pendingRemoteAreas = [], partialSyncPending = false, partialSyncDraftProtected = false, syncRetrying = false, cloudReadStatus }: Props) {
+export default function SaveStatusIndicator({ status, className, confirmedAt, lastCheckedAt, projectId, live, remoteUpdateAt, pendingRemoteAreas = [], partialSyncPending = false, partialSyncDraftProtected = false, syncRetrying = false, onSaveNow, cloudReadStatus }: Props) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (live) return;
@@ -74,7 +75,11 @@ export default function SaveStatusIndicator({ status, className, confirmedAt, la
     <div data-app-revision={APP_BUILD.revision} data-app-built-at={APP_BUILD.builtAt} className={cn('flex max-w-[65vw] flex-col items-end text-right text-[11px] leading-tight', cfg.color, className)}>
       <div className="flex items-center gap-1.5 font-medium">
         <Icon className={cn('h-3.5 w-3.5 shrink-0', 'spin' in cfg && cfg.spin && 'animate-spin')} />
-        <span>{cfg.text}</span>
+        {onSaveNow ? (
+          <button type="button" className="underline underline-offset-2" onClick={onSaveNow} aria-label="Salvar agora">
+            {cfg.text}
+          </button>
+        ) : <span>{cfg.text}</span>}
       </div>
       {(confirmed || shortProjectId) && (
         <span className="mt-0.5 text-[10px] text-muted-foreground">

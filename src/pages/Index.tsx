@@ -609,6 +609,14 @@ export default function Index() {
       const pendingAtRequest = partialSyncPendingRef.current?.projectId === projectToPersist.id
         ? partialSyncPendingRef.current
         : pendingAtStart;
+      if (!pendingAtRequest && nextJson === lastSavedProjectJsonRef.current) {
+        if (rawProjectRef.current?.id === projectToPersist.id
+          && serializeProject(rawProjectRef.current) === nextJson && !saveTimerRef.current) {
+          if (!options.retainDraftUntilVerified) discardProjectDraft(projectToPersist.id);
+          setSaveStatus('saved');
+        }
+        return;
+      }
       const result = await projectSaveAttempt({
         project: pendingAtRequest?.project ?? projectToPersist,
         organizationId: projectOrgId,
@@ -919,15 +927,33 @@ export default function Index() {
     persistProject, handleCloudConflict, setSaveStatus,
   }), [user?.id, orgId, rawProject, canPersistProject, persistProject, handleCloudConflict]);
 
+  const flushCurrentProject = useCallback(() => {
+    flushSync(() => { flushPendingEditCommits(); });
+    return flushPendingSave(true, true);
+  }, [flushPendingSave]);
+
   const saveAdditiveScheduleNow = useCallback(async (expectedApproval?: AdditiveCloudExpectation) => {
-    flushPendingEditCommits();
-    await new Promise<void>(resolve => window.setTimeout(resolve, 0));
-    const confirmed = await flushPendingSave(true, true);
+    const confirmed = await flushCurrentProject();
     if (!confirmed || !expectedApproval) return confirmed;
     const latest = rawProjectRef.current;
     return matchesAdditiveCloudExpectation(latest, expectedApproval)
       && serializeProject(latest) === lastSavedProjectJsonRef.current;
-  }, [flushPendingSave]);
+  }, [flushCurrentProject]);
+
+  const saveProjectNow = useCallback(() => { void flushCurrentProject(); }, [flushCurrentProject]);
+  useEffect(() => {
+    // The Aditivo already handles the shortcut in its own toolbar.
+    if (!editor || !rawProject?.id || currentView === 'additiveSchedule'
+      || (currentView === 'measurement' && independentMeasurementProjectId === rawProject.id)
+      || currentView === 'dailyReport') return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 's') return;
+      event.preventDefault();
+      if (!event.repeat) saveProjectNow();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [editor, rawProject?.id, currentView, independentMeasurementProjectId, saveProjectNow]);
 
   const runProtectedNavigation = useCallback(<T,>(action: () => Promise<T>): Promise<T | undefined> => (
     runProtectedProjectNavigation(navigationInFlightRef, flushPendingSave, action)
@@ -1047,6 +1073,8 @@ export default function Index() {
     retryTick: saveRetryTick,
     initialLoadRef,
     pendingDailyReportSavesRef,
+    dailyReportSaveQueueRef,
+    inFlightSaveRef,
     conflictDetectedRef,
     skipNextAutoSaveRef,
     partialSyncPendingRef,
@@ -1054,6 +1082,7 @@ export default function Index() {
     saveRetryTimerRef,
     saveRetryAttemptRef,
     saveRetryProjectJsonRef,
+    lastSavedProjectJsonRef,
     rawProjectRef,
     setSaveStatus,
     setRetryTick: setSaveRetryTick,
@@ -1670,6 +1699,7 @@ export default function Index() {
           partialSyncPending={partialSyncIssue?.projectId === rawProject.id}
           partialSyncDraftProtected={partialSyncIssue?.draftProtected ?? false}
           syncRetrying={partialSyncRetrying}
+          onSaveNow={editor && saveStatus === 'pending' ? saveProjectNow : undefined}
           dailyReportHasErrors={Object.keys(dailyReportSaveErrors).length > 0}
         />
         {partialSyncIssue?.projectId === rawProject.id && (

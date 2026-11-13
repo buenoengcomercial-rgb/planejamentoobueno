@@ -227,10 +227,11 @@ vi.mock('@/components/DailyProductionWorkspace', async () => {
 });
 
 vi.mock('@/components/SaveStatusIndicator', () => ({
-  default: ({ confirmedAt, status }: { confirmedAt?: string | null; status: string }) => (
+  default: ({ confirmedAt, status, onSaveNow }: { confirmedAt?: string | null; status: string; onSaveNow?: () => void }) => (
     <div>
       <output data-testid="cloud-confirmed-at">{confirmedAt ?? 'none'}</output>
       <output data-testid="cloud-save-status">{status}</output>
+      {onSaveNow && <button onClick={onSaveNow}>Salvar agora</button>}
     </div>
   ),
 }));
@@ -624,6 +625,24 @@ describe('segurança de sincronização da página da obra', () => {
     expect(Element.prototype.scrollTo).not.toHaveBeenCalled();
     expect(screen.getByRole('textbox', { name: 'Rascunho da produção no teste' })).toBe(draft);
     expect(draft).toHaveValue('Texto ainda em edição');
+  });
+
+  it.each([{ ctrlKey: true }, { metaKey: true }, null])('envia antes do debounce pelo atalho ou pelo indicador (%j)', async modifier => {
+    renderIndex();
+    expect(await screen.findByTestId('project-workspace')).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+
+    await act(async () => {
+      if (modifier) fireEvent.keyDown(window, { key: 's', ...modifier });
+      else fireEvent.click(screen.getByRole('button', { name: 'Salvar agora' }));
+      fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+    });
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
+    expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
   });
 
   it('repete uma falha transitória de autosave sem exigir nova edição', async () => {
