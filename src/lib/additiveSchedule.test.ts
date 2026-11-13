@@ -8,6 +8,7 @@ import {
   buildOperationalProjectFromPendingAdditives,
   buildAdditiveScheduleRows,
   buildPendingAdditiveSuspensionMap,
+  buildOfficialAdditiveSuspensionMap,
   buildProjectFromScheduleSnapshot,
   buildPreviewSuspensionMap,
   confirmAdditiveScheduleDates,
@@ -28,6 +29,7 @@ import {
 } from './additiveSchedule';
 import { buildAdditiveScheduleForecast } from './additiveScheduleForecast';
 import { buildAdditivePdfGanttRows, buildAdditiveSchedulePdfDocument, buildAdditiveScheduleWorkbook } from './additiveScheduleReports';
+import { contractAdditiveKeepingBase } from './additiveContractSeparation';
 import { contractAdditive } from './additiveImport';
 
 const existingComposition: AdditiveComposition = {
@@ -561,10 +563,34 @@ describe('Cronograma do Aditivo', () => {
     };
     prepared = mergeAdditiveSchedulePreviewChanges(prepared, additive.id, preview, editedPreview);
     expect(prepared.phases[0].tasks.find(task => task.id === 'task-1')?.startDate).toBe('2026-08-10');
+    const separated = contractAdditiveKeepingBase(prepared, additive.id, 'Administrador', { jornadaDiaria: 8, trabalhaSabado: false });
+    expect(separated.phases[0].tasks.find(task => task.id === 'task-1')).toMatchObject({
+      quantity: 10, startDate: '2026-09-10', team: 'alpha',
+    });
     const contracted = contractAdditive(prepared, additive.id, 'Administrador', { jornadaDiaria: 8, trabalhaSabado: false });
     expect(contracted.phases[0].tasks.find(task => task.id === 'task-1')).toMatchObject({
       quantity: 12, duration: 12, startDate: '2026-09-10', team: 'alpha', durationMode: 'rup',
     });
+  });
+
+  it('libera as precedências contratadas e mantém somente a supressão total no Gantt', () => {
+    const prepared = setAdditiveScheduleDependentTask(syncAdditiveScheduleDraft(project, additive.id), additive.id, 'task-2', true);
+    const draft = prepared.additives![0].scheduleDraft!;
+    const finalized: Additive = {
+      ...prepared.additives![0],
+      status: 'aditivo_contratado',
+      compositions: [{
+        ...additive.compositions[0], taskId: 'task-1', isNewService: false,
+        originalQuantity: 10, suppressedQuantity: 10, addedQuantity: 0, changeKind: 'suprimido',
+      }],
+      scheduleDraft: draft,
+    };
+    const contracted = { ...prepared, additives: [finalized] };
+    expect(buildPendingAdditiveSuspensionMap(contracted)).toEqual({});
+    expect(buildOfficialAdditiveSuspensionMap(contracted)).toMatchObject({
+      'task-1': { scheduleState: 'fully_suppressed', financialTreatment: 'excluded' },
+    });
+    expect(buildOfficialAdditiveSuspensionMap(contracted)['task-2']).toBeUndefined();
   });
 
   it('considera somente aditivos pendentes nos avisos do cronograma oficial', () => {

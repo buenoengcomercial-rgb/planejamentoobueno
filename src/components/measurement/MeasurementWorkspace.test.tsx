@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, cleanup, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import type { Additive } from '@/types/project';
 import MeasurementWorkspace from './MeasurementWorkspace';
 import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
 import type { MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
@@ -20,6 +22,28 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('pede confirmação antes de incorporar um aditivo contratado na 1ª medição e remove o aviso após salvar', async () => {
+    const { repository } = fixture();
+    const composition = { id: 'new', item: '2.1', code: '', bank: '', description: 'Serviço novo', quantity: 3,
+      addedQuantity: 3, unit: 'UN', unitPriceNoBDI: 10, unitPriceWithBDI: 12.5, total: 37.5, inputs: [], isNewService: true };
+    const additive: Additive = { id: 'ad', name: 'Aditivo contratado de teste', status: 'aditivo_contratado',
+      importedAt: '', version: 1, compositions: [composition],
+      approvalSnapshots: [{ version: 1, approvedAt: '2026-01-01', bdiPercent: 25, globalDiscountPercent: 0, totals: {}, issues: [], compositions: [composition] }] };
+    render(<TooltipProvider><MeasurementWorkspace repository={repository} actor={actor}
+      approvedAdditives={[additive, { ...additive, id: 'pending', status: 'aprovado' }]}/></TooltipProvider>);
+    expect(await screen.findByText(/Aditivo contratado de teste · 1 item a incorporar/)).toBeVisible();
+    expect(screen.getAllByRole('button', { name: 'Incorporar a partir da 1ª medição' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Incorporar a partir da 1ª medição' }));
+    const dialog = screen.getByRole('dialog', { name: 'Incorporar a partir da 1ª medição?' });
+    expect(repository.commit).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Confirmar incorporação' }));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Aditivos contratados pendentes' })).not.toBeInTheDocument());
+    expect(vi.mocked(repository.commit).mock.calls[0][0].services).toContainEqual(expect.objectContaining({
+      id: 'additive:ad:new', availableFromNumber: 1,
+    }));
+  });
+
   it('sinaliza após recarga o excedente causado pelo aditivo sem alterar medições anteriores', async () => {
     const { w, repository } = fixture();
     w.services[0].contracted = 14;

@@ -28,6 +28,35 @@ describe('serviços aditivados no Gantt', () => {
     expect(includeContractedAdditiveTasks(result.project, [confirmedAdditive]).project).toBe(result.project);
   });
 
+  it('encaixa serviços no capítulo vinculado, preserva a ordem e separa apenas órfãos', () => {
+    const { project } = measurementFixture();
+    const original = confirmedAdditive.compositions[0];
+    const archive = confirmedAdditive.scheduleSnapshots![0];
+    const row = archive.rows[0];
+    const additive = {
+      ...confirmedAdditive,
+      compositions: [
+        { ...original, phaseId: 'alarm' },
+        { ...original, id: 'orphan', phaseId: 'missing', linkedTaskId: undefined },
+      ],
+      scheduleSnapshots: [{ ...archive, rows: [
+        { ...row, phaseId: 'old-preview-phase', scheduleOrder: -1, durationMode: 'rup' as const },
+        { ...row, taskId: 'add-ad-orphan', compositionId: 'orphan' },
+      ] }],
+    };
+    const result = includeContractedAdditiveTasks(project, [additive]);
+    expect(result.project.phases.find(phase => phase.id === 'alarm')).toMatchObject({
+      parentId: 'building',
+      tasks: [
+        expect.objectContaining({ id: 'add-ad-new', phase: 'alarm', scheduleOrder: -1, durationMode: 'rup', unitPrice: 12 }),
+        ...project.phases[1].tasks,
+      ],
+    });
+    expect(result.project.phases.at(-1)?.tasks.map(task => task.id)).toEqual(['add-ad-orphan']);
+    expect([...result.projectedTaskIds]).toEqual(['add-ad-new', 'add-ad-orphan']);
+    expect(project.phases[1].tasks).toHaveLength(3);
+  });
+
   it('aguarda contratação e evita duplicar uma tarefa com vínculo legado', () => {
     const { project } = measurementFixture();
     const pending = { ...confirmedAdditive, status: 'aprovado' as const, isContracted: false };

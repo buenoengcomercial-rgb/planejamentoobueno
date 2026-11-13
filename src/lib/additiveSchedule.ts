@@ -21,6 +21,7 @@ import {
   type JornadaConfig,
   type WorkCalendar,
 } from '@/lib/calculations';
+import { isContractedAdditive } from '@/lib/contractedAdditiveSchedule';
 import { flattenTaskTree, mapTaskTree, replaceProjectTasksById } from '@/lib/taskTree';
 
 export const ADDITIVE_SCHEDULE_REFERENCE = 'Termo de Retomada Parcial - SEI nº 74863858';
@@ -82,7 +83,7 @@ const compositionTaskId = (composition: AdditiveComposition) => (
 );
 
 export function isAdditiveSchedulePending(additive: Additive): boolean {
-  if (additive.isContracted && !additive.editUnlocked) return false;
+  if (isContractedAdditive(additive) && !additive.editUnlocked) return false;
   return additive.status !== 'cancelado' && additive.status !== 'rejeitado' && additive.status !== 'reprovado';
 }
 
@@ -981,6 +982,23 @@ export function buildPreviewSuspensionMap(
   return result;
 }
 
+/** In the official Gantt a contracted suppression is a status, not a pending dependency. */
+export function buildOfficialAdditiveSuspensionMap(project: Project): Record<string, AdditiveScheduleSuspensionMeta> {
+  const result = buildPendingAdditiveSuspensionMap(project);
+  const finalized = (project.additives ?? []).filter(additive => isContractedAdditive(additive) && !additive.editUnlocked);
+  for (const additive of finalized) {
+    for (const taskId of getFullySuppressedTaskIds(additive)) {
+      result[taskId] = {
+        kind: 'automatic', label: FULLY_SUPPRESSED_STATUS_LABEL,
+        reason: 'Supressão integral formalizada no aditivo.',
+        additiveId: additive.id, additiveName: additive.name, checked: true, disabled: true,
+        scheduleState: 'fully_suppressed', financialTreatment: 'excluded',
+      };
+    }
+  }
+  return result;
+}
+
 export function buildPendingAdditiveSuspensionMap(project: Project): Record<string, AdditiveScheduleSuspensionMeta> {
   const result: Record<string, AdditiveScheduleSuspensionMeta> = {};
   (project.additives ?? []).filter(isAdditiveSchedulePending).forEach(additive => {
@@ -1053,6 +1071,7 @@ export function buildAdditiveScheduleRows(project: Project, additive: Additive, 
       responsible: task.responsible,
       team: task.team,
       scheduleOrder: task.scheduleOrder,
+      contractOrder: task.contractOrder,
       durationMode: task.durationMode,
       isManual: task.isManual,
       manualDuration: task.manualDuration,
@@ -1093,6 +1112,7 @@ export function buildAdditiveScheduleRows(project: Project, additive: Additive, 
       responsible: task.responsible,
       team: task.team,
       scheduleOrder: task.scheduleOrder,
+      contractOrder: task.contractOrder,
       durationMode: task.durationMode,
       isManual: task.isManual,
       manualDuration: task.manualDuration,
@@ -1159,6 +1179,7 @@ export function buildProjectFromScheduleSnapshot(project: Project, snapshot: Add
       level: 0,
       team: row.team,
       scheduleOrder: row.scheduleOrder,
+      contractOrder: row.contractOrder,
       durationMode: row.durationMode,
       isManual: row.isManual,
       manualDuration: row.manualDuration,

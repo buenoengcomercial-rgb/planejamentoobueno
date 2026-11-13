@@ -144,6 +144,41 @@ export function prepareIncorporation(backup: IncorporationBackup): Incorporation
   return { candidate, issues, inventory, reconciliation };
 }
 
+const newServiceKey = (additiveId: string, compositionId: string) => `additive:${additiveId}:${compositionId}`;
+const adjustmentKey = (additiveId: string, version: number, compositionId: string) =>
+  `additive-adjustment:${additiveId}:${version}:${compositionId}`;
+const desiredAdjustment = (added = 0, suppressed = 0) => Math.round((added - suppressed) * 100) / 100;
+
+export function additiveIncorporationPeriodBlock(w: MeasurementWorkspace, number: number): string | null {
+  if (!w.periods.some(period => period.number === number)) return 'Medição de início do aditivo não encontrada.';
+  const blocked = w.periods.find(period => period.number >= number
+    && (isPeriodLocked(period) || period.status === 'in_review'));
+  return blocked ? `A ${blocked.number}ª medição está fechada ou em análise fiscal. Selecione uma medição em edição posterior.` : null;
+}
+
+const matchesCompositionService = (c: Additive['compositions'][number], s: MeasuredService) =>
+  [c.baseTaskId, c.taskId, c.linkedTaskId].some(id => id && (s.sourceTaskId === id || s.id === id))
+  || !!c.baseBudgetItemId && s.sourceBudgetId === c.baseBudgetItemId;
+
+export function pendingAdditiveIncorporationCount(w: MeasurementWorkspace, additive: Additive): number {
+  const snapshot = additive.approvalSnapshots?.find(s => s.version === additive.version);
+  if (!snapshot) return 0;
+  const keys = new Set(w.importedKeys);
+  const serviceIds = new Set(w.services.map(service => service.id));
+  return snapshot.compositions.filter(c => {
+    if (c.isNewService) {
+      const key = newServiceKey(additive.id, c.id);
+      return !keys.has(key) && !serviceIds.has(key);
+    }
+    if (keys.has(adjustmentKey(additive.id, snapshot.version, c.id))) return false;
+    const service = w.services.find(s => matchesCompositionService(c, s));
+    const previousNet = (service?.additiveAdjustments ?? []).filter(a => a.additiveId === additive.id)
+      .reduce((sum, a) => sum + a.net, 0);
+    const desiredNet = desiredAdjustment(c.addedQuantity, c.suppressedQuantity);
+    return desiredNet !== 0 && desiredAdjustment(desiredNet, previousNet) !== 0;
+  }).length;
+}
+
 /** Apply the approved contract changes from the selected period, preserving earlier quantities. */
 export function incorporateApprovedAdditive(w: MeasurementWorkspace, actor: MeasurementActor, additive: Additive, firstNumber: number) {
   if (!['aprovado', 'contratado', 'aditivo_contratado'].includes(additive.status ?? '') || additive.editUnlocked) throw new Error('Aditivo ainda não aprovado ou em revisão.');
@@ -151,17 +186,15 @@ export function incorporateApprovedAdditive(w: MeasurementWorkspace, actor: Meas
   if (!snapshot) throw new Error('Snapshot aprovado do aditivo não encontrado.');
   const warnings: string[] = [];
   const next = transactMeasurement(w, actor, `Incorporar aditivo ${additive.id} v${snapshot.version}`, draft => {
-    if (!draft.periods.some(p => p.number === firstNumber)) throw new Error('Medição de início do aditivo não encontrada.');
-    if (draft.periods.some(p => isPeriodLocked(p) && p.number >= firstNumber)) throw new Error('Aditivo não pode entrar retroativamente em uma medição fechada.');
+    const blocked = additiveIncorporationPeriodBlock(draft, firstNumber);
+    if (blocked) throw new Error(blocked);
     const adjustedServices = new Set<string>();
     for (const c of snapshot.compositions.filter(c => !c.isNewService)) {
-      const desiredNet = Math.round(((c.addedQuantity ?? 0) - (c.suppressedQuantity ?? 0)) * 100) / 100;
+      const desiredNet = desiredAdjustment(c.addedQuantity, c.suppressedQuantity);
       if (!desiredNet) continue;
-      const key = `additive-adjustment:${additive.id}:${snapshot.version}:${c.id}`;
+      const key = adjustmentKey(additive.id, snapshot.version, c.id);
       if (draft.importedKeys.includes(key)) continue;
-      const matches = draft.services.filter(s =>
-        [c.baseTaskId, c.taskId, c.linkedTaskId].some(id => id && (s.sourceTaskId === id || s.id === id))
-        || !!c.baseBudgetItemId && s.sourceBudgetId === c.baseBudgetItemId);
+      const matches = draft.services.filter(s => matchesCompositionService(c, s));
       if (matches.length !== 1) throw new Error(`${c.description}: vínculo contratual ${matches.length ? 'ambíguo' : 'não encontrado'} na Medição.`);
       const service = matches[0];
       if (adjustedServices.has(service.id)) throw new Error(`${c.description}: mais de uma composição altera o mesmo serviço; revise o vínculo no Aditivo.`);
@@ -182,7 +215,8 @@ export function incorporateApprovedAdditive(w: MeasurementWorkspace, actor: Meas
       }
     }
     for (const c of snapshot.compositions.filter(c => c.isNewService)) {
-      const key = `additive:${additive.id}:${c.id}`; if (draft.importedKeys.includes(key)) continue;
+      const key = newServiceKey(additive.id, c.id);
+      if (draft.importedKeys.includes(key) || draft.services.some(service => service.id === key)) continue;
       if (draft.services.some(s => s.id === c.linkedTaskId || s.id === c.taskId)) throw new Error(`${c.description}: já é um serviço existente. Nenhum preço ou quantidade foi substituído.`);
       const pricing = computeAdditiveRow(c, snapshot.bdiPercent, snapshot.globalDiscountPercent, snapshot.pricingRuleVersion ?? resolveAdditivePricingRule(additive));
       const noBDI = pricing.unitPriceNoBDI, withBDI = pricing.unitPriceWithBDI;

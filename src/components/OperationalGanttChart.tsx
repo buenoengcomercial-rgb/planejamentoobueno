@@ -1,7 +1,7 @@
 import { applyProjectOperation } from '@/lib/projectOperations';
 import { useCallback, useMemo, type ComponentProps } from 'react';
 
-import { buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
+import { buildOfficialAdditiveSuspensionMap, buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
 import { mergeOperationalProjectIntoRaw } from '@/lib/operationalProject';
 import type { Additive, Project } from '@/types/project';
 import { includeContractedAdditiveTasks } from '@/lib/contractedAdditiveSchedule';
@@ -20,6 +20,7 @@ const NO_ADDITIVES: readonly Additive[] = [];
 export default function OperationalGanttChart({ project, confirmedAdditives = NO_ADDITIVES, onProjectChange, ...props }: Props) {
   const operationalProject = useMemo(() => buildOperationalProjectFromPendingAdditives(project), [project]);
   const display = useMemo(() => includeContractedAdditiveTasks(operationalProject, confirmedAdditives), [operationalProject, confirmedAdditives]);
+  const suspensionMap = useMemo(() => buildOfficialAdditiveSuspensionMap(display.project), [display.project]);
   const lockedTaskLabels = useMemo(() => Object.fromEntries([
     ...Array.from(getPendingAdditiveScheduleControls(project), ([taskId, control]) => [taskId, control.additiveName]),
     ...display.project.phases.flatMap(phase => phase.tasks
@@ -41,6 +42,7 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
       project={display.project}
       onProjectChange={updateOperationalProject}
       lockedTaskLabels={lockedTaskLabels}
+      suspensionMap={props.suspensionMap ?? suspensionMap}
       displayOnlyTaskIds={display.projectedTaskIds}
       financialForecastNode={props.financialForecastNode === undefined && display.projectedTaskIds.size > 0
         ? <GanttFinancialForecast project={operationalProject} trabalhaSabado={props.calendarConfig?.trabalhaSabado} />
