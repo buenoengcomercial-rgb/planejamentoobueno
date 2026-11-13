@@ -75,7 +75,7 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261105010000_measurement_manual_unlink_targeted.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261105090000_measurement_nondestructive_checkpoint.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261105120000_measurement_additive_quantity_adjustments.sql',import.meta.url),'utf8'));
-  await db.exec(await readFile(new URL('../../supabase/migrations/20261113150000_measurement_additive_catalog_commit.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261113160000_measurement_additive_catalog_commit.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
