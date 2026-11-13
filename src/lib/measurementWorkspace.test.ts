@@ -194,6 +194,34 @@ describe('Medição independente', () => {
     expect(additiveQuantityExcesses(flagged.workspace, 'm1')).toEqual([]);
     expect(entryFor(flagged.workspace, 'm1', 'repeaters')).toEqual(entryFor(overMeasured, 'm1', 'repeaters'));
   });
+  it('incorpora serviços novos e ajustes de aditivo contratado a partir da segunda medição', async () => {
+    const original = (await setup()).plan.candidate;
+    const service = original.services.find(item => item.id === 'signs')!;
+    const base = { item: service.item, code: '', bank: '', description: service.description,
+      quantity: service.contracted, unit: service.unit, unitPriceNoBDI: service.priceNoBDI,
+      unitPriceWithBDI: service.priceWithBDI, total: 0, inputs: [] };
+    const compositions = [
+      { ...base, id: 'adjustment', baseTaskId: service.sourceTaskId, addedQuantity: 2 },
+      { ...base, id: 'new', item: '2.1', quantity: 0, addedQuantity: 3, isNewService: true },
+    ];
+    const additive: Additive = { id: 'contracted', name: 'Aditivo contratado', importedAt: '',
+      status: 'aditivo_contratado', version: 1, compositions,
+      approvalSnapshots: [{ version: 1, approvedAt: '2026-10-09', bdiPercent: 25, globalDiscountPercent: 0, totals: {}, issues: [], compositions }] };
+    const fiscalValues = (w: typeof original) => monthlyLines(w, 'm1').map(line => ({
+      id: line.service.id, contracted: line.service.contracted, measured: line.qty, financial: line.financial,
+    }));
+    const before = fiscalValues(original);
+    const next = incorporateApprovedAdditive(original, actor, additive, 2).workspace;
+    expect(fiscalValues(next)).toEqual(before);
+    expect(monthlyLines(next, 'm2').map(line => [line.service.id, line.service.contracted])).toEqual(expect.arrayContaining([
+      [service.id, service.contracted + 2], ['additive:contracted:new', 3],
+    ]));
+    expect(incorporateApprovedAdditive(next, actor, additive, 2).workspace).toBe(next);
+    const submitted = { ...original, periods: original.periods.map(period => period.number === 2
+      ? { ...period, status: 'in_review' as const } : period) };
+    expect(() => incorporateApprovedAdditive(submitted, actor, additive, 2)).toThrow(/análise fiscal/);
+  });
+
   it('preserva os centavos aprovados quando o total do aditivo difere do produto da quantidade final', async () => {
     const original = (await setup()).plan.candidate;
     const service = original.services.find(s => s.id === 'signs')!;

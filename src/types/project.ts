@@ -1995,6 +1995,7 @@ export interface AdditiveScheduleSnapshotRow {
   responsible: string;
   team?: TeamCode;
   scheduleOrder?: number;
+  contractOrder?: number;
   durationMode?: 'manual' | 'rup';
   isManual?: boolean;
   manualDuration?: number;

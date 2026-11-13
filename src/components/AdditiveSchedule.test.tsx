@@ -136,7 +136,11 @@ describe('AdditiveSchedule - composições bloqueadoras', () => {
       additives: [{ ...active, scheduleSnapshots: [snapshot] }],
     };
     const contracted = contractAdditiveKeepingBase(prepared, additive.id, 'Administrador');
-    expect(contracted.phases).toEqual(prepared.phases);
+    const baseRows = (project: Project) => project.phases.map(phase => ({
+      id: phase.id,
+      tasks: phase.tasks.map(task => ({ id: task.id, quantity: task.quantity, unitPrice: task.unitPrice })),
+    }));
+    expect(baseRows(contracted)).toEqual(baseRows(prepared));
     expect(contracted.budgetItems?.some(item => item.additiveId === additive.id)).toBe(true);
 
     render(<AdditiveSchedule project={contracted} onProjectChange={vi.fn()} />);

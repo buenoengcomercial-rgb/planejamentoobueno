@@ -1,3 +1,4 @@
+import { isContractedAdditive } from '@/lib/contractedAdditiveSchedule';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FileCheck2, Plus } from 'lucide-react';
 import ProductionQuantityDetails from '@/components/ProductionQuantityDetails';
@@ -5,7 +6,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/compone
 import { addMeasuredPeriod, captureMeasurement, deleteMeasuredRow, editMeasuredRow, editMeasuredBulletin, entryFor, fiscalSubmissionCurrent, isPeriodLocked, measurementBulletin, monthlyLines, newMeasuredRow, pasteMeasuredRow, sourceFields, transactMeasurement, undoMeasuredOperation, freezeMeasuredPeriod, type Destination, type MeasurementActor, type MeasurementClipboard, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import { MeasurementCommitRejectedError, type MeasurementRepository, type WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import type { IncorporationBackup } from '@/lib/measurementIncorporation';
-import { prepareIncorporation, incorporateApprovedAdditive } from '@/lib/measurementIncorporation';
+import { prepareIncorporation, incorporateApprovedAdditive, additiveIncorporationPeriodBlock, pendingAdditiveIncorporationCount } from '@/lib/measurementIncorporation';
 import type { Additive } from '@/types/project';
 import { resolveAnalyticComposition, type AnalyticProject } from '@/lib/analyticLinks';
 import { detailTotal, isBlankDetailRow } from '@/lib/productionQuantityDetails';
@@ -182,6 +183,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [destination, setDestination] = useState<Destination | null>(null), destinationRef = useRef<Destination | null>(null);
   const [clipboard, setClipboard] = useState<MeasurementClipboard | null>(null);
   const [periodOpen, setPeriodOpen] = useState(false), [fiscalOpen, setFiscalOpen] = useState(false);
+  const [incorporationId, setIncorporationId] = useState<string | null>(null);
   const [lifecycle, setLifecycle] = useState<LifecycleSelection | null>(null);
   const [drafts, setDrafts] = useState<WorkspaceDraft[]>([]), [recovery, setRecovery] = useState(false);
   const [resolvingDraft, setResolvingDraft] = useState<string | null>(null);
@@ -1295,6 +1297,37 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         : cachedBase ? 'cached' as const : undefined
     : undefined;
   const cloudReadFailure = readState?.error?.message || realtime.failure;
+  const pendingAdditives = approvedAdditives
+    .filter(additive => isContractedAdditive(additive) && !additive.editUnlocked)
+    .map(additive => ({ additive, count: pendingAdditiveIncorporationCount(workspace, additive) }))
+    .filter(({ count }) => count > 0);
+  const incorporation = pendingAdditives.find(({ additive }) => additive.id === incorporationId);
+  const incorporationBlock = period ? additiveIncorporationPeriodBlock(workspace, period.number) : 'Selecione uma medição em edição.';
+  const confirmIncorporation = (additive: Additive, targetPeriod: NonNullable<typeof period>) => {
+    const key = `incorporate:${additive.id}`;
+    if (!beginCommand(key)) return;
+    void (async () => {
+      let queued = false;
+      try {
+        if (uncertainCommit.current || recovery) {
+          setError('Confira a gravação pendente antes de iniciar outra incorporação.');
+          return;
+        }
+        if (!await flushConfirmedEdits()) return;
+        const latest = await (repository.loadForRetry?.() ?? repository.load());
+        if (!latest || repository.loadedOffline?.()) throw new Error('Não foi possível conferir o catálogo da Medição na nuvem.');
+        const confirmedPeriod = latest.periods.find(item => item.id === targetPeriod.id);
+        if (!confirmedPeriod || confirmedPeriod.number !== targetPeriod.number) throw new Error('O período da Medição mudou. Confira antes de incorporar.');
+        if (busy.current || detailQueue.current.length || bufferedDetail.current) throw new Error('Confirme os lançamentos em andamento antes de incorporar.');
+        adopt(latest);
+        queued = queueCommand(key, w => incorporateApprovedAdditive(w, actor, additive, targetPeriod.number).workspace, () => setIncorporationId(null), true);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        if (!queued) finishCommand(key);
+      }
+    })();
+  };
   const pageHeader = <>
     <MeasurementHeader compact onExportXLSX={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'xlsx', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} onPrint={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'pdf', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} showHistory={false} onOpenHistory={() => undefined}/>
     <section className="rounded border border-border bg-card p-2">
@@ -1309,35 +1342,37 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         <button className={button} disabled={!actor.canEdit || !!deletionBlock || !!commandInFlight} title={deletionBlock ?? 'Excluir a última medição'} onClick={() => { setError(''); setLifecycle({ kind: 'delete', id: active }); }}>Excluir medição</button>
         {lastDeleted && <button className={button} disabled={!actor.canEdit || !!commandInFlight} onClick={() => { setError(''); setLifecycle({ kind: 'restore', id: lastDeleted.id }); }}>Restaurar medição excluída</button>}
 
-        {period && period.number >= 3 && approvedAdditives.filter(a => ['aprovado', 'contratado', 'aditivo_contratado'].includes(a.status ?? '') && !a.editUnlocked).map(additive => <button key={additive.id} className={button} disabled={locked || !!commandInFlight} onClick={() => {
-          const key = `incorporate:${additive.id}`;
-          if (!beginCommand(key)) return;
-          void (async () => {
-            let queued = false;
-            try {
-              if (uncertainCommit.current || recovery) {
-                setError('Confira a gravação pendente antes de iniciar outra incorporação.');
-                return;
-              }
-              if (!await flushConfirmedEdits()) return;
-              const latest = await (repository.loadForRetry?.() ?? repository.load());
-              if (!latest || repository.loadedOffline?.()) throw new Error('Não foi possível conferir o catálogo da Medição na nuvem.');
-              const confirmedPeriod = latest.periods.find(item => item.id === period.id);
-              if (!confirmedPeriod || confirmedPeriod.number !== period.number) throw new Error('O período da Medição mudou. Confira antes de incorporar.');
-              if (busy.current || detailQueue.current.length || bufferedDetail.current) throw new Error('Confirme os lançamentos em andamento antes de incorporar.');
-              adopt(latest);
-              queued = queueCommand(key, w => incorporateApprovedAdditive(w, actor, additive, period.number).workspace, undefined, true);
-            } catch (cause) {
-              setError(cause instanceof Error ? cause.message : String(cause));
-            } finally {
-              if (!queued) finishCommand(key);
-            }
-          })();
-        }}>Incorporar na Medição · {additive.name} (a partir da {period.number}ª medição)</button>)}
         <button className={`${button} ml-auto`} disabled={locked || !actor.canReview || !!commandInFlight || fiscalCurrent && !fiscalPending} title={fiscalCurrent && !fiscalPending ? 'Nenhuma alteração desde o último envio à fiscalização' : undefined} onClick={() => { setError(''); setFiscalOpen(true); }}><FileCheck2 className="h-3.5 w-3.5"/>{period?.status === 'in_review' ? 'Reenviar para fiscalização' : 'Enviar para fiscalização'}</button>
         {period?.status === 'in_review' && <button className={button} disabled={locked || !actor.canReview || !!commandInFlight || fiscalPending} title={fiscalPending ? 'Confirme todos os lançamentos desta medição na nuvem antes da aprovação' : undefined} onClick={() => { setError(''); setLifecycle({ kind: 'approve', id: active }); }}>Aprovado pela fiscalização</button>}
       </div>
     </section>
+    {pendingAdditives.length > 0 && <section aria-label="Aditivos contratados pendentes" className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+      <h2 className="font-semibold">Aditivo contratado pendente de incorporação</h2>
+      <ul className="mt-2 space-y-2">
+        {pendingAdditives.map(({ additive, count }) => <li key={additive.id} className="flex flex-wrap items-center justify-between gap-2">
+          <span>{additive.name} · {count} {count === 1 ? 'item a incorporar' : 'itens a incorporar'}</span>
+          {period && actor.canEdit && <button type="button" className={`${button} bg-primary text-primary-foreground`}
+            disabled={!!incorporationBlock || !!commandInFlight}
+            onClick={() => { setError(''); setIncorporationId(additive.id); }}>
+            Incorporar a partir da {period.number}ª medição
+          </button>}
+        </li>)}
+      </ul>
+      {incorporationBlock && <p className="mt-2 text-xs">{incorporationBlock}</p>}
+    </section>}
+    <Dialog open={!!incorporation && !!period} onOpenChange={open => { if (!open) setIncorporationId(null); }}>
+      {incorporation && period && <DialogContent>
+        <DialogTitle>Incorporar a partir da {period.number}ª medição?</DialogTitle>
+        <DialogDescription>{incorporation.additive.name} · {incorporation.count} {incorporation.count === 1 ? 'item' : 'itens'}. As medições anteriores serão preservadas.</DialogDescription>
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <button type="button" className={button} onClick={() => setIncorporationId(null)}>Fechar</button>
+          <button type="button" className={`${button} bg-primary text-primary-foreground`}
+            disabled={!actor.canEdit || !!incorporationBlock || !!commandInFlight}
+            onClick={() => confirmIncorporation(incorporation.additive, period)}>Confirmar incorporação</button>
+        </div>
+      </DialogContent>}
+    </Dialog>
     {error && <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
     {additiveExcesses.length > 0 && <div role="alert" className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950">
       <strong>Revisão fiscal: {additiveExcesses.length} item(ns) medido(s) acima do quantitativo final do Aditivo.</strong>

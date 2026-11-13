@@ -1,6 +1,7 @@
 import type { Additive, AdditiveComposition, Project, Task } from '@/types/project';
 import { computeAdditiveRow, resolveAdditivePricingRule } from '@/lib/additiveImport';
 import { executionMonth } from '@/lib/monthlyExecution';
+import { sortTasksForSchedule } from '@/lib/taskOrdering';
 import { flattenTaskTree } from '@/lib/taskTree';
 
 export function isContractedAdditive(additive: Additive) {
@@ -42,6 +43,8 @@ export function isNewAdditiveTaskLinked(tasks: ReadonlySet<string>, additive: Ad
 export function includeContractedAdditiveTasks(project: Project, additives: readonly Additive[]) {
   const taskIds = new Set(flattenTaskTree(project.phases.flatMap(phase => phase.tasks)).map(task => task.id));
   const projectedTaskIds = new Set<string>();
+  const existingPhases = new Set(project.phases.map(phase => phase.id));
+  const tasksByPhase = new Map<string, Task[]>();
   const projectedPhases: Project['phases'] = [];
 
   for (const additive of additives) {
@@ -51,8 +54,8 @@ export function includeContractedAdditiveTasks(project: Project, additives: read
       .filter(composition => composition.isNewService);
     const byComposition = new Map(compositions.map(composition => [composition.id, composition]));
     const byTask = new Map(compositions.map(composition => [additiveTaskId(additive.id, composition.id), composition]));
-    const tasks: Task[] = [];
-    const phaseId = `gantt-additive-${additive.id}`;
+    const orphans: Task[] = [];
+    const fallbackId = `gantt-additive-${additive.id}`;
     for (const row of archive.rows) {
       const composition = row.compositionId ? byComposition.get(row.compositionId) : byTask.get(row.taskId);
       if (!composition || row.classification !== 'proposed_addition' || row.quantity <= 0
@@ -61,18 +64,28 @@ export function includeContractedAdditiveTasks(project: Project, additives: read
       const id = additiveTaskId(additive.id, composition.id);
       taskIds.add(id);
       projectedTaskIds.add(id);
+      const phaseId = composition.phaseId && existingPhases.has(composition.phaseId)
+        ? composition.phaseId : fallbackId;
+      const tasks = phaseId === fallbackId ? orphans : tasksByPhase.get(phaseId) ?? [];
+      if (phaseId !== fallbackId) tasksByPhase.set(phaseId, tasks);
       tasks.push({
         id, phase: phaseId, name: row.description, startDate: row.startDate, duration: row.duration,
         dependencies: row.dependencies, dependencyDetails: row.dependencyDetails,
-        responsible: row.responsible, team: row.team, scheduleOrder: row.scheduleOrder,
+        responsible: row.responsible, team: row.team, scheduleOrder: row.scheduleOrder, contractOrder: row.contractOrder,
         durationMode: row.durationMode, isManual: row.isManual, manualDuration: row.manualDuration,
         percentComplete: 0, materials: [], level: 0, quantity: row.quantity, unit: row.unit,
-        unitPrice: row.unitPriceWithBDI, itemCode: row.code, contractItem: row.item,
+        unitPrice: row.unitPriceWithBDI, itemCode: row.code ?? composition.code, contractItem: row.item ?? composition.itemNumber ?? composition.item,
         originAdditiveId: additive.id, originAdditiveName: additive.name, originAdditiveVersion: archive.version,
       });
     }
-    if (tasks.length) projectedPhases.push({ id: phaseId, name: additive.name, color: '#0369a1', tasks });
+    if (orphans.length) projectedPhases.push({ id: fallbackId, name: additive.name, color: '#0369a1', tasks: sortTasksForSchedule(orphans) });
   }
-  return { project: projectedPhases.length ? { ...project, phases: [...project.phases, ...projectedPhases] } : project,
-    projectedTaskIds, taskIds };
+  const phases = project.phases.map(phase => {
+    const additions = tasksByPhase.get(phase.id);
+    return additions ? { ...phase, tasks: sortTasksForSchedule([...phase.tasks, ...additions]) } : phase;
+  });
+  return {
+    project: projectedTaskIds.size ? { ...project, phases: [...phases, ...projectedPhases] } : project,
+    projectedTaskIds, taskIds,
+  };
 }
