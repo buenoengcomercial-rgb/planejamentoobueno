@@ -33,9 +33,9 @@ export default function CloudDraftConflictDialog({
     <AlertDialog open={open}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Cópia local e nuvem estão diferentes</AlertDialogTitle>
+          <AlertDialogTitle>Não foi possível mesclar esta cópia local</AlertDialogTitle>
           <AlertDialogDescription>
-            A obra mudou em outro aparelho enquanto havia uma alteração local. A cópia pendente foi preservada. Baixe-a antes de descartar. O Diário pode continuar a ser preenchido separadamente, sem resolver este conflito da obra.
+            Houve uma alteração no mesmo dado ou esta cópia antiga não contém a versão-base necessária para comparar os campos com segurança. A cópia pendente foi preservada. Baixe-a antes de descartar. O Diário pode continuar a ser preenchido separadamente.
             {onContinueMeasurement && " A Medição também possui base independente e pode ser acessada sem descartar esta cópia."}
           </AlertDialogDescription>
         </AlertDialogHeader>

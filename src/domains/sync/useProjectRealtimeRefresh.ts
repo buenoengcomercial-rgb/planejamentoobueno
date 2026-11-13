@@ -2,7 +2,7 @@ import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction 
 import type { Project } from '@/types/project';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { confirmCloudProjectRecord, discardCloudProjectRecord, getCloudProjectVersion, loadCloudProjectRecord } from '@/lib/cloudProjects';
-import { projectHasLocalChanges, serializeProject } from '@/lib/cloudProjectDraftCore';
+import { projectHasLocalChanges } from '@/lib/cloudProjectDraftCore';
 import { WAREHOUSE_REMOTE_SYNC_COLLECTIONS, type ProjectCollectionKey } from '@/lib/projectDataScope';
 import { planRealtimeProjectRefresh, reconcileRemoteProjectSnapshot } from './remoteProjectReconciliation';
 
@@ -42,11 +42,11 @@ export function useProjectRealtimeRefresh({
   requiredProjectCollections, rawProjectRef, initialLoadRef, remoteCheckInFlightRef,
   conflictDetectedRef, partialSyncPendingRef, pendingDailyReportSavesRef,
   productionCaptureBusyRef, saveTimerRef, inFlightSaveRef, realtimeRefreshTimerRef,
-  localMetadataDirtyRef, currentProjectUpdatedAtRef, currentWarehouseVersionRef,
+  currentProjectUpdatedAtRef, currentWarehouseVersionRef,
   lastObservedWarehouseVersionRef, activeDataScopeKeyRef, lastSavedProjectJsonRef,
   skipNextAutoSaveRef, refreshRemoteWarehouseInBackground,
   refreshRemoteCollectionsInBackground, markRemoteCollections, clearRemoteCollections,
-  hasLocalCollectionConflict, setCurrentProjectUpdatedAt, setLastCloudConfirmedAt,
+  setCurrentProjectUpdatedAt, setLastCloudConfirmedAt,
   setRemoteUpdateAt, setRawProject, setSaveStatus,
 }: ProjectRealtimeRefreshDeps) {
   const refreshProjectFromRealtime = useCallback(async (sources: readonly string[] = []) => {
@@ -80,14 +80,6 @@ export function useProjectRealtimeRefresh({
     if (await refreshRemoteCollectionsInBackground(current, affectedCollections)) return;
     // Sem tabela identificada, a consulta permanece limitada à área aberta.
     if (inactiveCollections.length > 0) markRemoteCollections(current.id, inactiveCollections);
-    if ((metadataOnly && localMetadataDirtyRef.current.has(current.id))
-      || (requestCollections.length > 0 && hasLocalCollectionConflict(current.id, requestCollections))) {
-      markRemoteCollections(current.id, requestCollections);
-      // A notification is not a rejected write. Keep the original expected
-      // fields until the transaction can resolve this operation on the server.
-      return;
-    }
-
     // Outra aba recebeu alteração: atualize somente o marcador e a versão
     // otimista. Não faça download, não troque objetos locais e não mexa no UI.
     if (requestCollections.length > 0 && activeCollections.length === 0) {
@@ -108,7 +100,6 @@ export function useProjectRealtimeRefresh({
     try {
       const latestLocal = rawProjectRef.current;
       if (!latestLocal || latestLocal.id !== current.id) return;
-      const localJsonAtRequest = serializeProject(latestLocal);
       const updatedAtAtRequest = currentProjectUpdatedAtRef.current;
       const dataScopeAtRequest = activeDataScopeKeyRef.current;
 
@@ -123,15 +114,11 @@ export function useProjectRealtimeRefresh({
         discardCloudProjectRecord(record);
         return;
       }
-      const localChangedDuringRequest = serializeProject(localAfterRequest) !== localJsonAtRequest
-        || currentProjectUpdatedAtRef.current !== updatedAtAtRequest
-        || activeDataScopeKeyRef.current !== dataScopeAtRequest;
-      if (localChangedDuringRequest && hasLocalCollectionConflict(current.id, requestCollections)) {
+      if (currentProjectUpdatedAtRef.current !== updatedAtAtRequest
+        || activeDataScopeKeyRef.current !== dataScopeAtRequest) {
         discardCloudProjectRecord(record);
-        markRemoteCollections(current.id, requestCollections);
         return;
       }
-      confirmCloudProjectRecord(record);
       const reconciled = reconcileRemoteProjectSnapshot({
         local: localAfterRequest,
         remote: record.project,
@@ -139,6 +126,13 @@ export function useProjectRealtimeRefresh({
         collections: requestCollections,
         metadataOnly,
       });
+      if (reconciled.conflict) {
+        discardCloudProjectRecord(record);
+        markRemoteCollections(current.id, requestCollections);
+        setSaveStatus('conflict');
+        return;
+      }
+      confirmCloudProjectRecord(record);
       lastSavedProjectJsonRef.current = reconciled.confirmedBaselineJson;
       currentProjectUpdatedAtRef.current = record.updatedAt;
       currentWarehouseVersionRef.current = record.warehouseVersion;
@@ -157,7 +151,7 @@ export function useProjectRealtimeRefresh({
     } finally {
       remoteCheckInFlightRef.current = false;
     }
-  }, [activeDataScopeKeyRef, clearRemoteCollections, conflictDetectedRef, currentProjectUpdatedAtRef, currentWarehouseVersionRef, hasLocalCollectionConflict, inFlightSaveRef, initialLoadRef, lastObservedWarehouseVersionRef, lastSavedProjectJsonRef, localMetadataDirtyRef, markRemoteCollections, partialSyncPendingRef, pendingDailyReportSavesRef, productionCaptureBusyRef, rawProjectRef, realtimeRefreshTimerRef, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, remoteCheckInFlightRef, requiredProjectCollections, saveTimerRef, setCurrentProjectUpdatedAt, setLastCloudConfirmedAt, setRawProject, setRemoteUpdateAt, setSaveStatus, skipNextAutoSaveRef]);
+  }, [activeDataScopeKeyRef, clearRemoteCollections, conflictDetectedRef, currentProjectUpdatedAtRef, currentWarehouseVersionRef, inFlightSaveRef, initialLoadRef, lastObservedWarehouseVersionRef, lastSavedProjectJsonRef, markRemoteCollections, partialSyncPendingRef, pendingDailyReportSavesRef, productionCaptureBusyRef, rawProjectRef, realtimeRefreshTimerRef, refreshRemoteCollectionsInBackground, refreshRemoteWarehouseInBackground, remoteCheckInFlightRef, requiredProjectCollections, saveTimerRef, setCurrentProjectUpdatedAt, setLastCloudConfirmedAt, setRawProject, setRemoteUpdateAt, setSaveStatus, skipNextAutoSaveRef]);
 
   return refreshProjectFromRealtime;
 }

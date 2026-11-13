@@ -75,6 +75,19 @@ describe('atualização remota por coleção', () => {
     expect(context.backgroundRefreshing.size).toBe(0);
   });
 
+  it('mescla linhas diferentes mesmo quando o rastreador não identificou a edição local', async () => {
+    const confirmed = project();
+    const local = { ...confirmed, dailyReports: [
+      ...confirmed.dailyReports!, { id: 'diario-2', date: '2026-10-21', observations: 'Rascunho local' },
+    ] } as Project;
+    cloud.loadRecord.mockResolvedValue(record(project('Diário remoto')));
+    const { context, apply } = setup(local, confirmed);
+    expect(await refreshRemoteProjectCollections(context, local, ['dailyReports'], version)).not.toBeNull();
+    expect(apply.mock.calls[0][0].project.dailyReports.map((report: { observations?: string }) => report.observations))
+      .toEqual(['Diário remoto', 'Rascunho local']);
+    expect(context.hasLocalCollectionConflict).not.toHaveBeenCalled();
+  });
+
   it('descarta resposta atrasada após troca de obra', async () => {
     const local = project();
     const remoteRecord = record(project('Remoto'));

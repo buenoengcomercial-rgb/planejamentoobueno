@@ -839,6 +839,30 @@ describe('segurança de sincronização da página da obra', () => {
     expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
   });
 
+  it('reabre um rascunho com ancestral e mescla alteração remota em outro domínio sem modal', async () => {
+    const baseline = makeProject();
+    const local = { ...baseline, name: 'Nome local ainda pendente' };
+    const remote = { ...baseline, dailyReports: [{ ...report, observations: 'Diário remoto' }] };
+    writeProjectDraft(local, 'cloud-v1', undefined, {
+      loadedCollections: ['dailyReports', 'tasks'], baseProject: baseline,
+    });
+    mocks.loadCloudProjectRecord.mockResolvedValue(cloudRecord(remote, 'cloud-v2'));
+
+    renderIndex();
+
+    expect(await screen.findByTestId('project-name')).toHaveTextContent('Nome local ainda pendente');
+    expect(screen.queryByText('Conflito de cópia local')).not.toBeInTheDocument();
+    expect(readStoredProjectDraft(local.id)?.project.name).toBe('Nome local ainda pendente');
+    fireEvent.click(screen.getByRole('button', { name: 'Trocar obra de teste' }));
+    await waitFor(() => expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1));
+    expect(mocks.upsertCloudProject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Nome local ainda pendente',
+        dailyReports: [expect.objectContaining({ observations: 'Diário remoto' })],
+      }), 'org-1', 'cloud-v2', expect.any(Function),
+    );
+  });
+
   it('transforma draft cloud_changed não parcial em conflito explícito sem apagá-lo', async () => {
     const local = { ...makeProject(), name: 'Alteração local não confirmada' };
     writeProjectDraft(local, 'cloud-v1');

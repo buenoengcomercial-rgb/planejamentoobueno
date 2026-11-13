@@ -24,6 +24,8 @@ interface ProtectedProjectDraftOptions {
   partialSyncPendingRef: MutableRefObject<PartialSyncPending | null>;
   conflictDetectedRef: RefObject<boolean>;
   rawProjectRef: RefObject<Project | null>;
+  savedProjectJsonRef?: RefObject<string | null>;
+  projectUpdatedAtRef?: RefObject<string | null>;
   setPartialSyncIssue: Dispatch<SetStateAction<PartialSyncIssue | null>>;
   setSaveStatus: Dispatch<SetStateAction<SaveStatus>>;
 }
@@ -31,10 +33,19 @@ interface ProtectedProjectDraftOptions {
 /** Protege rascunhos do projeto sem confirmar qualquer gravação na nuvem. */
 export function useProtectedProjectDrafts({
   partialSyncPendingRef, conflictDetectedRef, rawProjectRef,
+  savedProjectJsonRef, projectUpdatedAtRef,
   setPartialSyncIssue, setSaveStatus,
 }: ProtectedProjectDraftOptions) {
   const draftWriteTimerRef = useRef<number | null>(null);
-  const pendingDraftRef = useRef<{ project: Project; baseUpdatedAt: string | null } | null>(null);
+  const pendingDraftRef = useRef<{ project: Project; baseUpdatedAt: string | null; baseProject: Project | null } | null>(null);
+
+  const confirmedAncestor = useCallback((project: Project, baseUpdatedAt: string | null): Project | null => {
+    if (!savedProjectJsonRef?.current || projectUpdatedAtRef?.current !== baseUpdatedAt) return null;
+    try {
+      const ancestor = JSON.parse(savedProjectJsonRef.current) as Project;
+      return ancestor.id === project.id ? ancestor : null;
+    } catch { return null; }
+  }, [savedProjectJsonRef, projectUpdatedAtRef]);
 
   const cancelScheduledDraft = useCallback((projectId?: string) => {
     const pending = pendingDraftRef.current;
@@ -44,19 +55,19 @@ export function useProtectedProjectDrafts({
     pendingDraftRef.current = null;
   }, []);
 
-  const writeProtectedProjectDraft = useCallback((project: Project, baseUpdatedAt: string | null) => {
+  const writeProtectedProjectDraft = useCallback((project: Project, baseUpdatedAt: string | null, baseProject = confirmedAncestor(project, baseUpdatedAt)) => {
     const partial = partialSyncPendingRef.current?.projectId === project.id
       ? partialSyncPendingRef.current
       : null;
     const loadedCollections = partial?.loadedCollections ?? getLoadedProjectCollections(project.id);
     const stored = writeProjectDraft(project, baseUpdatedAt, undefined, partial ? {
-      pendingNormalizedSync: true,
+      pendingNormalizedSync: true, baseProject,
       loadedCollections,
-    } : { loadedCollections });
+    } : { loadedCollections, baseProject });
     if (!stored && supportsIndexedDbDrafts()) {
       const candidate = createProjectDraft(project, baseUpdatedAt, partial ? {
-        pendingNormalizedSync: true, loadedCollections,
-      } : { loadedCollections });
+        pendingNormalizedSync: true, loadedCollections, baseProject,
+      } : { loadedCollections, baseProject });
       void writeIndexedDbProjectDraft(candidate).then(confirmed => {
         if (!confirmed) return;
         const current = partialSyncPendingRef.current;
@@ -72,23 +83,23 @@ export function useProtectedProjectDrafts({
       setPartialSyncIssue({ projectId: project.id, draftProtected: true });
     }
     return stored;
-  }, [partialSyncPendingRef, conflictDetectedRef, rawProjectRef, setPartialSyncIssue, setSaveStatus]);
+  }, [partialSyncPendingRef, conflictDetectedRef, rawProjectRef, setPartialSyncIssue, setSaveStatus, confirmedAncestor]);
 
   const scheduleProjectDraft = useCallback((nextProject: Project, baseUpdatedAt: string | null) => {
     const pending = pendingDraftRef.current;
     if (pending && pending.project.id !== nextProject.id) {
       if (draftWriteTimerRef.current) window.clearTimeout(draftWriteTimerRef.current);
-      writeProtectedProjectDraft(pending.project, pending.baseUpdatedAt);
+      writeProtectedProjectDraft(pending.project, pending.baseUpdatedAt, pending.baseProject);
     }
     if (draftWriteTimerRef.current) window.clearTimeout(draftWriteTimerRef.current);
-    pendingDraftRef.current = { project: nextProject, baseUpdatedAt };
+    pendingDraftRef.current = { project: nextProject, baseUpdatedAt, baseProject: confirmedAncestor(nextProject, baseUpdatedAt) };
     draftWriteTimerRef.current = window.setTimeout(() => {
       const draft = pendingDraftRef.current;
       draftWriteTimerRef.current = null;
       pendingDraftRef.current = null;
       if (draft) {
         if (!supportsIndexedDbDrafts()) {
-          writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt);
+          writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt, draft.baseProject);
           return;
         }
         const partial = partialSyncPendingRef.current?.projectId === draft.project.id
@@ -96,13 +107,14 @@ export function useProtectedProjectDrafts({
         const candidate = createProjectDraft(draft.project, draft.baseUpdatedAt, {
           pendingNormalizedSync: !!partial,
           loadedCollections: partial?.loadedCollections ?? getLoadedProjectCollections(draft.project.id),
+          baseProject: draft.baseProject,
         });
         void writeIndexedDbProjectDraft(candidate).then(confirmed => {
-          if (!confirmed) writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt);
+          if (!confirmed) writeProtectedProjectDraft(draft.project, draft.baseUpdatedAt, draft.baseProject);
         });
       }
     }, LOCAL_DRAFT_DEBOUNCE_MS);
-  }, [partialSyncPendingRef, writeProtectedProjectDraft]);
+  }, [partialSyncPendingRef, writeProtectedProjectDraft, confirmedAncestor]);
 
   const discardProjectDraft = useCallback((projectId: string) => {
     cancelScheduledDraft(projectId);

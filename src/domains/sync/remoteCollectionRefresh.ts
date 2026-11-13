@@ -79,18 +79,21 @@ export async function refreshRemoteProjectCollections(
       return null;
     }
 
-    const sameCollectionEdited = context.hasLocalCollectionConflict(current.id, requestedCollections);
     let savedBaseline: Project | null = null;
     const savedJson = context.savedProjectJson();
     if (savedJson) {
       try { savedBaseline = JSON.parse(savedJson) as Project; } catch { /* preserve conflict */ }
     }
-    let rebasedCurrent = sameCollectionEdited
-      ? savedBaseline && mergeProjectRecordsThreeWay(savedBaseline, latest, record.project, requestedCollections)
-      : mergeHydratedProjectCollections(latest, record.project, requestedCollections);
-    let rebasedForRetry = sameCollectionEdited
-      ? savedBaseline && mergeProjectRecordsThreeWay(savedBaseline, projectToRebase, record.project, requestedCollections)
-      : mergeHydratedProjectCollections(projectToRebase, record.project, requestedCollections);
+    // Warehouse RPCs own their version and are applied as a whole only when no
+    // local stock operation is pending. Other domains must compare each row.
+    const warehouseOnly = requestedCollections.every(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection));
+    const sameWarehouseCollectionEdited = warehouseOnly && context.hasLocalCollectionConflict(current.id, requestedCollections);
+    let rebasedCurrent = warehouseOnly && !sameWarehouseCollectionEdited
+      ? mergeHydratedProjectCollections(latest, record.project, requestedCollections)
+      : savedBaseline && mergeProjectRecordsThreeWay(savedBaseline, latest, record.project, requestedCollections);
+    let rebasedForRetry = warehouseOnly && !sameWarehouseCollectionEdited
+      ? mergeHydratedProjectCollections(projectToRebase, record.project, requestedCollections)
+      : savedBaseline && mergeProjectRecordsThreeWay(savedBaseline, projectToRebase, record.project, requestedCollections);
     if (!rebasedCurrent || !rebasedForRetry) {
       discardCloudProjectRecord(record);
       return null;

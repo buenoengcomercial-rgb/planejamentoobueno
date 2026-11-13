@@ -57,28 +57,31 @@ describe('aplicação de atualizações Realtime por coleção', () => {
     expect(refs.currentWarehouseVersionRef.current).toBe(2);
   });
 
-  it('mantém conflito delimitado quando a coleção em edição recebe sinal remoto', async () => {
-    const { hook, actions } = setup(['tasks']);
+  it('consulta a entidade antes de classificar um sinal como conflito', async () => {
+    cloud.load.mockResolvedValue({ project: project(), updatedAt: 'new', warehouseVersion: 2 });
+    const { hook, refs, actions } = setup(['tasks']);
+    refs.rawProjectRef.current = { ...project(), name: 'Edição local' };
     actions.hasLocalCollectionConflict.mockReturnValue(true);
     await act(async () => hook.result.current(['tasks']));
-    expect(actions.markRemoteCollections).toHaveBeenCalledWith('obra-1', expect.arrayContaining(['tasks']));
-    expect(cloud.load).not.toHaveBeenCalled();
-    expect(actions.setRawProject).not.toHaveBeenCalled();
+    expect(cloud.load).toHaveBeenCalled();
+    expect(actions.setRawProject).toHaveBeenCalledWith(expect.objectContaining({ name: 'Edição local' }));
+    expect(actions.setSaveStatus).toHaveBeenLastCalledWith('saving');
   });
 
-  it('descarta a leitura antiga se o usuário editou a mesma coleção enquanto ela carregava', async () => {
+  it('preserva uma edição feita durante a leitura se o mesmo campo mudou na nuvem', async () => {
     let resolveLoad!: (record: unknown) => void;
     cloud.load.mockImplementation(() => new Promise(resolve => { resolveLoad = resolve; }));
     const { hook, refs, actions } = setup(['tasks']);
-    const pending = hook.result.current(['tasks']);
+    const pending = hook.result.current(['projects']);
     await vi.waitFor(() => expect(cloud.load).toHaveBeenCalled());
     refs.rawProjectRef.current = { ...project(), name: 'Edição local' };
     actions.hasLocalCollectionConflict.mockReturnValue(true);
-    resolveLoad({ project: project(), updatedAt: 'new', warehouseVersion: 2, warehouseUpdatedAt: 'new' });
+    resolveLoad({ project: { ...project(), name: 'Edição remota' }, updatedAt: 'new', warehouseVersion: 2, warehouseUpdatedAt: 'new' });
     await pending;
     expect(cloud.discard).toHaveBeenCalledOnce();
     expect(cloud.confirm).not.toHaveBeenCalled();
     expect(actions.setRawProject).not.toHaveBeenCalled();
     expect(refs.rawProjectRef.current?.name).toBe('Edição local');
+    expect(actions.setSaveStatus).toHaveBeenLastCalledWith('conflict');
   });
 });

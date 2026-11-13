@@ -18,7 +18,7 @@ function project(id: string): Project {
   return { id, name: `Obra ${id}`, startDate: '2026-10-01', endDate: '2026-10-31', phases: [], totalBudget: 0 };
 }
 
-function setup() {
+function setup(confirmedProject?: Project) {
   const partialSyncPendingRef = { current: null as {
     projectId: string; loadedCollections: []; project: Project; draftProtected: boolean;
   } | null };
@@ -27,6 +27,8 @@ function setup() {
   const hook = renderHook(() => useProtectedProjectDrafts({
     partialSyncPendingRef, conflictDetectedRef: { current: false },
     rawProjectRef: { current: null }, setPartialSyncIssue, setSaveStatus,
+    savedProjectJsonRef: { current: confirmedProject ? JSON.stringify(confirmedProject) : null },
+    projectUpdatedAtRef: { current: confirmedProject ? 'v1' : null },
   }));
   return { ...hook, partialSyncPendingRef, setPartialSyncIssue, setSaveStatus };
 }
@@ -44,6 +46,15 @@ afterEach(() => {
 });
 
 describe('rascunhos protegidos da obra', () => {
+  it('guarda a versão confirmada para mesclar após recarregar em outro aparelho', () => {
+    const baseline = project('obra-0');
+    const { result } = setup(baseline);
+    act(() => result.current.writeProtectedProjectDraft({ ...baseline, name: 'Edição local' }, 'v1'));
+    const stored = JSON.parse(localStorage.getItem(projectDraftKey(baseline.id)) ?? '{}');
+    expect(stored.baseProject.name).toBe(baseline.name);
+    expect(stored.project.name).toBe('Edição local');
+  });
+
   it('salva imediatamente o rascunho anterior ao trocar de obra e agenda o novo', () => {
     const { result } = setup();
     act(() => result.current.scheduleProjectDraft(project('obra-1'), 'v1'));
