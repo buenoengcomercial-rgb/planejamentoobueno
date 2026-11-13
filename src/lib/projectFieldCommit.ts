@@ -1,6 +1,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
 import { gzipSync, gunzipSync, strFromU8, strToU8 } from 'fflate';
+import { readLargeProjectOperations, removeLargeProjectOperation, writeLargeProjectOperation } from './projectFieldOperationStorage';
 
 export interface ProjectFieldBatch {
   table: string;
@@ -37,14 +38,23 @@ export class ProjectFieldConflictError extends Error {
 const storageKey = (actorId: string, projectId: string) => `obraplanner:field-operations:${actorId}:${projectId}`;
 const compressedPrefix = 'gzip-v1:';
 
-function storeOperation(key: string, operation: PendingProjectFieldOperation) {
+async function storeOperation(key: string, operation: PendingProjectFieldOperation, storedInDatabase = false) {
   const json = JSON.stringify(operation);
+  if (storedInDatabase) {
+    await writeLargeProjectOperation(key, json);
+    return;
+  }
   try {
     localStorage.setItem(key, json);
   } catch (error) {
     if (!(error instanceof DOMException) || error.name !== 'QuotaExceededError') throw error;
     const bytes = gzipSync(strToU8(json));
-    localStorage.setItem(key, compressedPrefix + btoa(strFromU8(bytes, true)));
+    try {
+      localStorage.setItem(key, compressedPrefix + btoa(strFromU8(bytes, true)));
+    } catch (compressedError) {
+      if (!(compressedError instanceof DOMException) || compressedError.name !== 'QuotaExceededError') throw compressedError;
+      await writeLargeProjectOperation(key, json);
+    }
   }
 }
 
@@ -63,20 +73,30 @@ export async function projectOperationFingerprint(value: unknown): Promise<strin
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-export function pendingProjectFieldOperations(actorId: string, projectId: string): PendingProjectFieldOperation[] {
+async function storedProjectFieldOperations(actorId: string, projectId: string) {
   const prefix = `${storageKey(actorId, projectId)}:`;
-  const rows: unknown = Object.keys(localStorage).filter(key => key.startsWith(prefix))
+  const local = Object.keys(localStorage).filter(key => key.startsWith(prefix))
     .map(key => readOperation(localStorage.getItem(key)));
+  const large = (await readLargeProjectOperations(prefix)).map(readOperation);
+  const rows = [...local, ...large] as PendingProjectFieldOperation[];
   if (!Array.isArray(rows) || rows.some(row => !row?.operationId || !row?.request)) {
     throw new Error('A fila local está inconsistente. Preserve este navegador para recuperar as tentativas.');
   }
-  return rows;
+  return { rows: [...new Map(rows.map(row => [row.operationId, row])).values()],
+    largeIds: new Set((large as PendingProjectFieldOperation[]).map(row => row.operationId)) };
+}
+
+export async function pendingProjectFieldOperations(actorId: string, projectId: string) {
+  return (await storedProjectFieldOperations(actorId, projectId)).rows;
 }
 
 /** Removes only the named local attempt after the operator exports its backup. */
-export function archiveProjectFieldOperation(actorId: string, projectId: string, operationId: string) {
-  if (!pendingProjectFieldOperations(actorId, projectId).some(row => row.operationId === operationId)) return;
-  localStorage.removeItem(`${storageKey(actorId, projectId)}:${operationId}`);
+export async function archiveProjectFieldOperation(actorId: string, projectId: string, operationId: string) {
+  const { rows, largeIds } = await storedProjectFieldOperations(actorId, projectId);
+  if (!rows.some(row => row.operationId === operationId)) return;
+  const key = `${storageKey(actorId, projectId)}:${operationId}`;
+  if (largeIds.has(operationId)) await removeLargeProjectOperation(key);
+  localStorage.removeItem(key);
   window.dispatchEvent(new Event('obraplanner:operation-conflicts'));
 }
 
@@ -98,17 +118,18 @@ function laterFieldEdits(before: unknown, after: unknown, path = ''): unknown[] 
   return [{ path, before, after }];
 }
 
-export function preserveProjectFieldConflict(error: ProjectFieldConflictError, attemptedProject: unknown, submittedProject?: unknown) {
-  const row = pendingProjectFieldOperations(error.actorId, error.projectId).find(row => row.operationId === error.operationId);
+export async function preserveProjectFieldConflict(error: ProjectFieldConflictError, attemptedProject: unknown, submittedProject?: unknown) {
+  const { rows, largeIds } = await storedProjectFieldOperations(error.actorId, error.projectId);
+  const row = rows.find(row => row.operationId === error.operationId);
   if (!row) throw new Error('A tentativa não está preservada neste navegador.');
   const project = attemptedProject as Record<string,unknown> | undefined;
   // The request already contains every affected record. Keep only changed
   // metadata and subsequent edits here, avoiding a second whole-project copy.
   const metadataKeys = [...new Set([...Object.keys(error.request.metadata?.expected ?? {}), ...Object.keys(error.request.metadata?.next ?? {})])];
   const attempt = project ? Object.fromEntries(['id',...metadataKeys].map(key => [key,project[key]])) : undefined;
-  storeOperation(`${storageKey(error.actorId, error.projectId)}:${error.operationId}`, { ...row,
+  await storeOperation(`${storageKey(error.actorId, error.projectId)}:${error.operationId}`, { ...row,
     conflict: { message: error.message, at: new Date().toISOString(), attemptedProject: attempt,
-      laterEdits: submittedProject ? laterFieldEdits(submittedProject, attemptedProject) : undefined } });
+      laterEdits: submittedProject ? laterFieldEdits(submittedProject, attemptedProject) : undefined } }, largeIds.has(error.operationId));
   window.dispatchEvent(new Event('obraplanner:operation-conflicts'));
 }
 
@@ -119,15 +140,15 @@ export async function commitProjectFields(projectId: string, organizationId: str
   if (!actorId) throw new Error('Entre novamente antes de salvar.');
   const additiveSchedule = request.origin === 'additiveSchedule';
   const prepareStartedAt = performance.now();
-  const key = storageKey(actorId, projectId), rows = pendingProjectFieldOperations(actorId, projectId);
+  const key = storageKey(actorId, projectId), { rows, largeIds } = await storedProjectFieldOperations(actorId, projectId);
   const serialized = canonical(request);
   const pending = rows.find(row => canonical(row.request) === serialized)
     ?? { operationId: crypto.randomUUID(), request,
       ...(candidateProject ? { candidateHash: await projectOperationFingerprint(candidateProject) } : {}) };
   if (!rows.includes(pending)) {
-    storeOperation(`${key}:${pending.operationId}`, pending);
+    await storeOperation(`${key}:${pending.operationId}`, pending);
     window.dispatchEvent(new Event('obraplanner:operation-conflicts'));
-    if (!pendingProjectFieldOperations(actorId, projectId).some(row => row.operationId === pending.operationId)) {
+    if (!(await pendingProjectFieldOperations(actorId, projectId)).some(row => row.operationId === pending.operationId)) {
       throw new Error('Não foi possível preservar a tentativa neste navegador.');
     }
   }
@@ -163,6 +184,9 @@ export async function commitProjectFields(projectId: string, organizationId: str
   if (additiveSchedule) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'receipt', outcome: 'confirmed',
     durationMs: performance.now() - receiptStartedAt });
   // Removal follows receipt validation, never an HTTP success alone.
+  if (largeIds.has(pending.operationId) || !localStorage.getItem(`${key}:${pending.operationId}`)) {
+    await removeLargeProjectOperation(`${key}:${pending.operationId}`);
+  }
   localStorage.removeItem(`${key}:${pending.operationId}`);
   window.dispatchEvent(new Event('obraplanner:operation-conflicts'));
   return receipt;

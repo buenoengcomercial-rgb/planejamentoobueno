@@ -5,10 +5,16 @@ import { applyProjectFieldReceipt, setCloudSnapshot, stripNormalizedCollections,
 import type { Project } from '@/types/project';
 import { readSyncDiagnostics } from '@/lib/syncDiagnostics';
 const rpc = vi.hoisted(() => vi.fn());
+const largeOperations = vi.hoisted(() => new Map<string, string>());
 vi.mock('@/integrations/supabase/client', () => ({ supabase: { rpc } }));
+vi.mock('./projectFieldOperationStorage', () => ({
+  readLargeProjectOperations: async (prefix: string) => [...largeOperations].filter(([key]) => key.startsWith(prefix)).map(([, value]) => value),
+  writeLargeProjectOperation: async (key: string, value: string) => { largeOperations.set(key, value); },
+  removeLargeProjectOperation: async (key: string) => { largeOperations.delete(key); },
+}));
 const request: ProjectFieldRequest = { domain: 'metadata', changes: [], audits: [],
   metadata: { expected: { name: 'Antes' }, next: { name: 'Depois' } } };
-beforeEach(() => { localStorage.clear(); rpc.mockReset(); vi.stubGlobal('crypto', webcrypto); });
+beforeEach(() => { localStorage.clear(); largeOperations.clear(); rpc.mockReset(); vi.stubGlobal('crypto', webcrypto); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 it('preserva uma tentativa grande ao atingir a cota e mantém o mesmo pedido no reenvio', async () => {
   const nativeSetItem = Storage.prototype.setItem;
@@ -19,16 +25,31 @@ it('preserva uma tentativa grande ao atingir a cota e mantém o mesmo pedido no 
   const largeRequest = { ...request, audits: [{ detail: 'Serviço de execução São João · '.repeat(1500) }] };
   rpc.mockResolvedValueOnce({ error: { message: 'Failed to fetch' } });
   await expect(commitProjectFields('p', 'org', 'a', largeRequest)).rejects.toMatchObject({ message: 'Failed to fetch' });
-  expect(pendingProjectFieldOperations('a', 'p')[0].request).toEqual(largeRequest);
+  expect((await pendingProjectFieldOperations('a', 'p'))[0].request).toEqual(largeRequest);
   rpc.mockImplementationOnce(async (_name, args) => ({ data: { operationId: args.p_operation_id,
     updatedAt: 'v2', metadata: {}, changes: [], replayed: true } }));
   await commitProjectFields('p', 'org', 'a', largeRequest);
   expect(rpc.mock.calls[1][1]).toEqual(rpc.mock.calls[0][1]);
-  expect(pendingProjectFieldOperations('a', 'p')).toEqual([]);
+  expect(await pendingProjectFieldOperations('a', 'p')).toEqual([]);
+});
+it('guarda no IndexedDB quando nem a tentativa compactada cabe e só remove após o recibo', async () => {
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('quota', 'QuotaExceededError'); });
+  rpc.mockImplementationOnce(async () => {
+    expect(await pendingProjectFieldOperations('a', 'p')).toHaveLength(1);
+    expect(largeOperations.size).toBe(1);
+    return { error: { message: 'Failed to fetch' } };
+  });
+  await expect(commitProjectFields('p', 'org', 'a', request)).rejects.toMatchObject({ message: 'Failed to fetch' });
+  expect(await pendingProjectFieldOperations('other', 'p')).toEqual([]);
+  rpc.mockImplementationOnce(async (_name, args) => ({ data: { operationId: args.p_operation_id,
+    updatedAt: 'v2', metadata: {}, changes: [], replayed: true } }));
+  await commitProjectFields('p', 'org', 'a', request);
+  expect(rpc.mock.calls[1][1]).toEqual(rpc.mock.calls[0][1]);
+  expect(largeOperations.size).toBe(0);
 });
 it('persiste antes do envio e repete exatamente a operação após perda de resposta', async () => {
   rpc.mockImplementation(async () => {
-    expect(pendingProjectFieldOperations('actor', 'project')).toHaveLength(1);
+    expect(await pendingProjectFieldOperations('actor', 'project')).toHaveLength(1);
     return { error: { message: 'Failed to fetch' } };
   });
   await expect(commitProjectFields('project', 'org', 'actor', request)).rejects.toMatchObject({ message: 'Failed to fetch' });
@@ -37,7 +58,7 @@ it('persiste antes do envio e repete exatamente a operação após perda de resp
     updatedAt: 'v2', metadata: { name: 'Depois' }, changes: [], replayed: true } }));
   await commitProjectFields('project', 'org', 'actor', request);
   expect(rpc.mock.calls[1][1]).toEqual(sent);
-  expect(pendingProjectFieldOperations('actor', 'project')).toEqual([]);
+  expect(await pendingProjectFieldOperations('actor', 'project')).toEqual([]);
 });
 it('mede preparo, RPC e recibo do Aditivo sem registrar conteúdo da obra', async () => {
   const additiveRequest: ProjectFieldRequest = { domain: 'additive', origin: 'additiveSchedule', changes: [], audits: [],
@@ -59,25 +80,25 @@ it('conflito e recibo incompleto conservam a tentativa isolada por conta', async
   await expect(commitProjectFields('p', 'org', 'a', request)).rejects.toMatchObject({ code: 'P0002' });
   rpc.mockResolvedValueOnce({ data: { operationId: 'outra' } });
   await expect(commitProjectFields('p', 'org', 'a', request)).rejects.toThrow('confirmou');
-  expect(pendingProjectFieldOperations('a', 'p')).toHaveLength(1);
-  expect(pendingProjectFieldOperations('b', 'p')).toEqual([]);
+  expect(await pendingProjectFieldOperations('a', 'p')).toHaveLength(1);
+  expect(await pendingProjectFieldOperations('b', 'p')).toEqual([]);
 });
 it('reenvia a mesma tentativa após corrigir um falso conflito sem descartá-la', async () => {
   rpc.mockResolvedValueOnce({ error: { code: 'P0002', message: 'Conflito no campo scheduleDraft/updatedAt' } });
   await expect(commitProjectFields('p', 'org', 'a', request)).rejects.toMatchObject({ code: 'P0002' });
-  const [pending] = pendingProjectFieldOperations('a', 'p');
+  const [pending] = await pendingProjectFieldOperations('a', 'p');
   rpc.mockImplementationOnce(async (_name, args) => ({ data: { operationId: args.p_operation_id,
     updatedAt: 'v3', metadata: { name: 'Depois' }, changes: [], replayed: false } }));
   await commitProjectFields('p', 'org', 'a', pending.request);
   expect(rpc.mock.calls[1][1]).toEqual(rpc.mock.calls[0][1]);
-  expect(pendingProjectFieldOperations('a', 'p')).toEqual([]);
+  expect(await pendingProjectFieldOperations('a', 'p')).toEqual([]);
 });
 it('arquiva apenas a tentativa local escolhida sem reenviar uma operação recusada', async () => {
   rpc.mockResolvedValue({ error: { code: '42501', message: 'Operação não autorizada' } });
   await expect(commitProjectFields('p', 'org', 'a', request)).rejects.toMatchObject({ code: '42501' });
-  const [pending] = pendingProjectFieldOperations('a', 'p');
-  archiveProjectFieldOperation('a', 'p', pending.operationId);
-  expect(pendingProjectFieldOperations('a', 'p')).toEqual([]);
+  const [pending] = await pendingProjectFieldOperations('a', 'p');
+  await archiveProjectFieldOperation('a', 'p', pending.operationId);
+  expect(await pendingProjectFieldOperations('a', 'p')).toEqual([]);
   expect(rpc).toHaveBeenCalledTimes(1);
 });
 const project = { id: 'p', name: 'Obra', phases: [{ id: 'c', name: 'Capítulo', tasks: [
