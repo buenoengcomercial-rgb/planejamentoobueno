@@ -8,6 +8,7 @@ import { createIncorporationBackup, prepareIncorporation, incorporateApprovedAdd
 import { approveMeasuredPeriod, editMeasuredRow, editMeasuredBulletin, deleteMeasuredRow, entryFor, newMeasuredRow, pasteMeasuredRow, freezeMeasuredPeriod, captureMeasurement, monthlyLines, addMeasuredPeriod, fiscalSubmissionCurrent, transactMeasurement, type MeasurementWorkspace, type MeasuredPeriod } from './measurementWorkspace';
 import { encodeMeasurementWorkspace } from './measurementCloudCodec';
 import { measurementEntryPatch } from './measurementEntryPatch';
+import { measurementAdditiveCatalogPatch } from './measurementAdditiveCatalogPatch';
 import { measurementCapturePatch } from './measurementCapturePatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { measurementConcurrentCommand } from './measurementConcurrentCommand';
@@ -74,6 +75,7 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261105010000_measurement_manual_unlink_targeted.sql',import.meta.url),'utf8'));
  await db.exec(await readFile(new URL('../../supabase/migrations/20261105090000_measurement_nondestructive_checkpoint.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261105120000_measurement_additive_quantity_adjustments.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261113150000_measurement_additive_catalog_commit.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -1383,6 +1385,63 @@ describe('transação da Medição na nuvem',()=>{
    [JSON.stringify(saved),JSON.stringify(saved.periods.find(p=>p.id==='m3'))]);
   expect(fiscalThird.rows.map(row=>row.line).find(line=>line.service.id==='signs')?.financial.totalContracted)
    .toBe(monthlyLines(saved,'m3').find(line=>line.service.id==='signs')?.financial.totalContracted);
+ });
+
+ it('incorpora 264 itens na 3ª medição sem enviar histórico nem alterar as duas anteriores',async()=>{
+  const original=base.services.find(service=>service.id==='signs')!;
+  const reviewed=freezeMeasuredPeriod(base,actor,'m2');
+  await seed(reviewed);
+  const pending=editMeasuredRow(reviewed,actor,'m3','signs',{...newMeasuredRow('catalog-delta'),multiplier:1});
+  await db.query('SELECT patch_measurement_entries_v2($1,$2,$3)',
+   [projectId,reviewed.revision,JSON.stringify(measurementEntryPatch(reviewed,pending))]);
+  const load=async()=>(await db.query<{value:MeasurementWorkspace}>(
+   'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value;
+  const previous=await load();
+  const services=Array.from({length:263},(_,index)=>({
+   id:`new-${index}`,item:`20.${index+1}`,code:'',bank:'',description:`Serviço ${index+1}`,
+   quantity:20,unit:'UN',unitPriceNoBDI:10,unitPriceWithBDI:12.5,total:250,inputs:[],isNewService:true,
+  }));
+  const adjustment={...services[0],id:'adjustment',isNewService:false,item:original.item,
+   description:original.description,unit:original.unit,baseTaskId:original.sourceTaskId,addedQuantity:5,suppressedQuantity:2};
+  const additive={id:'bulk-additive',name:'Aditivo',importedAt:'',compositions:[],status:'contratado' as const,
+   version:1,approvalSnapshots:[{version:1,approvedAt:'2026-10-09',bdiPercent:25,
+   globalDiscountPercent:0,totals:{},issues:[],compositions:[adjustment,...services]}]};
+  await db.query('INSERT INTO additives VALUES($1,$2,$3)',[projectId,additive.id,JSON.stringify(additive)]);
+  const next=incorporateApprovedAdditive(previous,actor,additive,3).workspace;
+  const patch=measurementAdditiveCatalogPatch(previous,next)!;
+  expect(patch.firstNumber).toBe(3);
+  expect(patch.payload.importedKeys.length-previous.importedKeys.length).toBe(264);
+  expect(Object.keys(patch.payload)).toEqual(['services','importedKeys','event']);
+  expect(patch.payload.event).not.toHaveProperty('beforeServices');
+  const rpc=async(payload=patch.payload,revision=previous.revision)=>(await db.query<{value:unknown}>(
+   'SELECT patch_measurement_additive_catalog($1,$2,$3) value',[projectId,revision,JSON.stringify(payload)])).rows[0].value;
+  await expect(rpc(patch.payload,previous.revision-1)).rejects.toThrow('Conflito');
+  const retroactive=structuredClone(patch.payload);
+  retroactive.services.find(service=>service.additiveId===additive.id)!.availableFromNumber=2;
+  await expect(rpc(retroactive)).rejects.toThrow('única medição inicial');
+  expect(await load()).toEqual(previous);
+  const receipt=await rpc();
+  expect(receipt).toMatchObject({projectId,revision:next.revision,firstNumber:3});
+  expect(await rpc()).toMatchObject({projectId,revision:next.revision,replayed:true});
+  const saved=await load();
+  expect(saved.periods).toEqual(previous.periods);
+  expect(saved.entries).toEqual(previous.entries);
+  expect(saved.plans).toEqual(previous.plans);
+  expect(saved.audit.slice(0,-1)).toEqual(previous.audit);
+  expect(saved.audit.at(-1)).toMatchObject({id:patch.payload.event.id,additiveFirstNumber:3});
+  for (const periodId of ['m1','m2']) {
+   const lines=(w:MeasurementWorkspace)=>monthlyLines(w,periodId).map(line=>({
+    id:line.service.id,contracted:line.service.contracted,financial:line.financial,
+   }));
+   expect(lines(saved)).toEqual(lines(previous));
+   expect(fiscalSubmissionCurrent(saved,periodId)).toBe(fiscalSubmissionCurrent(previous,periodId));
+  }
+  expect(monthlyLines(saved,'m3').filter(line=>line.service.additiveId===additive.id)).toHaveLength(263);
+  expect(monthlyLines(saved,'m3').find(line=>line.service.id==='signs')!.service.contracted).toBe(original.contracted+3);
+  const later=editMeasuredRow(saved,actor,'m3','signs',{...newMeasuredRow('after-catalog'),multiplier:1});
+  await db.query('SELECT patch_measurement_entries_v2($1,$2,$3)',
+   [projectId,saved.revision,JSON.stringify(measurementEntryPatch(saved,later))]);
+  expect(await load()).toEqual(JSON.parse(wire(later)));
  });
 
  it('confirma valores/histórico juntos, repete recibo e bloqueia revisão concorrente',async()=>{
