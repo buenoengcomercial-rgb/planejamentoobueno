@@ -1,7 +1,7 @@
 import { useWarehouseEditBase } from '@/hooks/useWarehouseEditBase';
 import { Fragment, useMemo, useRef, useState } from 'react';
 import type {
-  CustodyEquipmentStatus,
+  Equipment,
   CustodyTerm,
   CustodyTermEquipmentItem,
   Project,
@@ -23,6 +23,7 @@ import {
   Search,
   Trash2,
   Undo2,
+  UserRound,
   Wrench,
   X,
 } from 'lucide-react';
@@ -33,7 +34,8 @@ import {
   hardDeleteCustodyTerm,
   issueCustodyTerm,
   makeAttachments,
-  returnCustodyEquipment,
+  activeCustodyItems,
+  type ActiveCustodyItem,
   warehouseActorName,
   warehouseOperationalDate,
 } from '@/lib/warehouse';
@@ -42,6 +44,7 @@ import { useConfirmDelete } from '@/components/ConfirmDeleteDialog';
 import { getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
+import WarehouseCustodyReturnDialog from './WarehouseCustodyReturnDialog';
 import { toast } from 'sonner';
 import {
   WarehouseEmptyState,
@@ -76,13 +79,6 @@ interface CustodyForm {
 }
 
 type CustodyErrors = Partial<Record<'chapterId' | 'workerName' | 'equipments' | 'signatureReceiver', string>>;
-
-interface ReturnTarget {
-  term: CustodyTerm;
-  item: CustodyTermEquipmentItem;
-}
-
-type ReturnStatus = Exclude<CustodyEquipmentStatus, 'em_uso'>;
 
 const initialForm = (): CustodyForm => ({
   issuedAt: warehouseOperationalDate(),
@@ -212,7 +208,9 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
     [numbering, project.phases],
   );
   const [open, setOpen] = useState(false);
-  const [custodyView, setCustodyView] = useState<'daily' | 'history'>('daily');
+  const [custodyView, setCustodyView] = useState<'active' | 'daily' | 'history'>('active');
+  const [activeSearch, setActiveSearch] = useState('');
+  const activeSearchRef = useRef<HTMLInputElement>(null);
   const [selectedDate, setSelectedDate] = useState(warehouseOperationalDate);
   const [expandedTermIds, setExpandedTermIds] = useState<Set<string>>(() => new Set());
   const [dateExpansionOverrides, setDateExpansionOverrides] = useState<Map<string, boolean>>(() => new Map());
@@ -223,17 +221,26 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
   const [errors, setErrors] = useState<CustodyErrors>({});
   const cameraRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
-  const [returnTarget, setReturnTarget] = useState<ReturnTarget | null>(null);
-  const [returnData, setReturnData] = useState({
-    returnedAt: warehouseOperationalDate(),
-    stateOnReturn: '',
-    divergenceNotes: '',
-    status: 'devolvido' as ReturnStatus,
-  });
-  const [returnPhotos, setReturnPhotos] = useState<File[]>([]);
-  const [returning, setReturning] = useState(false);
+  const [returnTarget, setReturnTarget] = useState<ActiveCustodyItem | null>(null);
+  const activeItems = useMemo(() => {
+    const equipmentById = new Map(wh.equipments.map(equipment => [equipment.id, equipment]));
+    const destinationByTerm = new Map<string, string>();
+    return activeCustodyItems(wh.custodyTerms).map(target => {
+      const { term, item } = target;
+      const equipment = equipmentById.get(item.equipmentId);
+      const searchText = normalizeSearch([
+        term.workerName, term.number, item.equipmentName, item.equipmentInternalCode, item.equipmentPatrimony, item.equipmentSerial,
+        equipment?.name, equipment?.description, equipment?.internalCode, equipment?.patrimony, equipment?.serial,
+      ].filter(Boolean).join(' '));
+      const destination = destinationByTerm.get(term.id) ?? custodyDestination(project, term);
+      destinationByTerm.set(term.id, destination);
+      return { ...target, equipment, destination, searchText };
+    });
+  }, [project, wh.custodyTerms, wh.equipments]);
+  const searchTokens = normalizeSearch(activeSearch).split(/\s+/).filter(Boolean);
+  const visibleActiveItems = activeItems.filter(({ searchText }) => searchTokens.every(token => searchText.includes(token)));
 
-  const editBase = useWarehouseEditBase(project, open || !!returnTarget);
+  const editBase = useWarehouseEditBase(project, open);
   const commitCustody = async (next: Project) => {
     if (onCommitWarehouseScoped) {
       const accepted = await onCommitWarehouseScoped(next, 'custody', editBase.project);
@@ -350,36 +357,9 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
     }
   };
 
-  const startReturn = (term: CustodyTerm, item: CustodyTermEquipmentItem) => {
-    setReturnTarget({ term, item });
-    setReturnData({ returnedAt: warehouseOperationalDate(), stateOnReturn: '', divergenceNotes: '', status: 'devolvido' });
-    setReturnPhotos([]);
-  };
+  const startReturn = (term: CustodyTerm, item: CustodyTermEquipmentItem) => setReturnTarget({ term, item });
 
-  const submitReturn = async () => {
-    if (!returnTarget) return;
-    const exception = returnData.status !== 'devolvido';
-    if (exception && !returnData.divergenceNotes.trim()) return toast.error('Descreva a ocorrência da devolução.');
-    if (exception && !returnPhotos.length) return toast.error('Adicione ao menos uma foto da ocorrência.');
-    try {
-      setReturning(true);
-      const returnAttachments = await makeAttachments(returnPhotos, project.id, 'foto', 'equipment-returns');
-      const next = returnCustodyEquipment(project, returnTarget.term.id, returnTarget.item.equipmentId, {
-        ...returnData,
-        returnAttachments,
-      }, auditActor);
-      await commitCustody(next);
-      setReturnTarget(null);
-      setReturnPhotos([]);
-      toast.success('Devolução do equipamento registrada.');
-    } catch (error) {
-      toast.error((error as Error).message);
-    } finally {
-      setReturning(false);
-    }
-  };
-
-  const sortedTerms = wh.custodyTerms.slice().sort((a, b) => b.issuedAt.localeCompare(a.issuedAt) || b.createdAt.localeCompare(a.createdAt));
+  const sortedTerms = useMemo(() => wh.custodyTerms.slice().sort((a, b) => b.issuedAt.localeCompare(a.issuedAt) || b.createdAt.localeCompare(a.createdAt)), [wh.custodyTerms]);
   const dailyTerms = useMemo(() => wh.custodyTerms.filter(term => term.issuedAt === selectedDate)
     .sort((a, b) => custodyRecordTimestamp(b).localeCompare(custodyRecordTimestamp(a)) || b.number.localeCompare(a.number, 'pt-BR', { numeric: true })), [wh.custodyTerms, selectedDate]);
   const custodyBuildingGroups = useMemo(() => groupCustodyTermsByBuilding(project, sortedTerms), [project, sortedTerms]);
@@ -488,11 +468,27 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
         </DialogContent>
       </Dialog>
 
-      <Tabs value={custodyView} onValueChange={value => setCustodyView(value as 'daily' | 'history')} className="space-y-3">
-        <TabsList className="grid h-auto min-h-12 w-full grid-cols-2 rounded-xl border bg-muted/70 p-1 shadow-sm max-[320px]:grid-cols-1 sm:w-fit sm:min-w-[390px]" aria-label="Consulta de equipamentos e cautelas">
+      <Tabs value={custodyView} onValueChange={value => setCustodyView(value as 'active' | 'daily' | 'history')} className="space-y-3">
+        <TabsList className="grid h-auto min-h-12 w-full grid-cols-1 rounded-xl border bg-muted/70 p-1 shadow-sm sm:w-fit sm:grid-cols-3" aria-label="Consulta de equipamentos e cautelas">
+          <TabsTrigger value="active" className="min-h-11 whitespace-normal rounded-lg px-2 text-xs font-bold data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Em uso / Pendentes de devolução</TabsTrigger>
           <TabsTrigger value="daily" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Movimentações do dia</TabsTrigger>
-          <TabsTrigger value="history" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Histórico completo</TabsTrigger>
+          <TabsTrigger value="history" className="min-h-11 rounded-lg px-2 text-xs font-bold max-[320px]:whitespace-normal data-[state=active]:bg-card data-[state=active]:text-primary sm:text-sm">Histórico por data / prédio</TabsTrigger>
         </TabsList>
+        <TabsContent value="active" className="mt-0 space-y-3">
+          <div className="relative">
+            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input ref={activeSearchRef} type="search" aria-label="Buscar cautelas ativas" placeholder="Buscar por pessoa (ex: João), equipamento, patrimônio ou TC..." className="min-h-11 pl-9 pr-12 text-base [&::-webkit-search-cancel-button]:hidden" value={activeSearch} onChange={event => setActiveSearch(event.target.value)} />
+            {activeSearch && <Button type="button" variant="ghost" size="icon" aria-label="Limpar busca" className="absolute inset-y-0 right-0 h-full w-11" onClick={() => { setActiveSearch(''); activeSearchRef.current?.focus(); }}><X className="h-4 w-4" /></Button>}
+          </div>
+          <p role="status" className="text-sm text-muted-foreground">{visibleActiveItems.length} de {activeItems.length} equipamento(s) pendente(s)</p>
+          {visibleActiveItems.length ? <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {visibleActiveItems.map(({ term, item, equipment, destination }) => <ActiveCustodyCard key={JSON.stringify([term.id, item.equipmentId])} term={term} item={item} equipment={equipment} destination={destination} onReturn={() => startReturn(term, item)} />)}
+          </div> : <WarehouseEmptyState
+            message={searchTokens.length ? 'Nenhum equipamento em uso encontrado para este termo de busca' : 'Nenhum equipamento pendente de devolução'}
+            hint={searchTokens.length ? 'Tente outro nome, código, patrimônio, série ou número de cautela.' : 'Os equipamentos entregues em novas cautelas aparecerão aqui.'}
+            icon={Wrench}
+          />}
+        </TabsContent>
         <TabsContent value="daily" className="mt-0">
           <section aria-label="Movimentações do dia" className="min-w-0 space-y-3">
             <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 sm:flex-row sm:items-end sm:justify-between sm:p-4">
@@ -545,22 +541,42 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
         </TabsContent>
       </Tabs>
 
-      <Dialog open={!!returnTarget} onOpenChange={value => { if (!value && !returning) setReturnTarget(null); }}>
-        <DialogContent className="warehouse-ui max-h-[calc(100dvh-1rem)] overflow-y-auto sm:max-w-xl">
-          <DialogHeader><DialogTitle>Devolver equipamento</DialogTitle><DialogDescription>{returnTarget?.term.number} · {returnTarget?.item.equipmentInternalCode || ''} {returnTarget?.item.equipmentName}</DialogDescription></DialogHeader>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Data da devolução"><Input className="min-h-11 text-base" type="date" value={returnData.returnedAt} onChange={event => setReturnData({ ...returnData, returnedAt: event.target.value })} /></Field>
-            <Field label="Resultado"><select className="min-h-11 w-full rounded-md border bg-background px-3 text-base" value={returnData.status} onChange={event => setReturnData({ ...returnData, status: event.target.value as ReturnStatus })}><option value="devolvido">Devolvido OK</option><option value="divergencia">Com divergência</option><option value="danificado">Danificado</option><option value="perdido">Perdido</option></select></Field>
-            <div className="sm:col-span-2"><Field label="Estado na devolução"><Input className="min-h-11 text-base" value={returnData.stateOnReturn} onChange={event => setReturnData({ ...returnData, stateOnReturn: event.target.value })} placeholder="Condição observada" /></Field></div>
-            {returnData.status !== 'devolvido' && <div className="sm:col-span-2"><Field label="Descrição da ocorrência (obrigatória)"><Input className="min-h-11 text-base" value={returnData.divergenceNotes} onChange={event => setReturnData({ ...returnData, divergenceNotes: event.target.value })} /></Field></div>}
-            <div className="sm:col-span-2"><label className="mb-1 block text-xs font-semibold">Fotos {returnData.status === 'devolvido' ? '(opcionais)' : '(ao menos uma obrigatória)'}</label><Input className="min-h-11 text-base" type="file" accept="image/*" capture="environment" multiple onChange={event => setReturnPhotos(Array.from(event.target.files ?? []).filter(file => file.type.startsWith('image/')).slice(0, 3))} /><div className="mt-1 text-xs text-muted-foreground">{returnPhotos.length} foto(s) selecionada(s)</div></div>
-          </div>
-          <DialogFooter><Button variant="outline" className="min-h-11" disabled={returning} onClick={() => setReturnTarget(null)}>Cancelar</Button><Button className="min-h-11" disabled={returning} onClick={() => void submitReturn()}><Undo2 className="mr-2 h-4 w-4" />{returning ? 'Registrando...' : 'Confirmar devolução'}</Button></DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {returnTarget && <WarehouseCustodyReturnDialog project={project} target={returnTarget} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} auditActor={auditActor} onClose={() => setReturnTarget(null)} />}
       {confirmDialog}
     </div>
   );
+}
+
+function ActiveCustodyCard({ term, item, equipment, destination, onReturn }: ActiveCustodyItem & { equipment?: Equipment; destination: string; onReturn: () => void }) {
+  const title = equipment?.description || equipment?.name || item.equipmentName;
+  const thumbnail: Equipment = equipment?.photos?.length ? equipment : {
+    id: item.equipmentId,
+    name: title,
+    createdAt: term.createdAt,
+    photos: item.equipmentPhoto ? [item.equipmentPhoto] : undefined,
+  };
+  return <article className="flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm">
+    <div className="flex items-start gap-3">
+      <WarehouseEquipmentThumbnail equipment={thumbnail} className="h-16 w-16" />
+      <div className="min-w-0 break-words">
+        <p className="text-xs font-bold text-primary">{equipment?.internalCode || item.equipmentInternalCode || 'Código legado'}</p>
+        <h3 className="font-bold leading-tight">{title}</h3>
+        <p className="text-xs text-muted-foreground">Patrimônio: {equipment?.patrimony || item.equipmentPatrimony || '—'}</p>
+      </div>
+    </div>
+    <div className="flex items-start gap-2 rounded-lg bg-primary/10 p-2.5 font-bold [overflow-wrap:anywhere]">
+      <UserRound aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+      <span>Com: {term.workerName || 'Responsável não informado'}</span>
+    </div>
+    <div className="flex-1 space-y-1 break-words text-xs text-muted-foreground">
+      <p><strong className="font-mono text-foreground">{term.number}</strong> · Entrega: {formatOperationalDate(term.issuedAt)}</p>
+      <p>Destino: {destination}</p>
+      {term.dueDate && <p>Devolução prevista: {formatOperationalDate(term.dueDate)}</p>}
+    </div>
+    <Button type="button" className="min-h-11 w-full" aria-label={`Devolver ${title} · ${term.number}`} onClick={onReturn}>
+      <Undo2 aria-hidden="true" className="mr-2 h-4 w-4" />Devolver
+    </Button>
+  </article>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

@@ -2124,6 +2124,17 @@ export function custodyTermEquipmentItems(term: CustodyTerm): CustodyTermEquipme
   }];
 }
 
+export interface ActiveCustodyItem {
+  term: CustodyTerm;
+  item: CustodyTermEquipmentItem;
+}
+
+export function activeCustodyItems(terms: CustodyTerm[]): ActiveCustodyItem[] {
+  return terms.flatMap(term => custodyTermEquipmentItems(term)
+    .filter(item => item.status === 'em_uso')
+    .map(item => ({ term, item })));
+}
+
 export function custodyTermAggregateStatus(termOrItems: CustodyTerm | CustodyTermEquipmentItem[]): CustodyTermStatus {
   const items = Array.isArray(termOrItems) ? termOrItems : custodyTermEquipmentItems(termOrItems);
   if (!items.length || items.every(item => item.status === 'em_uso')) return 'em_uso';

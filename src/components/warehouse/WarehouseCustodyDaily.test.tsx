@@ -27,7 +27,7 @@ function makeProject(): Project {
   };
 }
 
-function switchView(name: 'Histórico completo' | 'Movimentações do dia') {
+function switchView(name: 'Histórico por data / prédio' | 'Movimentações do dia') {
   const tab = screen.getByRole('tab', { name });
   fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
   fireEvent.click(tab);
@@ -40,8 +40,9 @@ describe('movimentações diárias de cautelas', () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   });
 
-  it('abre no dia atual e mostra termos de todos os capítulos em uma tabela ordenada pelo último registro', () => {
+  it('ao abrir a consulta diária, começa no dia atual e mostra termos de todos os capítulos em uma tabela ordenada pelo último registro', () => {
     render(<WarehouseCustodyTab project={makeProject()} onProjectChange={vi.fn()} />);
+    switchView('Movimentações do dia');
     expect(screen.getByRole('tab', { name: 'Movimentações do dia' })).toHaveAttribute('data-state', 'active');
     expect(screen.getByLabelText('Data das movimentações')).toHaveValue(warehouseOperationalDate());
     fireEvent.change(screen.getByLabelText('Data das movimentações'), { target: { value: '2026-09-30' } });
@@ -62,6 +63,7 @@ describe('movimentações diárias de cautelas', () => {
 
   it('mantém nome completo e devolução dentro do detalhe do termo original', () => {
     render(<WarehouseCustodyTab project={makeProject()} onProjectChange={vi.fn()} />);
+    switchView('Movimentações do dia');
     fireEvent.change(screen.getByLabelText('Data das movimentações'), { target: { value: '2026-09-30' } });
     fireEvent.click(screen.getByRole('row', { name: 'Cautela TC-2026-0002' }));
     const details = screen.getByTestId('custody-history-details');
@@ -74,6 +76,7 @@ describe('movimentações diárias de cautelas', () => {
   it('gera um PDF por cautela da data selecionada', async () => {
     const project = makeProject();
     render(<WarehouseCustodyTab project={project} onProjectChange={vi.fn()} />);
+    switchView('Movimentações do dia');
     fireEvent.change(screen.getByLabelText('Data das movimentações'), { target: { value: '2026-09-30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Gerar PDFs' }));
     await vi.waitFor(() => expect(generateCustodyTermPdf).toHaveBeenCalledTimes(4));
@@ -84,9 +87,10 @@ describe('movimentações diárias de cautelas', () => {
     const onProjectChange = vi.fn();
     const onCommitWarehouseScoped = vi.fn();
     render(<WarehouseCustodyTab project={makeProject()} onProjectChange={onProjectChange} onCommitWarehouseScoped={onCommitWarehouseScoped} />);
+    switchView('Movimentações do dia');
     fireEvent.change(screen.getByLabelText('Data das movimentações'), { target: { value: '2026-09-30' } });
     fireEvent.click(screen.getByRole('row', { name: 'Cautela TC-2026-0002' }));
-    switchView('Histórico completo');
+    switchView('Histórico por data / prédio');
     expect(screen.getByText('Histórico de cautelas')).toBeInTheDocument();
     expect(screen.getAllByTestId('custody-building-group')).toHaveLength(3);
     fireEvent.click(screen.getByRole('button', { name: /Expandir cautelas de 28\/09\/2026/i }));
