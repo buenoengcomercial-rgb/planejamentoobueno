@@ -167,10 +167,11 @@ export default function ProjectAreaContent({
         independentMeasurementConfirmed={independentMeasurementConfirmed}
         openMeasurement={role && canAccessAppView(role, 'measurement') ? () => onViewChange('measurement') : undefined}
         openAdditive={role && canAccessAppView(role, 'additive') ? () => onViewChange('additive') : undefined}
-        renderGantt={additives => (
+        renderGantt={(additives, measurement) => (
           <GanttChart
             project={project}
             confirmedAdditives={additives}
+            confirmedMeasurement={measurement}
             onProjectChange={ganttSetter}
             readOnly={!editor}
             canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}

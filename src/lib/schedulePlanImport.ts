@@ -6,6 +6,7 @@ import { replaceProjectTasksById } from './taskTree';
 import { logToProject, type AuditUserInfo } from './audit';
 import { DEFAULT_TEAMS, deriveTeamColors } from './teams';
 import { nextOperationalDate, operationalEndDate, parseScheduleDate, scheduleDateISO, scheduleWorkdayWeight } from './scheduleCalendar';
+import { includeClosingSchedule, calculateClosingCPM } from './closingSchedule';
 import { checkDependencyViolation } from './calculations';
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
@@ -13,11 +14,12 @@ const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }, 'Data inválida');
 const dependency = z.object({ taskId: z.string().min(1), type: z.enum(['TI', 'II', 'TT', 'IT']), lag: z.number().int().min(-1000).max(1000).optional() }).strict();
+const closingActivity = z.object({ id: z.string().min(1), name: z.string().min(1).max(200), startDate: date, duration: z.number().int().min(1).max(100), team: z.string().min(1), dependencies: z.array(dependency).max(1000), reason: z.string().min(1).max(4000) }).strict();
 const schema = z.object({
   version: z.literal(1), projectId: z.string(), name: z.string().min(1).max(200),
   calendar: z.object({ uf: z.string().length(2), municipio: z.string().min(1), jornadaDiaria: z.number().min(1).max(24), trabalhaSabado: z.boolean() }).strict(),
   teams: z.array(z.object({ code: z.string().min(1), label: z.string().min(1), composition: z.string().min(1) }).strict()).max(100),
-  tasks: z.array(z.object({ id: z.string().min(1),
+  tasks: z.array(z.object({ closingActivities: z.array(closingActivity).max(50).optional(), closingDeadline: date.optional(), id: z.string().min(1),
     expected: z.object({ startDate: date, duration: z.number(), quantity: z.number().nullable(), percentComplete: z.number() }).strict(),
     startDate: date, duration: z.number().multipleOf(0.125).min(0.125).max(2000), team: z.string().min(1),
     remainingQuantity: z.number().positive(), dependencies: z.array(dependency).max(100), reason: z.string().min(1).max(4000),
@@ -29,7 +31,7 @@ export interface SchedulePlanImport {
   name: string;
   calendar: Omit<ProjectScheduleCalendar, 'exceptions'>;
   teams: Array<{ code: string; label: string; composition: string }>;
-  tasks: Array<{ id: string; expected: { startDate: string; duration: number; quantity: number | null; percentComplete: number };
+  tasks: Array<{ closingActivities?: import('@/types/project').ClosingScheduleActivity[]; closingDeadline?: string; id: string; expected: { startDate: string; duration: number; quantity: number | null; percentComplete: number };
     startDate: string; duration: number; team: string; remainingQuantity: number; dependencies: TaskDependency[]; reason: string }>;
 }
 export const parseSchedulePlanImport = (value: unknown): SchedulePlanImport => schema.parse(value) as SchedulePlanImport;
@@ -39,7 +41,23 @@ export function applySchedulePlanImport(project: Project, input: SchedulePlanImp
   lockedTaskIds: ReadonlySet<string> = new Set(), additives: readonly Additive[] = project.additives ?? []): Project {
   const plan = parseSchedulePlanImport(input);
   if (plan.projectId !== project.id) throw new Error('A programação pertence a outra obra.');
-  const all = getAllTasks(project), current = new Map(all.map(task => [task.id, task]));
+  const projected = includeClosingSchedule(project);
+  let all = getAllTasks(projected.project);
+  const added: Task[] = [];
+  const closingIds = new Set<string>();
+  for (const row of plan.tasks) {
+    const previous = all.find(t => t.id === row.id)?.operationalReschedule?.closingActivities ?? [];
+    if (row.closingActivities && previous.some(a => !row.closingActivities!.some(next => next.id === a.id))) {
+      throw new Error('A revisão deve preservar as etapas operacionais existentes e seus vínculos.');
+    }
+  }
+  for (const row of plan.tasks) for (const a of row.closingActivities ?? []) {
+    if (!a.id.startsWith(`closing:${row.id}:`) || closingIds.has(a.id) || all.some(t => t.id === a.id && !projected.taskIds.has(t.id))) throw new Error('Identificador de etapa operacional inválido ou duplicado.');
+    closingIds.add(a.id);
+    added.push({ ...a, phase: 'operational-closing-schedule', dependencies: a.dependencies.map(d => d.taskId), dependencyDetails: a.dependencies, percentComplete: 0, responsible: '', materials: [], level: 0 });
+  }
+  all = [...all.filter(t => !closingIds.has(t.id)), ...added];
+  const current = new Map(all.map(task => [task.id, task]));
   const ids = new Set<string>(), changes = new Map<string, Task>();
   const teams = [...(project.teams ?? DEFAULT_TEAMS)];
   const teamIds = new Set(teams.map(team => team.code));
@@ -71,11 +89,16 @@ export function applySchedulePlanImport(project: Project, input: SchedulePlanImp
       baseline: task.baseline ?? { startDate: task.startDate, duration: task.duration,
         endDate: operationalEndDate(task.startDate, task.duration, calendar), quantity: task.quantity, capturedAt: now },
       dependencies: row.dependencies.map(dep => dep.taskId), dependencyDetails: row.dependencies,
-      operationalReschedule: { requestId: `import-${now}-${task.id}`, scope: 'remaining_work',
+      operationalReschedule: { ...task.operationalReschedule, closingActivities: row.closingActivities ?? task.operationalReschedule?.closingActivities, closingDeadline: row.closingDeadline ?? task.operationalReschedule?.closingDeadline, requestId: `import-${now}-${task.id}`, scope: 'remaining_work',
         startDate: row.startDate, duration: row.duration, quantity: row.remainingQuantity,
         endDate: operationalEndDate(row.startDate, row.duration, calendar), reason: row.reason,
         approvedAt: now, approvedBy: actor.userName ?? actor.userEmail },
     });
+  }
+  for (const t of added) {
+    if (!teamIds.has(t.team!) || nextOperationalDate(t.startDate, calendar) !== t.startDate) throw new Error('Equipe ou calendário inválido na etapa operacional.');
+    if (t.dependencies.some(id => !current.has(id) || id === t.id)) throw new Error('Predecessora inválida na etapa operacional.');
+    changes.set(t.id, t);
   }
   const visiting = new Set<string>(), visited = new Set<string>();
   const visit = (id: string) => {
@@ -104,6 +127,9 @@ export function applySchedulePlanImport(project: Project, input: SchedulePlanImp
     }
   }
   const next = { ...replaceProjectTasksById(project, changes), teams, scheduleCalendar: calendar };
+  if (getAllTasks(calculateClosingCPM(includeClosingSchedule(next).project)).some(t => t.float !== undefined && t.float < -1e-8)) {
+    throw new Error('A programação excede o prazo de fechamento; revise as durações e os vínculos.');
+  }
   return logToProject(next, { ...actor, entityType: 'project', entityId: project.id, action: 'updated',
     title: 'Programação operacional importada', description: `${plan.name}: ${changes.size} atividades.`,
     before: plan.tasks.map(row => ({ id: row.id, ...row.expected })),
