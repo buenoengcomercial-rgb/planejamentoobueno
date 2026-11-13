@@ -2,6 +2,7 @@ import type { Project, Task } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
 import { replaceProjectTasksById } from '@/lib/taskTree';
+import { inheritProjectWriteOrigin } from '@/lib/projectOperations';
 
 function executionStateFromOperationalTask(rawTask: Task, operationalTask?: Task): Task {
   if (!operationalTask) return rawTask;
@@ -33,5 +34,5 @@ export function mergeOperationalProjectIntoRaw(previous: Project, nextOperationa
       ? executionStateFromOperationalTask(task, nextTasks.get(task.id))
       : (nextTasks.get(task.id) ?? task),
   ]));
-  return { ...nextOperational, phases: replaceProjectTasksById(previous, mergedTasks).phases };
+  return inheritProjectWriteOrigin(nextOperational, { ...nextOperational, phases: replaceProjectTasksById(previous, mergedTasks).phases });
 }
