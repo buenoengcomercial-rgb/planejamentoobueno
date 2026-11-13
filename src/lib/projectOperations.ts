@@ -44,7 +44,7 @@ function allowed(view: string, path: Path): boolean {
       return planningTaskFields.has(path[taskIndex + 2]);
     }
     if (path[0] === 'additives') return ['scheduleDraft', 'scheduleSnapshots'].some(key => path.includes(key));
-    return ['startDate', 'endDate', 'calendar', 'calendars', 'holidays', 'workDays', 'scheduleCalendar', 'teams', 'rescheduleRequests', 'uiState', 'auditLogs'].includes(path[0]);
+    return ['startDate', 'endDate', 'calendar', 'calendars', 'holidays', 'workDays', 'scheduleCalendar', 'teams', 'rescheduleRequests', 'contractedTaskSchedules', 'uiState', 'auditLogs'].includes(path[0]);
   }
   if (path.includes('dailyLogs')) return ['tasks', 'management'].includes(view);
   if (path[0] === 'measurements') return view === 'measurement';

@@ -104,6 +104,11 @@ export interface TaskDependency {
   type: DependencyType;
 }
 
+/** Operational dates for archived additive rows, without rewriting the approved archive. */
+export type ContractedTaskSchedule = Pick<Task, 'startDate' | 'duration' | 'dependencies' |
+  'dependencyDetails' | 'team' | 'scheduleOrder' | 'durationMode' | 'isManual' |
+  'manualDuration' | 'operationalReschedule'> & { archiveId: string };
+
 export interface TaskLocation {
   torre?: string;
   pavimento?: number;
@@ -912,6 +917,7 @@ export interface Project {
   auditLogs?: AuditLog[];
   /** Solicitações de reprogramação operacional, preservadas para aprovação e auditoria. */
   rescheduleRequests?: TaskRescheduleRequest[];
+  contractedTaskSchedules?: Record<string, ContractedTaskSchedule>;
   /** Comparativos de preços de materiais (Lista de Material). Isolado das demais áreas. */
   materialComparisons?: MaterialComparison[];
   /** Histórico consolidado de preços de materiais (todas as cotações fechadas). */

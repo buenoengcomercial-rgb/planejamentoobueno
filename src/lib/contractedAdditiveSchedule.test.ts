@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { includeContractedAdditiveTasks } from '@/lib/contractedAdditiveSchedule';
+import { captureContractedTaskSchedules, includeContractedAdditiveTasks } from '@/lib/contractedAdditiveSchedule';
+import { applyProjectOperation, projectWriteOrigin } from '@/lib/projectOperations';
+import { mergeOperationalProjectIntoRaw } from '@/lib/operationalProject';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import type { Additive } from '@/types/project';
 
@@ -18,6 +20,30 @@ const confirmedAdditive: Additive = {
 };
 
 describe('serviços aditivados no Gantt', () => {
+  it('persiste datas operacionais sem criar tarefas fiscais nem modificar o arquivo aprovado', () => {
+    const { project } = measurementFixture();
+    const untouched = JSON.stringify({ project, confirmedAdditive });
+    const display = includeContractedAdditiveTasks(project, [confirmedAdditive]);
+    const after = structuredClone(display.project);
+    const task = after.phases.at(-1)!.tasks[0];
+    Object.assign(task, { startDate: '2026-11-13', duration: 12, dependencies: ['detectors'],
+      dependencyDetails: [{ taskId: 'detectors', type: 'II' }], quantity: 999, percentComplete: 99 });
+    const captured = captureContractedTaskSchedules(project, display.project, after, [confirmedAdditive], display.projectedTaskIds);
+    const persisted = mergeOperationalProjectIntoRaw(project,
+      applyProjectOperation('gantt', display.project, display.project, captured));
+    expect(persisted.phases).toEqual(project.phases);
+    expect(projectWriteOrigin(persisted)).toBe('gantt');
+    const reloaded = includeContractedAdditiveTasks(JSON.parse(JSON.stringify(persisted)), [confirmedAdditive]);
+    expect(reloaded.project.phases.at(-1)!.tasks[0]).toMatchObject({ startDate: '2026-11-13', duration: 12,
+      dependencyDetails: [{ taskId: 'detectors', type: 'II' }], quantity: 3, percentComplete: 0 });
+    expect(JSON.stringify({ project, confirmedAdditive })).toBe(untouched);
+  });
+
+  it('não aplica programação de outra revisão do arquivo', () => {
+    const { project } = measurementFixture();
+    project.contractedTaskSchedules = { 'add-ad-new': { archiveId: 'outro', startDate: '2027-04-01', duration: 30, dependencies: [] } };
+    expect(includeContractedAdditiveTasks(project, [confirmedAdditive]).project.phases.at(-1)!.tasks[0].startDate).toBe('2026-11-02');
+  });
   it('recupera a tarefa e datas pelo arquivo da revisão contratada sem alterar a EAP', () => {
     const { project } = measurementFixture();
     const result = includeContractedAdditiveTasks(project, [confirmedAdditive]);
