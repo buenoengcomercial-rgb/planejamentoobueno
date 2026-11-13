@@ -195,6 +195,37 @@ describe('Tela própria de Medição', () => {
     await waitFor(() => expect(repository.load).toHaveBeenCalledTimes(2));
     expect(repository.clearDraft).not.toHaveBeenCalled();
   });
+  it('destrava a conferência após timeout com gravação pendente sem reenviar durante a consulta', async () => {
+    const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem';
+    let cached = false;
+    repository.loadedOffline = () => cached;
+    repository.loadState = () => cached
+      ? { source: 'cache', checking: false, error: { kind: 'timeout', message: 'canceling statement due to statement timeout' } }
+      : { source: 'cloud', checking: false };
+    repository.stage = vi.fn(async () => undefined);
+    repository.commit = vi.fn().mockImplementationOnce(async () => {
+      cached = true;
+      throw new Error('canceling statement due to statement timeout');
+    }).mockImplementation(async candidate => candidate);
+    repository.loadForRetry = vi.fn(async () => { cached = false; return w; });
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    const field = await screen.findByLabelText('Objeto');
+    fireEvent.change(field, { target: { value: 'Escopo pendente' } }); fireEvent.blur(field);
+    const consult = await screen.findByRole('button', { name: 'Tentar consultar novamente' });
+    expect(consult).toBeEnabled();
+    expect(screen.getByText('Aguardando envio à nuvem')).toBeVisible();
+    expect(screen.queryByText('Atualização em outro aparelho')).not.toBeInTheDocument();
+    fireEvent.click(consult);
+    fireEvent.click(consult);
+    await waitFor(() => expect(repository.loadForRetry).toHaveBeenCalledTimes(1));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    expect(field).toHaveValue('Escopo pendente');
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar salvar' }));
+    await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+    expect(repository.loadForRetry).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Tentar salvar' })).not.toBeInTheDocument());
+    expect(vi.mocked(repository.commit).mock.calls[1][0].periods[0].bulletin?.contract.contractObject).toBe('Escopo pendente');
+  });
   it('mostra Sem internet somente quando o navegador informa desconexão', async () => {
     const { repository } = fixture(); repository.savedLabel = 'Salvo na nuvem';
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);

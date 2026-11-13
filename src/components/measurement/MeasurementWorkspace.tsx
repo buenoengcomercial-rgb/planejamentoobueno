@@ -77,6 +77,17 @@ async function confirmedCommitResponse(repository: MeasurementRepository, candid
   const operationId = candidate.audit.at(-1)?.id;
   return !!operationId && await repository.confirmedOperation?.(operationId, candidate.revision) === true;
 }
+function measurementConflictValues(message: string, candidate: Workspace | undefined, remote: Workspace | null): string {
+  const path = /Conflito no campo entries\/[^/]+\/rows\/([^/]+)\/([^/.\s]+)/i.exec(message);
+  const affected = candidate?.audit.at(-1)?.affected[0];
+  if (!path || !candidate || !remote || !affected) return '';
+  const row = (workspace: Workspace) => workspace.entries.find(entry => entry.measurementId === affected.measurementId
+    && entry.serviceId === affected.serviceId)?.rows.find(value => value.id === path[1]);
+  const local = row(candidate)?.[path[2] as keyof ReturnType<typeof row> & string];
+  const cloud = row(remote)?.[path[2] as keyof ReturnType<typeof row> & string];
+  if (local === undefined || cloud === undefined || typeof local === 'object' || typeof cloud === 'object') return '';
+  return ` Local: ${String(local)} · Nuvem na última conferência: ${String(cloud)}.`;
+}
 /** A lost response may hide a confirmed write. Rebase queued cells only if the
  * loaded workspace still contains exactly that write's operational state. */
 function sameCommittedCore(left: Workspace, right: Workspace): boolean {
@@ -184,6 +195,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [periodOpen, setPeriodOpen] = useState(false), [fiscalOpen, setFiscalOpen] = useState(false);
   const [lifecycle, setLifecycle] = useState<LifecycleSelection | null>(null);
   const [drafts, setDrafts] = useState<WorkspaceDraft[]>([]), [recovery, setRecovery] = useState(false);
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  const [checkingRead, setCheckingRead] = useState(false), [readCheckError, setReadCheckError] = useState('');
+  const readCheckInFlight = useRef(false);
   const [resolvingDraft, setResolvingDraft] = useState<string | null>(null);
   const [legacyRemaining, setLegacyRemaining] = useState<string[]>([]);
   const [, markDraftChange] = useState(0);
@@ -380,7 +395,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         setError(`${lastSaveFailure.current} Esta operação não foi gravada na nuvem.`);
         setStatus('Falha no salvamento');
         try {
-          const latest = await repository.load();
+          const latest = await (repository.loadForRetry?.() ?? repository.load());
           if (latest && !repository.loadedOffline?.()) {
             adopt(latest);
             setActive(previous => {
@@ -396,7 +411,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       }
       uncertainCommit.current = candidate;
       setError(`${lastSaveFailure.current} A alteração ainda está somente nesta página; não feche nem recarregue até conferir a nuvem.`);
-      setStatus('Precisa resolver conflito'); setRecovery(true); return false;
+      setStatus(/57014|statement timeout|canceling statement|timeout/i.test(lastSaveFailure.current)
+        ? 'Aguardando nuvem' : 'Precisa resolver conflito');
+      setRecovery(true); return false;
     }
     finally {
       busy.current = false; setSaving(false);
@@ -542,7 +559,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           // Later tasks are rebuilt against the last confirmed revision. A
           // failed task stays visible, but never becomes the base of another.
           try {
-            const latest = await repository.load();
+            const latest = await (repository.loadForRetry?.() ?? repository.load());
             if (latest && !repository.loadedOffline?.()) current.current = latest;
           } catch { /* Keep the confirmed copy until the next task can retry. */ }
           for (const queued of detailQueue.current) queued.candidate = undefined;
@@ -976,12 +993,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     let latest: Workspace | null = null;
     try {
       const previousRevision = current.current.revision;
-      latest = await repository.load();
+      latest = await (repository.loadForRetry?.() ?? repository.load());
       if (!latest) throw new Error('Não foi possível conferir a medição salva na nuvem.');
       if (repository.loadedOffline?.()) {
-        setError(repository.savedLabel === 'Salvo na nuvem'
-          ? 'Sem conexão com a nuvem. A alteração não confirmada está somente nesta página; não feche nem recarregue.'
-          : 'Sem conexão com a nuvem. Os lançamentos locais permanecem guardados e serão enviados ao reconectar.');
+        const timedOut = repository.loadState?.().error?.kind === 'timeout';
+        setError(timedOut
+          ? 'O banco demorou para responder. A gravação ainda não foi confirmada; tente conferir novamente.'
+          : online ? 'Não foi possível conferir a nuvem. A gravação ainda não foi confirmada.'
+            : 'Sem internet. A gravação ainda não foi confirmada.');
         setStatus('Aguardando nuvem');
         return false;
       }
@@ -1140,11 +1159,31 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         setError(`${lastSaveFailure.current} Esta operação não foi gravada na nuvem.`);
         return false;
       }
-      setError(lastSaveFailure.current); setStatus('Precisa resolver conflito'); return false;
+      setError(lastSaveFailure.current);
+      setStatus(/57014|statement timeout|canceling statement|timeout/i.test(lastSaveFailure.current) ? 'Aguardando nuvem' : 'Precisa resolver conflito');
+      return false;
     }
     finally { recoveryAction.current = false; }
   };
   retryPendingSaveRef.current = retryPendingSave;
+  const retryCloudRead = async () => {
+    if (readCheckInFlight.current || !online) return;
+    readCheckInFlight.current = true;
+    setCheckingRead(true); setReadCheckError('');
+    try {
+      const latest = await (repository.loadForRetry?.() ?? repository.load());
+      if (!latest || repository.loadedOffline?.()) throw new Error(repository.loadState?.().error?.message ?? 'A consulta ainda não foi confirmada.');
+      // A read is not a save receipt. Keep local edits visible and queued.
+      if (!recoveryRef.current && !busy.current && !detailQueue.current.length && !bufferedDetail.current
+        && !failedTaskEdits.current.size && !draftChanges.current.size && !writingDrafts.current && !draftsRef.current.length
+        && latest.revision === current.current?.revision) {
+        setStatus('Confirmado');
+        if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
+      }
+      realtime.retry();
+    } catch (cause) { setReadCheckError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { readCheckInFlight.current = false; setCheckingRead(false); }
+  };
   useEffect(() => {
     if (!recovery || loading || automaticRecoveryAttempted.current || repository.loadedOffline?.()) return;
     automaticRecoveryAttempted.current = true;
@@ -1190,19 +1229,31 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     setRetryingFailedKey(key);
     const affected = failed.operation.candidate?.audit.at(-1)?.affected ?? [];
     const groupKeys = affected.map(task => `${task.measurementId}:${task.serviceId}`);
+    let latest: Workspace | null = null;
+    let submittedOriginal = false;
     try {
-      const latest = await (repository.loadForRetry?.() ?? repository.load());
-      if (!latest || repository.loadedOffline?.()) throw new Error('Sem conexão com a nuvem. Tente novamente quando ela voltar.');
+      latest = await (repository.loadForRetry?.() ?? repository.load());
+      if (!latest || repository.loadedOffline?.()) throw new Error(repository.loadState?.().error?.kind === 'timeout'
+        ? 'O banco demorou para responder. Tente conferir novamente.' : 'Não foi possível conferir a nuvem. Tente novamente.');
       const priorEvent = failed.operation.candidate?.audit.at(-1);
       const firstConfirmed = !!priorEvent && !!await repository.confirmedOperation?.(priorEvent.id, failed.operation.candidate!.revision);
       if (!firstConfirmed) {
-        for (const task of affected) {
-          const before = priorEvent?.before.find(entry => entry.measurementId === task.measurementId && entry.serviceId === task.serviceId);
-          if (before && JSON.stringify(entryFor(latest, task.measurementId, task.serviceId)) !== JSON.stringify(before))
-            throw new Error('Esta tarefa mudou em outro computador. Confira os dois valores antes de repetir o lançamento.');
+        if (repository.concurrentEntries && failed.operation.candidate) {
+          const candidate = failed.operation.candidate;
+          const saved = await repository.commit(candidate, candidate.revision - 1);
+          if (!await confirmedCommitResponse(repository, candidate, saved)) throw new Error('A nuvem não confirmou esta operação.');
+          latest = saved;
+          submittedOriginal = true;
+          failed.operation.after?.();
+        } else {
+          for (const task of affected) {
+            const before = priorEvent?.before.find(entry => entry.measurementId === task.measurementId && entry.serviceId === task.serviceId);
+            if (before && JSON.stringify(entryFor(latest, task.measurementId, task.serviceId)) !== JSON.stringify(before))
+              throw new Error('Esta tarefa mudou em outro computador. Confira os dois valores antes de repetir o lançamento.');
+          }
         }
       }
-      const { queued, preview } = rebaseFailedTask(failed, latest, !firstConfirmed);
+      const { queued, preview } = rebaseFailedTask(failed, latest, !firstConfirmed && !submittedOriginal);
       for (const taskKey of groupKeys) failedTaskEdits.current.delete(taskKey);
       if (firstConfirmed) failed.operation.after?.();
       markFailedTaskChange(value => value + 1);
@@ -1220,10 +1271,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       return !failedTaskEdits.current.has(key);
     } catch (cause) {
       setStatus('Falha no salvamento');
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const message = cause instanceof Error ? cause.message : String(cause);
+      const detailed = `${message}${measurementConflictValues(message, failed.operation.candidate, latest)}`;
+      setError(detailed);
       for (const task of affected) failedTaskEdits.current.set(`${task.measurementId}:${task.serviceId}`, {
         ...failed, measurementId: task.measurementId, serviceId: task.serviceId,
-        message: cause instanceof Error ? cause.message : String(cause),
+        message: detailed,
       });
       markFailedTaskChange(value => value + 1);
       return false;
@@ -1282,7 +1335,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const cachedBase = readState?.source === 'cache' || !readState && !!repository.loadedOffline?.();
   const readFailed = realtime.failed || !!readState?.error;
   const cloudStatus: SaveStatus = !online ? 'offline'
-    : recovery || status === 'Precisa resolver conflito' ? 'conflict'
+    : status === 'Precisa resolver conflito' ? 'conflict'
+      : recovery ? 'pending'
       : status === 'Falha no salvamento' ? 'error'
       : localPending && !saving ? 'pending'
         : saving ? 'saving'
@@ -1294,12 +1348,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       : readFailed ? 'failed' as const
         : cachedBase ? 'cached' as const : undefined
     : undefined;
-  const cloudReadFailure = readState?.error?.message || realtime.failure;
+  const cloudReadFailure = readCheckError || readState?.error?.message || realtime.failure;
   const pageHeader = <>
     <MeasurementHeader compact onExportXLSX={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'xlsx', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} onPrint={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'pdf', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} showHistory={false} onOpenHistory={() => undefined}/>
     <section className="rounded border border-border bg-card p-2">
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(allTotals.period) : '—'}</strong></span><div className="flex flex-col items-end">{repository.savedLabel === 'Salvo na nuvem'
-        ? <div role="status"><SaveStatusIndicator status={cloudStatus} cloudReadStatus={cloudReadStatus} confirmedAt={confirmedAt} lastCheckedAt={realtime.lastCheckedAt} projectId={workspace.projectId} live={online && !readFailed && !cachedBase && realtime.connected}/>{online && (readFailed || cachedBase) && !saving && <div className="mt-1 text-[10px] text-amber-800">{cachedBase && <span>Cópia local preservada. </span>}{cloudReadFailure && <span>{cloudReadFailure} </span>}<button disabled={recovery || realtime.checking || !!bufferedDetail.current || detailQueue.current.length > 0 || writingDrafts.current > 0} className="underline disabled:opacity-50" onClick={() => realtime.available ? realtime.retry() : (setLoading(true), setLoadAttempt(attempt => attempt + 1))}>Tentar consultar novamente</button></div>}</div>
+        ? <div role="status"><SaveStatusIndicator status={cloudStatus} cloudReadStatus={cloudReadStatus} confirmedAt={confirmedAt} lastCheckedAt={realtime.lastCheckedAt} projectId={workspace.projectId} live={online && !readFailed && !cachedBase && realtime.connected}/>{online && (readFailed || cachedBase || readCheckError) && !saving && <div className="mt-1 text-[10px] text-amber-800">{cachedBase && <span>Cópia local preservada. </span>}{cloudReadFailure && <span>{cloudReadFailure} </span>}<button disabled={checkingRead} className="underline disabled:opacity-50" onClick={() => void retryCloudRead()}>Tentar consultar novamente</button></div>}</div>
         : <span role="status" className={recovery || saving || status !== 'Confirmado' ? 'text-amber-700' : 'text-emerald-700'}>{status === 'Confirmado' ? 'Salvo neste navegador' : status}</span>}{recovery && <button className="text-[10px] text-amber-800 underline" onClick={() => void retryPendingSave()}>Tentar salvar</button>}</div></div></div>
       <div className="flex flex-wrap items-center gap-2"><label className="text-[11px] font-semibold uppercase text-muted-foreground" htmlFor="measurement-period">Medições</label><select id="measurement-period" aria-label="Medição selecionada" value={active} className="h-8 rounded-md border border-primary bg-primary px-2.5 text-xs font-medium text-primary-foreground" disabled={!!destination} onChange={e => {
         selectPeriod(e.target.value); setExpanded(null); setError('');

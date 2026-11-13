@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import MeasurementWorkspace from './MeasurementWorkspace';
 import { newMeasuredRow, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
+import { MeasurementCommitRejectedError } from '@/lib/measurementWorkspaceStore';
 vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({ default: () => <div>Visualizador de teste</div> }));
 
 afterEach(cleanup);
@@ -404,6 +405,65 @@ it('falha de uma tarefa não bloqueia outra, e a repetição conserva os dois la
   await waitFor(() => expect(saved().entries.find(entry => entry.serviceId === 's0')?.rows[0].multiplier).toBe(3));
   expect(screen.queryByRole('button', { name: 'Reenviar 1.1' })).not.toBeInTheDocument();
   expect(repository.commit).toHaveBeenCalledTimes(3);
+});
+
+it('repete a mesma operação após outra pessoa mudar campo distinto da mesma tarefa', async () => {
+  const { repository, saved } = setup(2);
+  const initial = saved();
+  let remote = initial, confirmedId = '';
+  repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  repository.load = vi.fn(async () => remote);
+  repository.loadForRetry = vi.fn(async () => remote);
+  repository.confirmedOperation = vi.fn(async id => id === confirmedId);
+  repository.commit = vi.fn().mockImplementationOnce(async () => {
+    remote = { ...initial, revision: 1, entries: initial.entries.map(entry => ({ ...entry,
+      rows: entry.rows.map(row => ({ ...row, measuredQuantity: 9 })) })) };
+    throw new Error('canceling statement due to statement timeout');
+  }).mockImplementation(async candidate => {
+    confirmedId = candidate.audit.at(-1)!.id;
+    remote = { ...remote, revision: 2, entries: remote.entries.map(entry => ({ ...entry,
+      rows: entry.rows.map(row => ({ ...row, multiplier: candidate.entries[0].rows[0].multiplier })) })), audit: [...remote.audit, candidate.audit.at(-1)!] };
+    return remote;
+  });
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  const quantity = await screen.findByLabelText('Quantidade de Serviço 0');
+  fireEvent.change(quantity, { target: { value: '3' } }); fireEvent.blur(quantity);
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+  await screen.findByRole('button', { name: 'Reenviar 1.1' });
+  fireEvent.click(screen.getByRole('button', { name: 'Reenviar 1.1' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Reenviar 1.1' })).not.toBeInTheDocument());
+  expect(repository.commit).toHaveBeenCalledTimes(2);
+  const [first, retry] = vi.mocked(repository.commit).mock.calls;
+  expect(retry[0].audit.at(-1)?.id).toBe(first[0].audit.at(-1)?.id);
+  expect(retry[1]).toBe(first[1]);
+  expect(remote.entries[0].rows[0]).toMatchObject({ multiplier: 3, measuredQuantity: 9 });
+});
+
+it('preserva a tentativa e mostra os dois valores quando a mesma célula mudou', async () => {
+  const { repository, saved } = setup(2);
+  const initial = saved();
+  let remote = initial;
+  repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  repository.load = vi.fn(async () => remote);
+  repository.loadForRetry = vi.fn(async () => remote);
+  repository.confirmedOperation = vi.fn(async () => false);
+  repository.commit = vi.fn().mockImplementationOnce(async () => {
+    remote = { ...initial, revision: 1, entries: initial.entries.map(entry => ({ ...entry,
+      rows: entry.rows.map(row => ({ ...row, multiplier: 4 })) })) };
+    throw new Error('canceling statement due to statement timeout');
+  }).mockImplementation(async () => { throw new MeasurementCommitRejectedError('Conflito no campo entries/s0/rows/r/multiplier.'); });
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  const quantity = await screen.findByLabelText('Quantidade de Serviço 0');
+  fireEvent.change(quantity, { target: { value: '3' } }); fireEvent.blur(quantity);
+  fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+  await screen.findByRole('button', { name: 'Reenviar 1.1' });
+  fireEvent.click(screen.getByRole('button', { name: 'Reenviar 1.1' }));
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getAllByText(/Local: 3 · Nuvem na última conferência: 4/).length).toBeGreaterThan(0));
+  expect(screen.getByRole('button', { name: 'Reenviar 1.1' })).toBeVisible();
+  expect(repository.commit).toHaveBeenCalledTimes(2);
 });
 
 it('mostra a causa de cada falha e mantém o item pendente até confirmação da nuvem', async () => {
