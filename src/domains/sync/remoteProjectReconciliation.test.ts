@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
 import { serializeProject } from '@/lib/cloudProjectDraftCore';
-import { planRealtimeProjectRefresh, reconcileRemoteProjectSnapshot } from './remoteProjectReconciliation';
+import { planRealtimeProjectRefresh, rebaseStoredProjectDraft, reconcileRemoteProjectSnapshot } from './remoteProjectReconciliation';
 
 function project(name = 'Obra', observations = 'Original'): Project {
   return {
@@ -34,6 +34,60 @@ describe('conciliação remota delimitada por domínio', () => {
     expect(result.project.additives).toEqual(local.additives);
     expect(JSON.parse(result.confirmedBaselineJson).additives).toEqual([]);
     expect(result.hasPendingLocalChanges).toBe(true);
+    expect(result.conflict).toBe(false);
+  });
+
+  it('mescla duas linhas diferentes da mesma coleção sem descartar o rascunho', () => {
+    const confirmed = project();
+    const local = { ...confirmed, dailyReports: [
+      ...confirmed.dailyReports!, { id: 'diario-2', date: '2026-10-21', observations: 'Local' },
+    ] } as Project;
+    const remote = project('Obra', 'Remoto');
+    const result = reconcileRemoteProjectSnapshot({
+      local, remote, savedProjectJson: serializeProject(confirmed), collections: ['dailyReports'],
+    });
+    expect(result.conflict).toBe(false);
+    expect(result.project.dailyReports?.map(report => report.observations)).toEqual(['Remoto', 'Local']);
+    expect(result.hasPendingLocalChanges).toBe(true);
+  });
+
+  it('mescla campos diferentes da mesma linha', () => {
+    const confirmed = project();
+    const local = project();
+    local.dailyReports![0].occurrences = 'Ocorrência local';
+    const remote = project('Obra', 'Observação remota');
+    const result = reconcileRemoteProjectSnapshot({
+      local, remote, savedProjectJson: serializeProject(confirmed), collections: ['dailyReports'],
+    });
+    expect(result.conflict).toBe(false);
+    expect(result.project.dailyReports?.[0]).toMatchObject({
+      observations: 'Observação remota', occurrences: 'Ocorrência local',
+    });
+  });
+
+  it('protege colisão no mesmo campo da mesma entidade', () => {
+    const confirmed = project();
+    const local = project('Obra', 'Texto local');
+    const remote = project('Obra', 'Texto remoto');
+    const result = reconcileRemoteProjectSnapshot({
+      local, remote, savedProjectJson: serializeProject(confirmed), collections: ['dailyReports'],
+    });
+    expect(result.conflict).toBe(true);
+    expect(result.project).toBe(local);
+    expect(result.confirmedBaselineJson).toBe(serializeProject(confirmed));
+  });
+
+  it('rebaseia rascunho recuperado após mudança de versão em outro domínio', () => {
+    const baseline = project();
+    const local = { ...baseline, additives: [{ id: 'aditivo-local', name: 'Local' }] } as Project;
+    const remote = project('Nome remoto');
+    const merged = rebaseStoredProjectDraft(baseline, local, remote, ['dailyReports', 'additives']);
+    expect(merged?.name).toBe('Nome remoto');
+    expect(merged?.additives).toEqual(local.additives);
+  });
+
+  it('não rebaseia rascunho recuperado com colisão de metadados', () => {
+    expect(rebaseStoredProjectDraft(project(), project('Local'), project('Remoto'), ['dailyReports'])).toBeNull();
   });
 
   it('não substitui as coleções da tela ao receber apenas metadados', () => {
@@ -55,5 +109,6 @@ describe('conciliação remota delimitada por domínio', () => {
     });
     expect(result.project.name).toBe('Edição local');
     expect(result.hasPendingLocalChanges).toBe(true);
+    expect(result.conflict).toBe(true);
   });
 });

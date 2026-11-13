@@ -52,7 +52,7 @@ interface RemoteVersionCheckOptions {
 /** Read-only version check; only the active domain is hydrated when needed. */
 export async function checkProjectRemoteVersion({
   organizationId, collections, refs, refreshWarehouse, refreshCollections,
-  hasLocalCollectionConflict, markRemoteCollections, clearRemoteCollections,
+  markRemoteCollections, clearRemoteCollections,
   setSaveStatus, setLastRemoteCheckAt, setProjectUpdatedAt,
   setLastCloudConfirmedAt, setProject,
 }: RemoteVersionCheckOptions): Promise<void> {
@@ -90,19 +90,13 @@ export async function checkProjectRemoteVersion({
     ];
     if (await refreshCollections(currentAfterVersionCheck, knownRemoteCollections, remoteVersion)) return;
     const hasLocalChanges = projectHasLocalChanges(currentAfterVersionCheck, refs.savedProjectJson.current);
-    const action = resolveRemoteVersionAction(remoteVersion.updatedAt, refs.projectUpdatedAt.current, hasLocalChanges);
+    const action = resolveRemoteVersionAction(remoteVersion.updatedAt, refs.projectUpdatedAt.current);
     if (action === 'current') {
       refs.warehouseVersion.current = remoteVersion.warehouseVersion;
       refs.observedWarehouseVersion.current = remoteVersion.warehouseVersion;
       if (!hasLocalChanges) setSaveStatus('saved');
       return;
     }
-    if (action === 'conflict') {
-      // An unclassified change must not replace a locally edited collection.
-      markRemoteCollections(current.id, collections);
-      return;
-    }
-
     setSaveStatus('updating');
     const record = await loadCloudProjectRecord(current.id, {
       collections, strict: true, deferSnapshot: true,
@@ -114,18 +108,20 @@ export async function checkProjectRemoteVersion({
       discardCloudProjectRecord(record);
       return;
     }
-    if (hasLocalCollectionConflict(current.id, collections)) {
-      discardCloudProjectRecord(record);
-      markRemoteCollections(current.id, collections);
-      return;
-    }
-    confirmCloudProjectRecord(record);
     const reconciled = reconcileRemoteProjectSnapshot({
       local: latestLocal,
       remote: record.project,
       savedProjectJson: refs.savedProjectJson.current,
       collections,
+      includeMetadata: true,
     });
+    if (reconciled.conflict) {
+      discardCloudProjectRecord(record);
+      markRemoteCollections(current.id, collections);
+      setSaveStatus('conflict');
+      return;
+    }
+    confirmCloudProjectRecord(record);
     refs.savedProjectJson.current = reconciled.confirmedBaselineJson;
     refs.projectUpdatedAt.current = record.updatedAt;
     refs.warehouseVersion.current = record.warehouseVersion;

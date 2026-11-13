@@ -61,15 +61,40 @@ beforeEach(() => {
 });
 
 describe('consulta da versão remota por domínio', () => {
-  it('preserva a edição local e marca somente a coleção ativa diante de uma versão não classificada', async () => {
+  it('mescla uma versão remota em outro domínio sem bloquear a edição local', async () => {
     const local = project('Nome local');
+    cloud.loadRecord.mockResolvedValue({ project: project('Obra', 'Diário remoto'), updatedAt: 'v2', warehouseVersion: 2 });
+    const { refs, actions, check } = setup(local);
+    await check();
+    expect(actions.markRemoteCollections).not.toHaveBeenCalled();
+    expect(refs.project.current?.name).toBe('Nome local');
+    expect(refs.project.current?.dailyReports?.[0]?.observations).toBe('Diário remoto');
+    expect(JSON.parse(refs.savedProjectJson.current!).name).toBe('Obra');
+    expect(actions.setSaveStatus).toHaveBeenLastCalledWith('saving');
+    expect(refs.checkInFlight.current).toBe(false);
+  });
+
+  it('preserva a edição local quando a nuvem mudou o mesmo campo', async () => {
+    const local = project('Obra', 'Diário local');
+    cloud.loadRecord.mockResolvedValue({ project: project('Obra', 'Diário remoto'), updatedAt: 'v2', warehouseVersion: 2 });
     const { refs, actions, check } = setup(local);
     await check();
     expect(actions.markRemoteCollections).toHaveBeenCalledWith('obra-1', ['dailyReports']);
-    expect(cloud.loadRecord).not.toHaveBeenCalled();
+    expect(cloud.discardRecord).toHaveBeenCalledOnce();
+    expect(cloud.confirmRecord).not.toHaveBeenCalled();
     expect(refs.project.current).toBe(local);
     expect(refs.savedProjectJson.current).toBe(serializeProject(project()));
-    expect(refs.checkInFlight.current).toBe(false);
+    expect(actions.setSaveStatus).toHaveBeenLastCalledWith('conflict');
+  });
+
+  it('detecta uma colisão real no mesmo metadado sem confirmar a versão remota', async () => {
+    cloud.loadRecord.mockResolvedValue({ project: project('Nome remoto'), updatedAt: 'v2', warehouseVersion: 2 });
+    const { refs, actions, check } = setup(project('Nome local'));
+    await check();
+    expect(cloud.discardRecord).toHaveBeenCalledOnce();
+    expect(cloud.confirmRecord).not.toHaveBeenCalled();
+    expect(refs.project.current?.name).toBe('Nome local');
+    expect(actions.setSaveStatus).toHaveBeenLastCalledWith('conflict');
   });
 
   it('reconcilia somente o Diário e confirma a versão da nuvem sem salvar outra aba', async () => {
@@ -84,7 +109,7 @@ describe('consulta da versão remota por domínio', () => {
     });
     expect(cloud.confirmRecord).toHaveBeenCalledWith(record);
     expect(refs.project.current?.dailyReports?.[0]?.observations).toBe('Diário remoto');
-    expect(refs.project.current?.name).toBe('Obra');
+    expect(refs.project.current?.name).toBe('Nome remoto');
     expect(refs.skipNextAutoSave.current).toBe(true);
     expect(actions.setSaveStatus).toHaveBeenLastCalledWith('saved');
     expect(actions.setLastCloudConfirmedAt).toHaveBeenCalledWith('v2');

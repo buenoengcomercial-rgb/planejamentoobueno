@@ -111,10 +111,9 @@ describe('rascunho local seguro', () => {
     expect(JSON.stringify(sanitizeProjectDraft(local))).not.toContain('data:application/pdf');
   });
 
-  it('separa atualização segura de conflito remoto', () => {
-    expect(resolveRemoteVersionAction('v2', 'v1', false)).toBe('reload');
-    expect(resolveRemoteVersionAction('v2', 'v1', true)).toBe('conflict');
-    expect(resolveRemoteVersionAction('v1', 'v1', true)).toBe('current');
+  it('consulta uma versão nova antes de classificar conflito por campo', () => {
+    expect(resolveRemoteVersionAction('v2', 'v1')).toBe('reload');
+    expect(resolveRemoteVersionAction('v1', 'v1')).toBe('current');
     expect(projectHasLocalChanges(project(), JSON.stringify(project()), false)).toBe(false);
   });
 });

@@ -11,6 +11,8 @@ export interface StoredProjectDraft {
   savedAt?: string;
   localDraftUpdatedAt: string;
   project: Project;
+  /** Confirmed ancestor used to rebase a draft after another device advances the project. */
+  baseProject?: Project;
   /** Coleções realmente carregadas quando o rascunho foi criado. */
   pendingNormalizedSync?: boolean;
   loadedCollections?: ProjectCollectionKey[];
@@ -19,6 +21,7 @@ export interface StoredProjectDraft {
 export interface ProjectDraftWriteOptions {
   pendingNormalizedSync?: boolean;
   loadedCollections?: readonly ProjectCollectionKey[];
+  baseProject?: Project | null;
 }
 
 export type ProjectDraftInspection =
@@ -27,7 +30,7 @@ export type ProjectDraftInspection =
   | { kind: 'recoverable'; draft: StoredProjectDraft }
   | { kind: 'candidate'; draft: StoredProjectDraft; reason: 'legacy' | 'cloud_changed' };
 
-export type RemoteVersionAction = 'current' | 'reload' | 'conflict';
+export type RemoteVersionAction = 'current' | 'reload';
 
 export const projectDraftKey = (projectId: string) => `obraplanner:unsaved-cloud-draft:${projectId}`;
 
@@ -75,6 +78,7 @@ export function readStoredProjectDraft(projectId: string, storage: Storage | nul
       savedAt: parsed.savedAt,
       localDraftUpdatedAt,
       project: parsed.project,
+      baseProject: parsed.baseProject?.id === projectId ? parsed.baseProject : undefined,
       pendingNormalizedSync: parsed.pendingNormalizedSync === true,
       loadedCollections: Array.isArray(parsed.loadedCollections)
         ? parsed.loadedCollections
@@ -99,6 +103,9 @@ export function createProjectDraft(
     savedAt: now,
     localDraftUpdatedAt: now,
     project: sanitizeProjectDraft(project),
+    baseProject: options.baseProject?.id === project.id
+      ? sanitizeProjectDraft(options.baseProject)
+      : undefined,
     pendingNormalizedSync: options.pendingNormalizedSync === true || undefined,
     loadedCollections: options.loadedCollections?.length
       ? [...new Set<ProjectCollectionKey>([...options.loadedCollections, ...(project.auditLogs?.length ? ['auditLogs' as const] : [])])]
@@ -158,8 +165,9 @@ export function projectHasLocalChanges(
 export function resolveRemoteVersionAction(
   remoteUpdatedAt: string | null | undefined,
   currentUpdatedAt: string | null | undefined,
-  hasLocalChanges: boolean,
 ): RemoteVersionAction {
   if (!remoteUpdatedAt || remoteUpdatedAt === currentUpdatedAt) return 'current';
-  return hasLocalChanges ? 'conflict' : 'reload';
+  // A timestamp advance requires a read, not a conflict decision. Only a
+  // three-way comparison can identify a collision in an edited field.
+  return 'reload';
 }

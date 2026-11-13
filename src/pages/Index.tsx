@@ -23,6 +23,7 @@ import { flushPendingProjectSave, navigateToProjectView, runProtectedProjectNavi
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { subscribeProjectRemoteSignals } from '@/domains/sync/projectRemoteSignals';
 import { checkProjectRemoteVersion } from '@/domains/sync/projectRemoteVersionCheck';
+import { rebaseStoredProjectDraft } from '@/domains/sync/remoteProjectReconciliation';
 import { subscribeProjectVersionMonitor } from '@/domains/sync/projectVersionMonitor';
 import { useProjectAutoSave } from '@/domains/sync/useProjectAutoSave';
 import { useProjectCollectionTracker } from '@/domains/sync/useProjectCollectionTracker';
@@ -305,6 +306,8 @@ export default function Index() {
     scheduleProjectDraft, discardProjectDraft,
   } = useProtectedProjectDrafts({
     partialSyncPendingRef, conflictDetectedRef, rawProjectRef,
+    savedProjectJsonRef: lastSavedProjectJsonRef,
+    projectUpdatedAtRef: currentProjectUpdatedAtRef,
     setPartialSyncIssue, setSaveStatus,
   });
 
@@ -410,9 +413,23 @@ export default function Index() {
     const draftInspection = projectToLoad && inspectDraft
       ? inspectProjectDraft(projectToLoad, updatedAt)
       : { kind: 'none' as const, reason: 'missing' as const };
-    const pendingDraftCollections = draftInspection.kind === 'recoverable'
+    const pendingDraftCollections = draftInspection.kind === 'recoverable' || draftInspection.kind === 'candidate'
       ? PROJECT_COLLECTION_KEYS.filter(key => draftInspection.draft.loadedCollections?.includes(key))
       : [];
+    const autoRebasedDraft = projectToLoad
+      && draftInspection.kind === 'candidate'
+      && draftInspection.reason === 'cloud_changed'
+      && !draftInspection.draft.pendingNormalizedSync
+      && draftInspection.draft.baseProject
+      && pendingDraftCollections.length > 0
+      && getMissingProjectCollections(projectToLoad.id, pendingDraftCollections).length === 0
+      ? rebaseStoredProjectDraft(
+        draftInspection.draft.baseProject,
+        draftInspection.draft.project,
+        projectToLoad,
+        pendingDraftCollections,
+      )
+      : null;
     const recoverableDraft = projectToLoad
       && draftInspection.kind === 'recoverable'
       && pendingDraftCollections.length > 0
@@ -423,7 +440,7 @@ export default function Index() {
     const recoverableLocalDraft = recoverableDraft && !recoverableDraft.pendingNormalizedSync
       ? recoverableDraft
       : null;
-    const conflictingDraft = draftInspection.kind === 'candidate'
+    const conflictingDraft = draftInspection.kind === 'candidate' && !autoRebasedDraft
       ? draftInspection.draft
       : draftInspection.kind === 'recoverable' && !recoverableDraft
         ? draftInspection.draft
@@ -460,6 +477,15 @@ export default function Index() {
         : recoveredProject;
       setRecoveredDraftSaveRevision(revision => revision + 1);
       toast.warning('Alterações locais não confirmadas foram recuperadas e serão salvas novamente na nuvem.');
+    } else if (projectToLoad && autoRebasedDraft) {
+      projectForState = repairApplied
+        ? repairProjectAnalyticLinks(autoRebasedDraft).project
+        : autoRebasedDraft;
+      if (serializeProject(projectForState) !== serializeProject(projectToLoad)) {
+        setRecoveredDraftSaveRevision(revision => revision + 1);
+      } else {
+        discardProjectDraft(projectToLoad.id);
+      }
     } else if (projectToLoad && conflictingDraft) {
       // A versão-base mudou em outro aparelho. Sem uma fotografia ancestral não
       // existe mesclagem automática segura; preserve o único rascunho e bloqueie
@@ -496,7 +522,8 @@ export default function Index() {
       setPartialSyncIssue(null);
     }
 
-    skipNextAutoSaveRef.current = recoverableLocalDraft ? false : !repairApplied;
+    skipNextAutoSaveRef.current = recoverableLocalDraft || (autoRebasedDraft && serializeProject(autoRebasedDraft) !== serializeProject(projectToLoad))
+      ? false : !repairApplied;
     conflictDetectedRef.current = !!conflictingDraft;
     currentProjectUpdatedAtRef.current = updatedAt;
     if (warehouseVersion !== undefined) {
@@ -513,7 +540,7 @@ export default function Index() {
     if (conflictingDraft) setSaveStatus('conflict');
     else if (repairApplied) setSaveStatus('saving');
     else if (recoverablePartialDraft) setSaveStatus('error');
-    else if (recoverableLocalDraft) setSaveStatus('saving');
+    else if (recoverableLocalDraft || (autoRebasedDraft && serializeProject(autoRebasedDraft) !== serializeProject(projectToLoad))) setSaveStatus('saving');
     else setSaveStatus('saved');
   }, [discardProjectDraft, resetProjectScopes]);
 
