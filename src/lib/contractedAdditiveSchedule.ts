@@ -1,4 +1,4 @@
-import type { Additive, AdditiveComposition, Project, Task } from '@/types/project';
+import type { Additive, AdditiveComposition, ContractedTaskSchedule, Project, Task } from '@/types/project';
 import { computeAdditiveRow, resolveAdditivePricingRule } from '@/lib/additiveImport';
 import { executionMonth } from '@/lib/monthlyExecution';
 import { sortTasksForSchedule } from '@/lib/taskOrdering';
@@ -34,6 +34,31 @@ export function approvedAdditiveRows(additive: Additive) {
 export const additiveTaskId = (additiveId: string, compositionId: string) => `add-${additiveId}-${compositionId}`;
 export const additiveServiceId = (additiveId: string, compositionId: string) => `additive:${additiveId}:${compositionId}`;
 
+export function contractedTaskSchedule(task: Omit<ContractedTaskSchedule, 'archiveId'>, archiveId: string): ContractedTaskSchedule {
+  return { archiveId, startDate: task.startDate, duration: task.duration,
+    dependencies: task.dependencies, dependencyDetails: task.dependencyDetails,
+    team: task.team, scheduleOrder: task.scheduleOrder, durationMode: task.durationMode,
+    isManual: task.isManual, manualDuration: task.manualDuration,
+    operationalReschedule: task.operationalReschedule };
+}
+
+/** Capture only changed planning fields; projected tasks never become base-contract rows. */
+export function captureContractedTaskSchedules(previous: Project, before: Project, after: Project,
+  additives: readonly Additive[], projectedTaskIds: ReadonlySet<string>): Project {
+  const beforeTasks = new Map(flattenTaskTree(before.phases.flatMap(p => p.tasks)).map(t => [t.id, t]));
+  const archiveIds = new Map(additives.map(a => [a.id, contractedScheduleArchive(a)?.id]));
+  const schedules = { ...previous.contractedTaskSchedules };
+  for (const task of flattenTaskTree(after.phases.flatMap(p => p.tasks))) {
+    if (!projectedTaskIds.has(task.id)) continue;
+    const original = beforeTasks.get(task.id);
+    const archiveId = original?.originAdditiveId && archiveIds.get(original.originAdditiveId);
+    if (!original || !archiveId) continue;
+    const next = contractedTaskSchedule(task, archiveId);
+    if (JSON.stringify(next) !== JSON.stringify(contractedTaskSchedule(original, archiveId))) schedules[task.id] = next;
+  }
+  return Object.keys(schedules).length ? { ...after, contractedTaskSchedules: schedules } : after;
+}
+
 export function isNewAdditiveTaskLinked(tasks: ReadonlySet<string>, additive: Additive, composition: AdditiveComposition) {
   const linkedTask = additive.compositions.find(item => item.id === composition.id)?.linkedTaskId;
   return tasks.has(additiveTaskId(additive.id, composition.id)) || !!linkedTask && tasks.has(linkedTask);
@@ -62,6 +87,8 @@ export function includeContractedAdditiveTasks(project: Project, additives: read
         || !executionMonth(row.startDate) || !Number.isFinite(row.duration) || row.duration < 1
         || isNewAdditiveTaskLinked(taskIds, additive, composition)) continue;
       const id = additiveTaskId(additive.id, composition.id);
+      const savedSchedule = project.contractedTaskSchedules?.[id];
+      const schedule = savedSchedule?.archiveId === archive.id ? contractedTaskSchedule(savedSchedule, archive.id) : {};
       taskIds.add(id);
       projectedTaskIds.add(id);
       const phaseId = composition.phaseId && existingPhases.has(composition.phaseId)
@@ -76,6 +103,7 @@ export function includeContractedAdditiveTasks(project: Project, additives: read
         percentComplete: 0, materials: [], level: 0, quantity: row.quantity, unit: row.unit,
         unitPrice: row.unitPriceWithBDI, itemCode: row.code ?? composition.code, contractItem: row.item ?? composition.itemNumber ?? composition.item,
         originAdditiveId: additive.id, originAdditiveName: additive.name, originAdditiveVersion: archive.version,
+        ...schedule,
       });
     }
     if (orphans.length) projectedPhases.push({ id: fallbackId, name: additive.name, color: '#0369a1', tasks: sortTasksForSchedule(orphans) });
