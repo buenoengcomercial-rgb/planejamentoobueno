@@ -97,6 +97,26 @@ describe('rascunhos protegidos da obra', () => {
     expect(setPartialSyncIssue).toHaveBeenCalledWith({ projectId: candidate.id, draftProtected: true });
   });
 
+  it('não recria a cópia local quando a purga invalida uma escrita IndexedDB em voo', async () => {
+    vi.mocked(supportsIndexedDbDrafts).mockReturnValue(true);
+    let finishWrite!: (draft: null) => void;
+    vi.mocked(writeIndexedDbProjectDraft).mockImplementationOnce(() => new Promise(resolve => { finishWrite = resolve; }));
+    const { result } = setup();
+    const local = project('obra-6');
+    act(() => result.current.scheduleProjectDraft(local, 'v6'));
+    act(() => vi.advanceTimersByTime(900));
+    expect(writeIndexedDbProjectDraft).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      const purging = result.current.discardProjectDraft(local.id);
+      finishWrite(null);
+      await purging;
+    });
+
+    expect(localStorage.getItem(projectDraftKey(local.id))).toBeNull();
+    expect(writeIndexedDbProjectDraft).toHaveBeenCalledOnce();
+  });
+
   it('usa cópia local quando o envio agendado ao IndexedDB falha', async () => {
     vi.mocked(supportsIndexedDbDrafts).mockReturnValue(true);
     vi.mocked(writeIndexedDbProjectDraft).mockResolvedValue(null);

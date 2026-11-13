@@ -411,7 +411,8 @@ export default function Index() {
       conflictingDraftRef.current = null;
     }
     const draftInspection = projectToLoad && inspectDraft
-      ? inspectProjectDraft(projectToLoad, updatedAt)
+      ? inspectProjectDraft(projectToLoad, updatedAt, undefined, collections =>
+        getMissingProjectCollections(projectToLoad.id, collections).length === 0)
       : { kind: 'none' as const, reason: 'missing' as const };
     const pendingDraftCollections = draftInspection.kind === 'recoverable' || draftInspection.kind === 'candidate'
       ? PROJECT_COLLECTION_KEYS.filter(key => draftInspection.draft.loadedCollections?.includes(key))
@@ -500,11 +501,8 @@ export default function Index() {
       toast.error(draftInspection.kind === 'candidate' && draftInspection.reason === 'cloud_changed'
         ? 'Há uma alteração local e a obra também mudou em outro aparelho. A cópia local foi preservada e nenhuma versão será sobrescrita.'
         : 'Há uma cópia local anterior sem escopo seguro para mesclagem. Ela foi preservada para uma decisão explícita.');
-    } else if (projectToLoad && draftInspection.kind !== 'none') {
-      discardProjectDraft(projectToLoad.id);
-      if (draftInspection.kind !== 'identical') {
-        toast.info('Os dados locais desta obra foram descartados; a versão da nuvem foi carregada.');
-      }
+    } else if (projectToLoad && draftInspection.kind === 'identical') {
+      void discardProjectDraft(projectToLoad.id);
     }
     if (projectForState && projectToLoad && recoverableDraft) {
       // A partial offline draft may contain only newly appended audit records.
@@ -599,8 +597,11 @@ export default function Index() {
     const nextJson = serializeProject(projectToPersist);
     const pendingPartialSync = !!pendingAtStart;
     if (nextJson === lastSavedProjectJsonRef.current && !pendingPartialSync) {
-      if (!options.retainDraftUntilVerified) discardProjectDraft(projectToPersist.id);
-      setSaveStatus('saved');
+      if (rawProjectRef.current?.id === projectToPersist.id
+        && serializeProject(rawProjectRef.current) === nextJson && !conflictDetectedRef.current) {
+        if (!options.retainDraftUntilVerified) void discardProjectDraft(projectToPersist.id);
+        setSaveStatus('saved');
+      }
       return;
     }
 
@@ -731,7 +732,7 @@ export default function Index() {
       const currentMatchesReceipt = rawProjectRef.current?.id === effectiveProject.id
         && serializeProject(rawProjectRef.current) === effectiveJson;
       if (seq === saveRequestSeqRef.current && !saveTimerRef.current && !partialSync && currentMatchesReceipt) {
-        if (!options.retainDraftUntilVerified) discardProjectDraft(effectiveProject.id);
+        if (!options.retainDraftUntilVerified) void discardProjectDraft(effectiveProject.id);
         setSaveStatus('saved');
       } else if (partialSync) {
         setSaveStatus('error');

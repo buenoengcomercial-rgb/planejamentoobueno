@@ -89,6 +89,48 @@ describe('rascunho local seguro', () => {
     expect(inspectProjectDraft(cloud, '2026-08-18T12:00:00.000Z').kind).toBe('identical');
   });
 
+  it('reconhece o mesmo conteúdo com outra ordem de chaves e versão de nuvem', () => {
+    const cloud = project();
+    const reordered = { ...cloud, warehouse: { ...cloud.warehouse! } };
+    const { name, ...rest } = reordered;
+    writeProjectDraft({ ...rest, name }, '2026-08-18T10:00:00.000Z');
+    expect(inspectProjectDraft(cloud, '2026-08-18T12:00:00.000Z').kind).toBe('identical');
+  });
+
+  it('usa a base para reconhecer cópia obsoleta, mas preserva a edição mais antiga que a nuvem', () => {
+    const base = project();
+    const cloud = { ...base, name: 'Alteração remota' };
+    writeProjectDraft(base, '2026-08-18T10:00:00.000Z', undefined, { baseProject: base });
+    expect(inspectProjectDraft(cloud, '2099-08-18T12:00:00.000Z').kind).toBe('identical');
+
+    writeProjectDraft({ ...base, name: 'Edição offline' }, '2026-08-18T10:00:00.000Z', undefined, { baseProject: base });
+    expect(inspectProjectDraft(cloud, '2099-08-18T12:00:00.000Z')).toMatchObject({
+      kind: 'candidate', reason: 'cloud_changed',
+    });
+  });
+
+  it('reconhece deltas já confirmados mesmo depois de outra mudança remota, se a leitura cobrir o escopo', () => {
+    const base = project();
+    const local = { ...base, name: 'Edição já enviada' };
+    const cloud = { ...local, totalBudget: 150 };
+    writeProjectDraft(local, 'v1', undefined, { baseProject: base, loadedCollections: ['tasks'] });
+    expect(inspectProjectDraft(cloud, 'v2', undefined, () => false).kind).toBe('candidate');
+    expect(inspectProjectDraft(cloud, 'v2', undefined, () => true).kind).toBe('identical');
+  });
+
+  it('preserva o rascunho se a leitura ainda não cobriu uma coleção declarada', () => {
+    const cloud = project();
+    writeProjectDraft(cloud, 'v1', undefined, { loadedCollections: ['tasks'] });
+    expect(inspectProjectDraft(cloud, 'v2', undefined, () => false).kind).toBe('candidate');
+  });
+
+  it('preserva uma gravação parcial mesmo quando a fotografia visível coincide', () => {
+    const cloud = project();
+    writeProjectDraft(cloud, 'v1', undefined, { pendingNormalizedSync: true });
+    expect(inspectProjectDraft(cloud, 'v1').kind).toBe('recoverable');
+    expect(inspectProjectDraft(cloud, 'v2').kind).toBe('candidate');
+  });
+
   it('nunca grava arquivos base64 no rascunho e não interrompe a edição se a cota acabar', () => {
     const local = project();
     local.warehouse!.fiscalNotes = [note('nf-local', 'Fornecedor', '10')];

@@ -55,11 +55,15 @@ export function getCachedIndexedDbProjectDraft(projectId: string): StoredProject
 export async function preloadIndexedDbProjectDraft(projectId: string): Promise<StoredProjectDraft | null> {
   if (!supportsIndexedDbDrafts()) return null;
   try {
-    await pending.get(projectId)?.catch(() => undefined);
-    const value = await transact('readonly', store => store.get(projectId));
+    const generation = generations.get(projectId);
+    const value = await enqueue(projectId, () => transact('readonly', store => store.get(projectId)));
+    if (generations.get(projectId) !== generation) return getCachedIndexedDbProjectDraft(projectId);
     const draft = value as StoredProjectDraft | undefined;
     if (!draft || draft.project?.id !== projectId || typeof draft.version !== 'number'
-      || !draft.localDraftUpdatedAt) return null;
+      || !draft.localDraftUpdatedAt) {
+      cached.delete(projectId);
+      return null;
+    }
     cached.set(projectId, draft);
     return draft;
   } catch {
@@ -71,10 +75,10 @@ export async function preloadIndexedDbProjectDraft(projectId: string): Promise<S
 export async function writeIndexedDbProjectDraft(draft: StoredProjectDraft): Promise<StoredProjectDraft | null> {
   if (!supportsIndexedDbDrafts()) return null;
   const projectId = draft.project.id;
-  const generation = (generations.get(projectId) ?? 0) + 1;
-  generations.set(projectId, generation);
+  const generation = generations.get(projectId);
   try {
     await enqueue(projectId, async () => {
+      if (generations.get(projectId) !== generation) return;
       await transact('readwrite', store => store.put(draft, projectId));
       if (generations.get(projectId) === generation) cached.set(projectId, draft);
     });

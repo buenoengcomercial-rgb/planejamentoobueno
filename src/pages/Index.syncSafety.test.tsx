@@ -643,6 +643,7 @@ describe('segurança de sincronização da página da obra', () => {
     expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(1200); });
     expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
+    expect(readStoredProjectDraft('project-1')).toBeNull();
   });
 
   it('repete uma falha transitória de autosave sem exigir nova edição', async () => {
@@ -654,10 +655,12 @@ describe('segurança de sincronização da página da obra', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Alterar projeto' }));
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
     expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(1);
+    expect(readStoredProjectDraft('project-1')?.project.name).toBe('Alteração geral pendente');
 
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
     expect(mocks.upsertCloudProject).toHaveBeenCalledTimes(2);
+    expect(readStoredProjectDraft('project-1')).toBeNull();
     expect(mocks.toastError).not.toHaveBeenCalledWith('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
   });
 
@@ -855,6 +858,19 @@ describe('segurança de sincronização da página da obra', () => {
 
     expect(await screen.findByText('Conflito de cópia local')).toBeInTheDocument();
     expect(readStoredProjectDraft(local.id)?.project.name).toBe('Cópia local sem escopo');
+    expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
+  });
+
+  it('purga o rascunho já confirmado ao abrir uma versão remota mais nova sem conflito', async () => {
+    const cloud = makeProject();
+    const { name, ...rest } = cloud;
+    writeProjectDraft({ ...rest, name }, 'cloud-v1');
+
+    renderIndex();
+
+    expect(await screen.findByTestId('project-name')).toHaveTextContent(cloud.name);
+    expect(screen.queryByText('Conflito de cópia local')).not.toBeInTheDocument();
+    expect(readStoredProjectDraft(cloud.id)).toBeNull();
     expect(mocks.upsertCloudProject).not.toHaveBeenCalled();
   });
 
