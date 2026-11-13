@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
+import { gzipSync, gunzipSync, strFromU8, strToU8 } from 'fflate';
 
 export interface ProjectFieldBatch {
   table: string;
@@ -34,6 +35,27 @@ export class ProjectFieldConflictError extends Error {
   }
 }
 const storageKey = (actorId: string, projectId: string) => `obraplanner:field-operations:${actorId}:${projectId}`;
+const compressedPrefix = 'gzip-v1:';
+
+function storeOperation(key: string, operation: PendingProjectFieldOperation) {
+  const json = JSON.stringify(operation);
+  try {
+    localStorage.setItem(key, json);
+  } catch (error) {
+    if (!(error instanceof DOMException) || error.name !== 'QuotaExceededError') throw error;
+    const bytes = gzipSync(strToU8(json));
+    localStorage.setItem(key, compressedPrefix + btoa(strFromU8(bytes, true)));
+  }
+}
+
+function readOperation(value: string | null): unknown {
+  if (value?.startsWith(compressedPrefix)) {
+    const binary = atob(value.slice(compressedPrefix.length));
+    return JSON.parse(strFromU8(gunzipSync(strToU8(binary, true))));
+  }
+  return JSON.parse(value ?? 'null');
+}
+
 const canonical = (value: unknown) => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 export async function projectOperationFingerprint(value: unknown): Promise<string> {
@@ -44,7 +66,7 @@ export async function projectOperationFingerprint(value: unknown): Promise<strin
 export function pendingProjectFieldOperations(actorId: string, projectId: string): PendingProjectFieldOperation[] {
   const prefix = `${storageKey(actorId, projectId)}:`;
   const rows: unknown = Object.keys(localStorage).filter(key => key.startsWith(prefix))
-    .map(key => JSON.parse(localStorage.getItem(key) ?? 'null'));
+    .map(key => readOperation(localStorage.getItem(key)));
   if (!Array.isArray(rows) || rows.some(row => !row?.operationId || !row?.request)) {
     throw new Error('A fila local está inconsistente. Preserve este navegador para recuperar as tentativas.');
   }
@@ -84,9 +106,9 @@ export function preserveProjectFieldConflict(error: ProjectFieldConflictError, a
   // metadata and subsequent edits here, avoiding a second whole-project copy.
   const metadataKeys = [...new Set([...Object.keys(error.request.metadata?.expected ?? {}), ...Object.keys(error.request.metadata?.next ?? {})])];
   const attempt = project ? Object.fromEntries(['id',...metadataKeys].map(key => [key,project[key]])) : undefined;
-  localStorage.setItem(`${storageKey(error.actorId, error.projectId)}:${error.operationId}`, JSON.stringify({ ...row,
+  storeOperation(`${storageKey(error.actorId, error.projectId)}:${error.operationId}`, { ...row,
     conflict: { message: error.message, at: new Date().toISOString(), attemptedProject: attempt,
-      laterEdits: submittedProject ? laterFieldEdits(submittedProject, attemptedProject) : undefined } }));
+      laterEdits: submittedProject ? laterFieldEdits(submittedProject, attemptedProject) : undefined } });
   window.dispatchEvent(new Event('obraplanner:operation-conflicts'));
 }
 
@@ -103,7 +125,7 @@ export async function commitProjectFields(projectId: string, organizationId: str
     ?? { operationId: crypto.randomUUID(), request,
       ...(candidateProject ? { candidateHash: await projectOperationFingerprint(candidateProject) } : {}) };
   if (!rows.includes(pending)) {
-    localStorage.setItem(`${key}:${pending.operationId}`, JSON.stringify(pending));
+    storeOperation(`${key}:${pending.operationId}`, pending);
     window.dispatchEvent(new Event('obraplanner:operation-conflicts'));
     if (!pendingProjectFieldOperations(actorId, projectId).some(row => row.operationId === pending.operationId)) {
       throw new Error('Não foi possível preservar a tentativa neste navegador.');
