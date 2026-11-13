@@ -38,3 +38,15 @@ describe('defasagens em dias úteis', () => {
     expect(next.map(t => [t.es, t.ef, t.ls, t.lf, t.float, t.isCritical])).toEqual([[0, 10, 0, 10, 0, true], [2, 6, 6, 10, 4, false]]);
   });
 });
+
+
+it('preserves the approved remaining-work release while still delaying for predecessors', async () => {
+  const { settleAllDependencies } = await import('./calculations');
+  const pred = { id: 'p', name: 'P', startDate: '2026-11-13', duration: 1, dependencies: [] };
+  const successor = { id: 's', name: 'S', startDate: '2026-12-01', duration: 1, dependencies: ['p'],
+    operationalReschedule: { startDate: '2026-12-01' } };
+  const project = { id: 'release', phases: [{ id: 'c', tasks: [pred, successor] }] } as unknown as import('@/types/project').Project;
+  expect(settleAllDependencies(project).phases[0].tasks[1].startDate).toBe('2026-12-01');
+  pred.startDate = '2026-12-10';
+  expect(settleAllDependencies(project).phases[0].tasks[1].startDate).toBe('2026-12-11');
+});
