@@ -7,6 +7,11 @@ import { useAdditiveActions } from './useAdditiveActions';
 import { upsertAdditiveCompositionTemplate } from '@/lib/additiveCompositionCatalog';
 
 vi.mock('@/hooks/useAuth', () => ({ useAuth: () => ({ user: null }) }));
+const loadCloud = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/cloudProjects', () => ({
+  loadStableCloudProjectRecord: loadCloud,
+  discardCloudProjectRecord: vi.fn(),
+}));
 
 const source: AdditiveComposition = {
   id: 'source', item: '5.10.3', itemNumber: '5.10.3', code: 'FIXA_1', bank: 'PRÓPRIO',
@@ -32,6 +37,25 @@ function additiveWith(compositions: AdditiveComposition[]): Additive {
 }
 
 describe('useAdditiveActions catálogo atual da obra', () => {
+  it('não contrata de novo quando a revisão já está integrada na nuvem', async () => {
+    const additive: Additive = { ...additiveWith([]), status: 'aprovado', version: 1 };
+    const project: Project = { id: 'project-approval', name: 'Obra', phases: [], totalBudget: 0,
+      startDate: '2026-08-01', endDate: '2026-11-30', additives: [additive] };
+    loadCloud.mockResolvedValue({ project: { ...project, additives: [
+      { ...additive, status: 'aditivo_contratado', isContracted: true, contractRevisionId: 'revision-1' },
+    ] } });
+    const onProjectChange = vi.fn();
+    const onSaveNow = vi.fn();
+    const state = { active: additive } as unknown as AdditiveStateApi;
+    const { result } = renderHook(() => useAdditiveActions({ project, onProjectChange, onSaveNow, state, canFormalize: true }));
+
+    await act(async () => {
+      expect(await result.current.handleContractAdditive('2026-10-30')).toBe(true);
+    });
+    expect(onProjectChange).not.toHaveBeenCalled();
+    expect(onSaveNow).not.toHaveBeenCalled();
+  });
+
   it('não anuncia aprovação na nuvem antes de receber a confirmação da gravação', async () => {
     const additive = { ...additiveWith([target]), status: 'em_analise' } as Additive;
     let currentProject = { id: 'project-approval', name: 'Obra', phases: [], additives: [additive], budgetItems: [] } as unknown as Project;

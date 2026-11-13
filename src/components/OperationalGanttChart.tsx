@@ -3,35 +3,48 @@ import { useCallback, useMemo, type ComponentProps } from 'react';
 
 import { buildOperationalProjectFromPendingAdditives, getPendingAdditiveScheduleControls } from '@/lib/additiveSchedule';
 import { mergeOperationalProjectIntoRaw } from '@/lib/operationalProject';
-import type { Project } from '@/types/project';
+import type { Additive, Project } from '@/types/project';
+import { includeContractedAdditiveTasks } from '@/lib/contractedAdditiveSchedule';
 import GanttChart from './GanttChart';
+import GanttFinancialForecast from './gantt/GanttFinancialForecast';
 
 type ProjectUpdate = Project | ((previous: Project) => Project);
-type Props = Omit<ComponentProps<typeof GanttChart>, 'project' | 'onProjectChange' | 'lockedTaskLabels'> & {
+type Props = Omit<ComponentProps<typeof GanttChart>, 'project' | 'onProjectChange' | 'lockedTaskLabels' | 'displayOnlyTaskIds'> & {
   project: Project;
+  confirmedAdditives?: readonly Additive[];
   onProjectChange: (next: ProjectUpdate) => void;
 };
 
-export default function OperationalGanttChart({ project, onProjectChange, ...props }: Props) {
+const NO_ADDITIVES: readonly Additive[] = [];
+
+export default function OperationalGanttChart({ project, confirmedAdditives = NO_ADDITIVES, onProjectChange, ...props }: Props) {
   const operationalProject = useMemo(() => buildOperationalProjectFromPendingAdditives(project), [project]);
-  const lockedTaskLabels = useMemo(() => Object.fromEntries(
-    Array.from(getPendingAdditiveScheduleControls(project).entries())
-      .map(([taskId, control]) => [taskId, control.additiveName]),
-  ), [project]);
+  const display = useMemo(() => includeContractedAdditiveTasks(operationalProject, confirmedAdditives), [operationalProject, confirmedAdditives]);
+  const lockedTaskLabels = useMemo(() => Object.fromEntries([
+    ...Array.from(getPendingAdditiveScheduleControls(project), ([taskId, control]) => [taskId, control.additiveName]),
+    ...display.project.phases.flatMap(phase => phase.tasks
+      .filter(task => display.projectedTaskIds.has(task.id))
+      .map(task => [task.id, task.originAdditiveName || phase.name])),
+  ]), [project, display]);
   const updateOperationalProject = useCallback((next: ProjectUpdate) => {
     onProjectChange(previous => {
       const previousOperational = buildOperationalProjectFromPendingAdditives(previous);
-      const nextOperational = typeof next === 'function' ? next(previousOperational) : next;
-      return mergeOperationalProjectIntoRaw(previous, applyProjectOperation('gantt', previousOperational, operationalProject, nextOperational));
+      const currentDisplay = includeContractedAdditiveTasks(previousOperational, confirmedAdditives).project;
+      const nextOperational = typeof next === 'function' ? next(currentDisplay) : next;
+      return mergeOperationalProjectIntoRaw(previous, applyProjectOperation('gantt', currentDisplay, display.project, nextOperational));
     });
-  }, [onProjectChange, operationalProject]);
+  }, [confirmedAdditives, display, onProjectChange]);
 
   return (
     <GanttChart
       {...props}
-      project={operationalProject}
+      project={display.project}
       onProjectChange={updateOperationalProject}
       lockedTaskLabels={lockedTaskLabels}
+      displayOnlyTaskIds={display.projectedTaskIds}
+      financialForecastNode={props.financialForecastNode === undefined && display.projectedTaskIds.size > 0
+        ? <GanttFinancialForecast project={operationalProject} trabalhaSabado={props.calendarConfig?.trabalhaSabado} />
+        : props.financialForecastNode}
     />
   );
 }

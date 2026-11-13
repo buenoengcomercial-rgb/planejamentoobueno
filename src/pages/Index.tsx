@@ -1542,6 +1542,17 @@ export default function Index() {
     );
   }
 
+  const handleAreaNavigation = (nextView: AppView) => navigateToProjectView({
+    role, currentView: safeCurrentView,
+    warehouseClientOperationInFlightRef, warehouseOperationInFlightRef,
+    warehouseScopedOperationInFlightRef, navigationInFlightRef,
+    flushPendingAdditiveSave: saveAdditiveScheduleNow,
+    pendingDraftRef, conflictDetectedRef,
+    cancelScheduledDraft, writeProtectedProjectDraft,
+    setProductionWorkspaceInitialTab, setDailyReportInitialFilter,
+    setCurrentView, setSidebarOpen, confirmDiscardPendingForm,
+  }, nextView);
+
   return (
     <div className="flex min-h-screen bg-background">
       <button
@@ -1559,16 +1570,7 @@ export default function Index() {
       <div className={`fixed lg:sticky lg:top-0 lg:h-svh lg:self-start z-40 transition-transform lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <AppSidebar
           currentView={safeCurrentView === 'management' ? 'tasks' : safeCurrentView}
-          onViewChange={nextView => navigateToProjectView({
-            role, currentView: safeCurrentView,
-            warehouseClientOperationInFlightRef, warehouseOperationInFlightRef,
-            warehouseScopedOperationInFlightRef, navigationInFlightRef,
-            flushPendingAdditiveSave: saveAdditiveScheduleNow,
-            pendingDraftRef, conflictDetectedRef,
-            cancelScheduledDraft, writeProtectedProjectDraft,
-            setProductionWorkspaceInitialTab, setDailyReportInitialFilter,
-            setCurrentView, setSidebarOpen, confirmDiscardPendingForm,
-          }, nextView)}
+          onViewChange={handleAreaNavigation}
           projectName={project.name}
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(c => !c)}
@@ -1694,6 +1696,7 @@ export default function Index() {
             userId={user?.id}
             locationSearch={location.search}
             navigate={navigate}
+            onViewChange={handleAreaNavigation}
             onProductionNavigation={() => {
               setProductionWorkspaceInitialTab('production');
               setCurrentView('tasks');

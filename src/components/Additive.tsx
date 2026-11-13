@@ -349,7 +349,7 @@ export default function Additive({ project, onProjectChange, onSaveNow, undoButt
               )}
               {!isReintegration && (
                 <>
-              A contratação libera os serviços novos como barras no Cronograma do Aditivo e registra
+              A contratação exibe os serviços novos no Gantt e no Cronograma do Aditivo e registra
               seus itens próprios. A EAP e os quantitativos do contrato original serão preservados.
                 </>
               )}
