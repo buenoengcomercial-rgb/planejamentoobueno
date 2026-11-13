@@ -305,7 +305,20 @@ export interface ProductionQuantityDetailSource {
     points: Array<{ x: number; y: number }>;
 }
 
+/** Schedule-only closing work; never a contractual or measurable service. */
+export interface ClosingScheduleActivity {
+  id: string;
+  name: string;
+  startDate: string;
+  duration: number;
+  team: string;
+  dependencies: TaskDependency[];
+  reason: string;
+}
+
 export interface TaskOperationalReschedule {
+  closingActivities?: ClosingScheduleActivity[];
+  closingDeadline?: string;
   requestId: string;
   /** `whole_task` antes de iniciar; `remaining_work` após haver produção real. */
   scope: 'whole_task' | 'remaining_work';

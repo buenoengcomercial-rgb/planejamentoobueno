@@ -16,7 +16,7 @@ interface Props {
   independentMeasurementConfirmed: boolean;
   openMeasurement?: () => void;
   openAdditive?: () => void;
-  renderGantt: (additives: readonly Additive[]) => ReactNode;
+  renderGantt: (additives: readonly Additive[], measurement?: MeasurementWorkspace | null) => ReactNode;
 }
 
 interface ConfirmedData {
@@ -103,10 +103,10 @@ export default function MonthlyExecutionSchedule({
       <Button type="button" variant={view === 'gantt' ? 'default' : 'outline'} aria-pressed={view === 'gantt'} onClick={() => setView('gantt')}>Gantt</Button>
       <Button type="button" variant="ghost" onClick={() => { setData({}); setRead(current => current + 1); }}>Conferir na nuvem</Button>
     </div>
-    {(additiveError || (view === 'monthly' && measurementError)) && <p role="alert" className="px-4 py-3 text-sm text-destructive">
+    {(additiveError || measurementError) && <p role="alert" className="px-4 py-3 text-sm text-destructive">
       Não foi possível confirmar {additiveError && measurementError && view === 'monthly' ? 'a Medição e o Aditivo' : additiveError ? 'o Aditivo' : 'a Medição'} na nuvem. Use “Conferir na nuvem” para tentar novamente.
     </p>}
-    {view === 'gantt' ? renderGantt(additiveError ? [] : additives ?? []) : <div className="space-y-6 p-4">
+    {view === 'gantt' ? (userId && (measurement === undefined || measurementError) ? <p role="status" className="p-4">Confirme a Medição na nuvem antes de revisar o Gantt.</p> : renderGantt(additiveError ? [] : additives ?? [], measurement)) : <div className="space-y-6 p-4">
       <section aria-label="Execução medida">
         <h2 className="font-semibold">1ª e 2ª medições</h2>
         {!execution && !measurementError && <p role="status" className="py-3 text-sm text-muted-foreground">Conferindo a Medição na nuvem…</p>}

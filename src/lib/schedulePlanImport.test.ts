@@ -68,3 +68,23 @@ it('só reprograma item originalmente concluído quando há acréscimo contratad
   const next = applySchedulePlanImport(project, plan, {}, new Set(), [additive]);
   expect(next.phases[0].tasks[0]).toMatchObject({ quantity: 100, percentComplete: 100, operationalReschedule: { quantity: 20 } });
 });
+
+
+it('imports operational closing stages without changing contract rows, and rejects cycles or price fields', () => {
+  const { project, plan } = fixture();
+  plan.tasks[0].closingDeadline = '2026-11-26';
+  plan.tasks[0].closingActivities = [
+    { id: 'closing:a:test', name: 'Teste integrado', startDate: '2026-11-23', duration: 2,
+      team: 'proposta-1', dependencies: [{ taskId: 'a', type: 'TI' }], reason: 'Verificação operacional' },
+    { id: 'closing:a:fix', name: 'Correções', startDate: '2026-11-25', duration: 2,
+      team: 'proposta-1', dependencies: [{ taskId: 'closing:a:test', type: 'TI' }], reason: 'Reserva estimada' },
+  ];
+  const next = applySchedulePlanImport(project, plan, {});
+  expect(next.phases[0].tasks).toHaveLength(1);
+  expect(next.phases[0].tasks[0].operationalReschedule?.closingActivities).toHaveLength(2);
+  expect(next.phases[0].tasks[0].quantity).toBe(100);
+  expect(next.measurements).toEqual(project.measurements);
+  expect(() => parseSchedulePlanImport({ ...plan, tasks: [{ ...plan.tasks[0], closingActivities: [{ ...plan.tasks[0].closingActivities![0], unitPrice: 50 }] }] })).toThrow();
+  plan.tasks[0].closingActivities[0].dependencies = [{ taskId: 'closing:a:fix', type: 'TI' }];
+  expect(() => applySchedulePlanImport(project, plan, {})).toThrow(/circular/);
+});

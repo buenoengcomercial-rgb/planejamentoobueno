@@ -106,6 +106,7 @@ export default function GanttChart({
 }: GanttChartProps) {
   const isTaskScheduleLocked = useCallback((taskId: string) => !!lockedTaskLabels[taskId], [lockedTaskLabels]);
   const scheduleLockLabel = useCallback((taskId: string) => lockedTaskLabels[taskId], [lockedTaskLabels]);
+  const scheduleLockMessage = (source?: string) => source?.startsWith('Execução registrada') || source?.startsWith('Etapa operacional') ? source : `Planejada pelo aditivo: ${source}. Edite no Cronograma do Aditivo.`;
   // Lista de equipes do projeto (com fallback aos defaults).
   const projectTeams: TeamDefinition[] = project.teams ?? DEFAULT_TEAMS;
   // Helper local que sempre busca a definição na lista do projeto.
@@ -2144,7 +2145,7 @@ export default function GanttChart({
                               onDragOver={(e) => handleRowDragOver(e, task.id)}
                               onDrop={(e) => handleRowDrop(e, phase.id, task.id)}
                               onDragEnd={handleRowDragEnd}
-                              title={statusOnly ? suspension?.label : scheduleLocked ? `Planejada pelo aditivo: ${scheduleLockSource}` : 'Arraste para reordenar a tarefa'}
+                              title={statusOnly ? suspension?.label : scheduleLocked ? scheduleLockMessage(scheduleLockSource) : 'Arraste para reordenar a tarefa'}
                               className={`grid items-center gap-0.5 px-1 border-b border-border hover:brightness-110 transition-colors ${readOnly || statusOnly || scheduleLocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'} ${
                                 !rowTeamDef ? (idx % 2 === 0 ? 'bg-card' : 'bg-muted/10') : ''
                               } ${task.isCritical && !rowTeamDef ? 'bg-destructive/5' : ''} ${noWorkDays && !rowTeamDef ? 'bg-warning/10' : ''} ${
@@ -2232,7 +2233,7 @@ export default function GanttChart({
                                           <div><strong className="text-amber-700">Equipe.</strong><div className="mt-0.5 space-y-0.5 text-muted-foreground">{laborConflict.roleDeficits.map(item => <div key={item}>{item}</div>)}{laborConflict.teamConflicts.map(item => <div key={item}>Equipe sobreposta: {item}</div>)}{laborConflict.missingAvailability.map(item => <div key={item}>{item}</div>)}</div></div>
                                         )}
                                         {hasAdditiveAttention && (
-                                          <div><strong className="text-sky-700">Aditivo.</strong>{scheduleLocked && <div className="mt-0.5 text-muted-foreground">Planejada pelo aditivo: {scheduleLockSource}. Edite no Cronograma do Aditivo.</div>}{task.originAdditiveName && <div className="mt-0.5 text-muted-foreground">Origem: {task.originAdditiveName}{task.originAdditiveVersion !== undefined ? ` · v${task.originAdditiveVersion}` : ''}.</div>}{task.suppressedByAdditive && <div className="mt-0.5 text-destructive">Item suprimido pelo Aditivo.</div>}{additiveHistory.length > 0 && <div className="mt-1 space-y-0.5 border-t border-border pt-1 text-[10px] text-muted-foreground">{additiveHistory.map((entry, index) => <div key={`${entry.additiveName}-${entry.version}-${index}`}>{entry.additiveName} v{entry.version}: {entry.previousQuantity ?? 0} → {entry.newQuantity ?? 0}</div>)}</div>}</div>
+                                          <div><strong className="text-sky-700">Origem e proteção.</strong>{scheduleLocked && <div className="mt-0.5 text-muted-foreground">{scheduleLockMessage(scheduleLockSource)}</div>}{task.originAdditiveName && <div className="mt-0.5 text-muted-foreground">Origem: {task.originAdditiveName}{task.originAdditiveVersion !== undefined ? ` · v${task.originAdditiveVersion}` : ''}.</div>}{task.suppressedByAdditive && <div className="mt-0.5 text-destructive">Item suprimido pelo Aditivo.</div>}{additiveHistory.length > 0 && <div className="mt-1 space-y-0.5 border-t border-border pt-1 text-[10px] text-muted-foreground">{additiveHistory.map((entry, index) => <div key={`${entry.additiveName}-${entry.version}-${index}`}>{entry.additiveName} v{entry.version}: {entry.previousQuantity ?? 0} → {entry.newQuantity ?? 0}</div>)}</div>}</div>
                                         )}
                                         {suspension && (
                                           <div><strong className="text-amber-700">Bloqueio do Aditivo.</strong><div className="mt-0.5 text-muted-foreground">{suspension.label}. {suspension.reason}</div>{!!suspension.blockingCompositions?.length && <div className="mt-1 space-y-0.5 border-t border-border pt-1 text-[10px] text-muted-foreground"><div className="font-medium text-foreground">Composições bloqueadoras:</div>{suspension.blockingCompositions.map(item => <div key={item.compositionId}>{[item.item, item.code].filter(Boolean).join(' - ')} {item.description}</div>)}{suspension.blockingNote && <div className="italic">{suspension.blockingNote}</div>}</div>}</div>
@@ -2325,7 +2326,7 @@ export default function GanttChart({
                                   return (
                                     <Popover>
                                       <PopoverTrigger asChild>
-                                        <button disabled={readOnly || scheduleLocked} className={`text-center w-full leading-tight transition-colors ${readOnly || scheduleLocked ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`} title={scheduleLocked ? `Edite no Cronograma do Aditivo: ${scheduleLockSource}` : undefined}>
+                                        <button disabled={readOnly || scheduleLocked} className={`text-center w-full leading-tight transition-colors ${readOnly || scheduleLocked ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`} title={scheduleLocked ? scheduleLockMessage(scheduleLockSource) : undefined}>
                                           {labelEl}
                                         </button>
                                       </PopoverTrigger>
@@ -2387,7 +2388,7 @@ export default function GanttChart({
                                   return (
                                     <Popover>
                                       <PopoverTrigger asChild>
-                                        <button disabled={readOnly || scheduleLocked} className={`text-center w-full leading-tight transition-colors ${readOnly || scheduleLocked ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`} title={scheduleLocked ? `Edite no Cronograma do Aditivo: ${scheduleLockSource}` : undefined}>
+                                        <button disabled={readOnly || scheduleLocked} className={`text-center w-full leading-tight transition-colors ${readOnly || scheduleLocked ? 'cursor-default' : rowTeamDef ? 'hover:opacity-70' : 'hover:text-primary'}`} title={scheduleLocked ? scheduleLockMessage(scheduleLockSource) : undefined}>
                                           {labelEl}
                                         </button>
                                       </PopoverTrigger>
@@ -2855,7 +2856,7 @@ export default function GanttChart({
                                   title={suspension
                                     ? `${suspension.label} | ${suspension.reason}`
                                     : scheduleLocked
-                                      ? `Planejada pelo aditivo: ${scheduleLockSource}. Edite no Cronograma do Aditivo.`
+                                      ? scheduleLockMessage(scheduleLockSource)
                                       : `${formatDateFull(task.startDate)} → ${formatDateFull(getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig))} | ${task.duration}d - Arraste para mover`}
                                   style={{
                                     left: barLeft,
