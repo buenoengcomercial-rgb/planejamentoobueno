@@ -183,6 +183,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [destination, setDestination] = useState<Destination | null>(null), destinationRef = useRef<Destination | null>(null);
   const [clipboard, setClipboard] = useState<MeasurementClipboard | null>(null);
   const [periodOpen, setPeriodOpen] = useState(false), [fiscalOpen, setFiscalOpen] = useState(false);
+  const [targetPeriodNumber, setTargetPeriodNumber] = useState<number | null>(null);
   const [incorporationId, setIncorporationId] = useState<string | null>(null);
   const [lifecycle, setLifecycle] = useState<LifecycleSelection | null>(null);
   const [drafts, setDrafts] = useState<WorkspaceDraft[]>([]), [recovery, setRecovery] = useState(false);
@@ -1302,7 +1303,17 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     .map(additive => ({ additive, count: pendingAdditiveIncorporationCount(workspace, additive) }))
     .filter(({ count }) => count > 0);
   const incorporation = pendingAdditives.find(({ additive }) => additive.id === incorporationId);
-  const incorporationBlock = period ? additiveIncorporationPeriodBlock(workspace, period.number) : 'Selecione uma medição em edição.';
+  const targetPeriod = workspace.periods.find(p => p.number === targetPeriodNumber);
+  const incorporationBlock = targetPeriod
+    ? additiveIncorporationPeriodBlock(workspace, targetPeriod.number)
+    : 'Nenhuma medição disponível para iniciar a vigência do aditivo.';
+  const openIncorporation = (additiveId: string) => {
+    const eligible = workspace.periods.filter(p => !additiveIncorporationPeriodBlock(workspace, p.number));
+    const preferred = eligible.find(p => p.id === period?.id) ?? eligible.find(p => p.number === 3) ?? eligible[0];
+    setTargetPeriodNumber(preferred?.number ?? null);
+    setError('');
+    setIncorporationId(additiveId);
+  };
   const confirmIncorporation = (additive: Additive, targetPeriod: NonNullable<typeof period>) => {
     const key = `incorporate:${additive.id}`;
     if (!beginCommand(key)) return;
@@ -1351,25 +1362,39 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       <ul className="mt-2 space-y-2">
         {pendingAdditives.map(({ additive, count }) => <li key={additive.id} className="flex flex-wrap items-center justify-between gap-2">
           <span>{additive.name} · {count} {count === 1 ? 'item a incorporar' : 'itens a incorporar'}</span>
-          {period && actor.canEdit && <button type="button" className={`${button} bg-primary text-primary-foreground`}
-            disabled={!!incorporationBlock || !!commandInFlight}
-            onClick={() => { setError(''); setIncorporationId(additive.id); }}>
-            Incorporar a partir da {period.number}ª medição
+          {actor.canEdit && <button type="button" className={`${button} bg-primary text-primary-foreground`}
+            disabled={!!commandInFlight}
+            onClick={() => openIncorporation(additive.id)}>
+            Incorporar aditivo…
           </button>}
         </li>)}
       </ul>
-      {incorporationBlock && <p className="mt-2 text-xs">{incorporationBlock}</p>}
     </section>}
-    <Dialog open={!!incorporation && !!period} onOpenChange={open => { if (!open) setIncorporationId(null); }}>
-      {incorporation && period && <DialogContent>
-        <DialogTitle>Incorporar a partir da {period.number}ª medição?</DialogTitle>
-        <DialogDescription>{incorporation.additive.name} · {incorporation.count} {incorporation.count === 1 ? 'item' : 'itens'}. As medições anteriores serão preservadas.</DialogDescription>
+    <Dialog open={!!incorporation} onOpenChange={open => { if (!open) setIncorporationId(null); }}>
+      {incorporation && <DialogContent>
+        <DialogTitle>Incorporar aditivo na Medição</DialogTitle>
+        <DialogDescription>{incorporation.additive.name} · {incorporation.count} {incorporation.count === 1 ? 'item' : 'itens'}. As medições anteriores ao início da vigência serão preservadas.</DialogDescription>
+        <div className="space-y-1.5">
+          <label htmlFor="target-period-select" className="text-xs font-semibold">Medição de início da vigência do aditivo</label>
+          <select id="target-period-select" value={targetPeriodNumber ?? ''} disabled={!!commandInFlight}
+            onChange={event => { setError(''); setTargetPeriodNumber(Number(event.target.value)); }}
+            className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+            <option value="" disabled>Selecione uma medição</option>
+            {workspace.periods.map(p => {
+              const blocked = additiveIncorporationPeriodBlock(workspace, p.number);
+              return <option key={p.id} value={p.number} disabled={!!blocked}>
+                {p.number}ª medição ({fmtDateBR(p.startDate)} a {fmtDateBR(p.endDate)}) — {states[p.status]}{blocked ? ' · Bloqueada' : ''}
+              </option>;
+            })}
+          </select>
+          {incorporationBlock && <p className="text-xs text-muted-foreground">{incorporationBlock}</p>}
+        </div>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" className={button} onClick={() => setIncorporationId(null)}>Fechar</button>
           <button type="button" className={`${button} bg-primary text-primary-foreground`}
             disabled={!actor.canEdit || !!incorporationBlock || !!commandInFlight}
-            onClick={() => confirmIncorporation(incorporation.additive, period)}>Confirmar incorporação</button>
+            onClick={() => { if (targetPeriod) confirmIncorporation(incorporation.additive, targetPeriod); }}>Confirmar incorporação</button>
         </div>
       </DialogContent>}
     </Dialog>

@@ -22,8 +22,13 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
-  it('pede confirmação antes de incorporar um aditivo contratado na 1ª medição e remove o aviso após salvar', async () => {
-    const { repository } = fixture();
+  it.each([
+    { activeStatus: 'draft', defaultTarget: '1', chosen: '1' },
+    { activeStatus: 'in_review', defaultTarget: '3', chosen: '2' },
+    { activeStatus: 'in_review', defaultTarget: '3', chosen: '3' },
+  ] as const)('confirma a vigência escolhida ($chosen) enquanto a 1ª medição está $activeStatus', async ({ activeStatus, defaultTarget, chosen }) => {
+    const { w, repository } = fixture();
+    w.periods[0].status = activeStatus;
     const composition = { id: 'new', item: '2.1', code: '', bank: '', description: 'Serviço novo', quantity: 3,
       addedQuantity: 3, unit: 'UN', unitPriceNoBDI: 10, unitPriceWithBDI: 12.5, total: 37.5, inputs: [], isNewService: true };
     const additive: Additive = { id: 'ad', name: 'Aditivo contratado de teste', status: 'aditivo_contratado',
@@ -32,15 +37,19 @@ describe('Tela própria de Medição', () => {
     render(<TooltipProvider><MeasurementWorkspace repository={repository} actor={actor}
       approvedAdditives={[additive, { ...additive, id: 'pending', status: 'aprovado' }]}/></TooltipProvider>);
     expect(await screen.findByText(/Aditivo contratado de teste · 1 item a incorporar/)).toBeVisible();
-    expect(screen.getAllByRole('button', { name: 'Incorporar a partir da 1ª medição' })).toHaveLength(1);
-    fireEvent.click(screen.getByRole('button', { name: 'Incorporar a partir da 1ª medição' }));
-    const dialog = screen.getByRole('dialog', { name: 'Incorporar a partir da 1ª medição?' });
+    expect(screen.getByRole('combobox', { name: 'Medição selecionada' })).toHaveValue('m1');
+    fireEvent.click(screen.getByRole('button', { name: 'Incorporar aditivo…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Incorporar aditivo na Medição' });
+    const target = within(dialog).getByRole('combobox', { name: 'Medição de início da vigência do aditivo' });
+    expect(target).toHaveValue(defaultTarget);
+    if (activeStatus === 'in_review') expect(within(target).getByRole('option', { name: /^1ª medição/ })).toBeDisabled();
+    fireEvent.change(target, { target: { value: chosen } });
     expect(repository.commit).not.toHaveBeenCalled();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Confirmar incorporação' }));
     await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Aditivos contratados pendentes' })).not.toBeInTheDocument());
     expect(vi.mocked(repository.commit).mock.calls[0][0].services).toContainEqual(expect.objectContaining({
-      id: 'additive:ad:new', availableFromNumber: 1,
+      id: 'additive:ad:new', availableFromNumber: Number(chosen),
     }));
   });
 
