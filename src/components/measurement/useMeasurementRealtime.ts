@@ -4,7 +4,7 @@ import type { MeasurementWorkspace } from '@/lib/measurementWorkspace';
 import { withReadDeadline } from '@/lib/readDeadline';
 
 interface Options {
-  repository: MeasurementRepository;
+  repository: MeasurementRepository | null;
   projectId?: string;
   revision?: number;
   canRefresh: () => boolean;
@@ -21,7 +21,7 @@ export function useMeasurementRealtime(options: Options) {
   const [lastCheckedAt, setLastCheckedAt] = useState<string | null>(null);
   useEffect(() => {
     const { repository } = latest.current;
-    if (!repository.watch || !repository.remoteRevision) return;
+    if (!repository?.watch || !repository.remoteRevision) return;
     let disposed = false, live = false, wanted = -1, reading = false, checking = false, readFailed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const fail = (cause: unknown) => {
@@ -105,5 +105,5 @@ export function useMeasurementRealtime(options: Options) {
   }, [options.repository]);
   useEffect(() => { resume.current(); });
   const retry = useCallback(() => retryRead.current(), []);
-  return { connected, pending, failed, failure, checking: checkingCloud, retry, lastCheckedAt, available: !!options.repository.watch };
+  return { connected, pending, failed, failure, checking: checkingCloud, retry, lastCheckedAt, available: !!options.repository?.watch };
 }
