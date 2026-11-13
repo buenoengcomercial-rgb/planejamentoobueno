@@ -1,8 +1,9 @@
-import { Task, Project, DependencyType, TaskBaseline } from '@/types/project';
+import { Task, Project, DependencyType, TaskDependency, TaskBaseline } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { mapTaskTree, replaceProjectTasksById } from '@/lib/taskTree';
 import { parseISODateLocal, toISODateLocal } from '@/components/gantt/utils';
 import { scheduleWorkdayWeight } from '@/lib/scheduleCalendar';
+import { dependencyLag } from './dependencyLag';
 import { applyDailyProductionLogs } from './dailyProductionLogs';
 
 /** Calendário de trabalho usado pelo motor de dependências. */
@@ -344,68 +345,49 @@ export function applyDailyLogsToProject(project: Project): Project {
   };
 }
 
-/** CPM Forward + Backward pass */
+/** CPM in working-day offsets, respecting all four dependency types and lags. */
 export function calculateCPM(project: Project): Project {
-  const allTasks = getAllTasks(project);
-  const taskMap = new Map<string, Task>();
-  allTasks.forEach(t => taskMap.set(t.id, { ...t }));
-
-  // Build successor map
-  const successors = new Map<string, string[]>();
-  allTasks.forEach(t => {
-    t.dependencies.forEach(depId => {
-      if (!successors.has(depId)) successors.set(depId, []);
-      successors.get(depId)!.push(t.id);
-    });
-  });
-
-  // Forward pass
+  const tasks = getAllTasks(project);
+  if (!tasks.length) return project;
+  const taskMap = new Map(tasks.map(task => [task.id, { ...task }]));
+  const graph = buildAcyclicDependencyGraph(tasks);
+  const offset = (predecessor: Task, successor: Task, dependency: TaskDependency) => {
+    const lag = dependencyLag(dependency);
+    switch (dependency.type) {
+      case 'II': return lag;
+      case 'TT': return predecessor.duration - successor.duration + lag;
+      case 'IT': return -successor.duration + lag;
+      default: return predecessor.duration + lag;
+    }
+  };
   const visited = new Set<string>();
-  function forwardPass(id: string): number {
-    const task = taskMap.get(id);
-    if (!task) return 0;
-    if (visited.has(id)) return task.ef!;
-    visited.add(id);
-
-    const validDeps = task.dependencies.filter(depId => taskMap.has(depId));
-    if (validDeps.length === 0) {
-      task.es = 0;
-    } else {
-      task.es = Math.max(...validDeps.map(depId => forwardPass(depId)));
-    }
-    task.ef = task.es + task.duration;
-    taskMap.set(id, task);
-    return task.ef;
-  }
-
-  allTasks.forEach(t => forwardPass(t.id));
-
-  // Project end
-  const projectEnd = Math.max(...Array.from(taskMap.values()).map(t => t.ef!));
-
-  // Backward pass
-  const visitedBack = new Set<string>();
-  function backwardPass(id: string): number {
+  const forward = (id: string): number => {
     const task = taskMap.get(id)!;
-    if (visitedBack.has(id)) return task.ls!;
-    visitedBack.add(id);
-
-    const succs = successors.get(id);
-    if (!succs || succs.length === 0) {
-      task.lf = projectEnd;
-    } else {
-      task.lf = Math.min(...succs.map(sId => backwardPass(sId)));
-    }
-    task.ls = task.lf - task.duration;
+    if (visited.has(id)) return task.es!;
+    visited.add(id);
+    task.es = Math.max(0, ...(graph.predecessors.get(id) ?? []).map(dep =>
+      forward(dep.taskId) + offset(taskMap.get(dep.taskId)!, task, dep)));
+    task.ef = task.es + task.duration;
+    return task.es;
+  };
+  tasks.forEach(task => forward(task.id));
+  const end = Math.max(...[...taskMap.values()].map(task => task.ef!));
+  const backVisited = new Set<string>();
+  const backward = (id: string): number => {
+    const task = taskMap.get(id)!;
+    if (backVisited.has(id)) return task.ls!;
+    backVisited.add(id);
+    task.ls = Math.min(end - task.duration, ...[...(graph.successors.get(id) ?? [])].map(successorId => {
+      const successor = taskMap.get(successorId)!;
+      const dep = graph.predecessors.get(successorId)!.find(item => item.taskId === id)!;
+      return backward(successorId) - offset(task, successor, dep);
+    }));
+    task.lf = task.ls + task.duration;
     task.float = task.ls - task.es!;
-    task.isCritical = task.float === 0;
-    taskMap.set(id, task);
+    task.isCritical = Math.abs(task.float) < 1e-8;
     return task.ls;
-  }
-
-  allTasks.forEach(t => backwardPass(t.id));
-
-  // Write back
+  };
+  tasks.forEach(task => backward(task.id));
   return replaceProjectTasksById(project, taskMap);
 }
 
@@ -502,7 +484,7 @@ export function suggestOptimizations(project: Project): { taskId: string; taskNa
 
 // ─── Dependency Propagation Engine ───────────────────────────────────
 
-function dependencyDetailsFor(task: Task) {
+function dependencyDetailsFor(task: Task): TaskDependency[] {
   return (task.dependencyDetails && task.dependencyDetails.length)
     ? task.dependencyDetails
     : (task.dependencies || []).map(taskId => ({ taskId, type: 'TI' as DependencyType }));
@@ -529,22 +511,34 @@ function previousWorkStartForEnd(endDate: Date, duration: number, cal?: WorkCale
   return nextWorkDay(current, cal);
 }
 
-/** Required successor start for one exact, zero-lag dependency. */
+/** Required successor start, including a signed working-day lag. */
 export function dependencyRequiredStart(
   predecessor: Task,
   successor: Task,
   type: DependencyType,
   cal?: WorkCalendar,
+  lag = 0,
 ): Date {
   const predecessorStart = nextWorkDay(parseISODateLocal(predecessor.startDate), cal);
   const predecessorEnd = workEndDate(predecessor.startDate, predecessor.duration, cal);
 
+  let required: Date;
   switch (type) {
-    case 'TI': return nextWorkDayAfter(predecessorEnd, cal);
-    case 'II': return predecessorStart;
-    case 'TT': return previousWorkStartForEnd(predecessorEnd, successor.duration, cal);
-    case 'IT': return previousWorkStartForEnd(predecessorStart, successor.duration, cal);
+    case 'TI': required = nextWorkDayAfter(predecessorEnd, cal); break;
+    case 'II': required = predecessorStart; break;
+    case 'TT': required = previousWorkStartForEnd(predecessorEnd, successor.duration, cal); break;
+    case 'IT': required = previousWorkStartForEnd(predecessorStart, successor.duration, cal); break;
   }
+  let remaining = Math.abs(dependencyLag({ lag }));
+  const direction = lag < 0 ? -1 : 1;
+  let safety = 0;
+  while (remaining > 0 && safety++ < 20000) {
+    required.setDate(required.getDate() + direction);
+    const capacity = cal ? scheduleWorkdayWeight(required, cal) : required.getDay() === 0 ? 0 : 1;
+    remaining -= capacity;
+  }
+  if (remaining > 0) throw new Error('Defasagem excede o limite do calendário.');
+  return required;
 }
 
 /** True when adding predecessor -> successor would close a cycle. */
@@ -581,13 +575,13 @@ export function wouldCreateDependencyCycle(
 }
 
 interface DependencyGraph {
-  predecessors: Map<string, { taskId: string; type: DependencyType }[]>;
+  predecessors: Map<string, TaskDependency[]>;
   successors: Map<string, Set<string>>;
 }
 
 function buildAcyclicDependencyGraph(tasks: Task[]): DependencyGraph {
   const validIds = new Set(tasks.map(task => task.id));
-  const predecessors = new Map<string, { taskId: string; type: DependencyType }[]>();
+  const predecessors = new Map<string, TaskDependency[]>();
   const successors = new Map<string, Set<string>>();
 
   const reaches = (fromId: string, targetId: string): boolean => {
@@ -612,7 +606,7 @@ function buildAcyclicDependencyGraph(tasks: Task[]): DependencyGraph {
       if (reaches(task.id, predecessorId)) continue;
 
       if (!predecessors.has(task.id)) predecessors.set(task.id, []);
-      predecessors.get(task.id)!.push({ taskId: predecessorId, type: dependency.type || 'TI' });
+      predecessors.get(task.id)!.push({ taskId: predecessorId, type: dependency.type || 'TI', lag: dependencyLag(dependency) });
       if (!successors.has(predecessorId)) successors.set(predecessorId, new Set());
       successors.get(predecessorId)!.add(task.id);
     }
@@ -649,7 +643,7 @@ function cascadeDependencyDates(
     for (const dependency of dependencies) {
       const predecessor = taskMap.get(dependency.taskId);
       if (!predecessor) continue;
-      const candidate = dependencyRequiredStart(predecessor, successor, dependency.type, cal);
+      const candidate = dependencyRequiredStart(predecessor, successor, dependency.type, cal, dependencyLag(dependency));
       if (!controlling || candidate.getTime() > controlling.start.getTime()) {
         controlling = { start: candidate, type: dependency.type };
       }
@@ -739,28 +733,16 @@ export function checkDependencyViolation(
   allTasks: Task[],
   cal?: WorkCalendar,
 ): { predName: string; predId: string; type: DependencyType } | null {
-  const details = (task.dependencyDetails && task.dependencyDetails.length)
-    ? task.dependencyDetails
-    : (task.dependencies || []).map(id => ({ taskId: id, type: 'TI' as DependencyType }));
+  const details = dependencyDetailsFor(task);
   const taskMap = new Map(allTasks.map(t => [t.id, t]));
 
   for (const dep of details) {
     const pred = taskMap.get(dep.taskId);
     if (!pred) continue;
 
-    const predStart = nextWorkDay(parseISODateLocal(pred.startDate), cal);
-    const predLast = workEndDate(pred.startDate, pred.duration, cal);
-    const predNext = nextWorkDayAfter(predLast, cal); // primeiro dia útil válido para sucessora TI
     const newStart = parseISODateLocal(newStartDate);
-    const newLast = workEndDate(newStartDate, task.duration, cal);
-
-    let violated = false;
-    switch (dep.type) {
-      case 'TI': violated = newStart < predNext; break;
-      case 'II': violated = newStart < predStart; break;
-      case 'TT': violated = newLast < predLast; break;
-      case 'IT': violated = newLast < predStart; break;
-    }
+    const required = dependencyRequiredStart(pred, task, dep.type, cal, dependencyLag(dep));
+    const violated = newStart < required;
 
     if (violated) {
       return { predName: pred.name, predId: pred.id, type: dep.type };

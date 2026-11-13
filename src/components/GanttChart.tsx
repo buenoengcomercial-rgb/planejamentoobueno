@@ -1,3 +1,4 @@
+import { dependencyLag, formatDependencyNumber, parseDependencyNumbers } from '@/lib/dependencyLag';
 import { Project, Task, ViewMode, DependencyType, TaskDependency } from '@/types/project';
 import type { AuditUserInfo } from '@/lib/audit';
 import { getTeamDefinition, DEFAULT_TEAMS, TeamCode, TeamDefinition } from '@/lib/teams';
@@ -1066,17 +1067,17 @@ export default function GanttChart({
 
   const handleDepChange = (taskId: string, value: string) => {
     if (!onProjectChange || isTaskScheduleLocked(taskId)) return;
-    const nums = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+    const nums = parseDependencyNumbers(value);
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
     const existingDetails = task.dependencyDetails || [];
-    const existingByTaskId = new Map(existingDetails.map(d => [d.taskId, d.type]));
+    const existingByTaskId = new Map(existingDetails.map(d => [d.taskId, d]));
     const deps: TaskDependency[] = [];
     const seen = new Set<string>();
     let ignored = 0;
 
-    for (const num of nums) {
-      const depTaskId = numberToTaskId.get(num);
+    for (const parsed of nums) {
+      const depTaskId = numberToTaskId.get(parsed.number);
       if (!depTaskId || depTaskId === taskId || seen.has(depTaskId) || displayOnlyTaskIds?.has(depTaskId)) {
         ignored++;
         continue;
@@ -1089,12 +1090,13 @@ export default function GanttChart({
         continue;
       }
       seen.add(depTaskId);
-      deps.push({ taskId: depTaskId, type: existingByTaskId.get(depTaskId) || 'TI' });
+      deps.push({ taskId: depTaskId, type: existingByTaskId.get(depTaskId)?.type || 'TI', lag: parsed.lag ?? dependencyLag(existingByTaskId.get(depTaskId) ?? {}) });
     }
     const unchanged = deps.length === existingDetails.length
       && deps.every((dependency, index) => (
         dependency.taskId === existingDetails[index]?.taskId
         && dependency.type === existingDetails[index]?.type
+        && dependencyLag(dependency) === dependencyLag(existingDetails[index] ?? {})
       ));
     if (unchanged) {
       if (ignored > 0) toast.warning('Depend\u00eancias inv\u00e1lidas, duplicadas ou c\u00edclicas foram ignoradas.');
@@ -1145,7 +1147,7 @@ export default function GanttChart({
   const getDepDisplay = (task: Task): string => {
     return (task.dependencyDetails || []).map(d => {
       const num = taskNumbering.get(d.taskId);
-      return num ? String(num) : '';
+      return num ? formatDependencyNumber(num, d) : '';
     }).filter(Boolean).join(', ');
   };
 
@@ -2506,7 +2508,7 @@ export default function GanttChart({
                                 })()}
                               </div>
                               <div className="text-center">
-                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <input className={`w-full text-[9px] bg-transparent border-b border-border/50 text-center focus:outline-none focus:border-primary ${rowTeamDef ? 'opacity-80' : 'text-muted-foreground'}`} style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined} defaultValue={depDisplay} key={depDisplay} placeholder="—" data-gantt-dependency-input="true" data-gantt-dependency-task-id={task.id} disabled={readOnly || scheduleLocked} onBlur={(e) => handleDepChange(task.id, e.target.value)} onKeyDown={(e) => handleDependencyKeyDown(task.id, e)} title="Nº da tarefa predecessora (ex: 3, 7)" />}
+                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <input className={`w-full text-[9px] bg-transparent border-b border-border/50 text-center focus:outline-none focus:border-primary ${rowTeamDef ? 'opacity-80' : 'text-muted-foreground'}`} style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined} defaultValue={depDisplay} key={depDisplay} placeholder="—" data-gantt-dependency-input="true" data-gantt-dependency-task-id={task.id} disabled={readOnly || scheduleLocked} onBlur={(e) => handleDepChange(task.id, e.target.value)} onKeyDown={(e) => handleDependencyKeyDown(task.id, e)} title="Nº da tarefa predecessora (ex: 3, 7)" aria-description="Defasagem em dias úteis: 7+5 aguarda cinco dias; 9-2 antecipa dois dias." />}
                               </div>
                               <div className="text-center">
                                 {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : depTypes.length > 0 ? <select aria-label={`Tipo de dependência da tarefa #${taskNum}`} data-testid={`gantt-dependency-types-${task.id}`} value={depTypes.length === 1 ? `${depTypes[0].index}:${depTypes[0].type}` : '__multiple__'} onChange={(event) => { const [depIndex, dependencyType] = event.target.value.split(':'); if (dependencyType) handleDepTypeChange(task.id, Number(depIndex), dependencyType as DependencyType); }} disabled={readOnly || scheduleLocked || !onProjectChange} className="h-5 w-full border-0 border-b border-border/50 bg-transparent px-0.5 text-center text-[9px] focus:outline-none focus:border-primary disabled:cursor-default" style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined} title={depTypes.map(dep => `#${dep.num} ${dep.type}`).join(', ')}>{depTypes.length > 1 && <option value="__multiple__" disabled>{depTypes.map(dep => dep.type).join('/')}</option>}{depTypes.map(dep => depTypes.length === 1 ? (['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => <option key={type} value={`${dep.index}:${type}`}>{type}</option>) : <optgroup key={dep.taskId} label={`Tarefa #${dep.num}`}>{(['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => <option key={type} value={`${dep.index}:${type}`}>{type}</option>)}</optgroup>)}</select> : <span className={`text-[9px] ${rowTeamDef ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>}
