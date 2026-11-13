@@ -13,13 +13,14 @@ interface ProjectHeaderSyncStatusProps {
   partialSyncPending: boolean;
   partialSyncDraftProtected: boolean;
   syncRetrying: boolean;
+  onSaveNow?: () => void;
   dailyReportHasErrors: boolean;
 }
 
 export default function ProjectHeaderSyncStatus({
   activeView, independentMeasurement, status, confirmedAt, lastCheckedAt,
   projectId, live, remoteUpdateAt, pendingRemoteAreas, partialSyncPending,
-  partialSyncDraftProtected, syncRetrying, dailyReportHasErrors,
+  partialSyncDraftProtected, syncRetrying, dailyReportHasErrors, onSaveNow,
 }: ProjectHeaderSyncStatusProps) {
   if (independentMeasurement && ['idle', 'saved'].includes(status)
     && !dailyReportHasErrors && !partialSyncPending) return null;
@@ -34,6 +35,7 @@ export default function ProjectHeaderSyncStatus({
       {otherAreaLabel && <span className="block text-right text-[10px] text-muted-foreground">{otherAreaLabel}</span>}
       <SaveStatusIndicator
         status={indicatorStatus}
+        onSaveNow={status === 'pending' && !partialSyncPending ? onSaveNow : undefined}
         confirmedAt={confirmedAt}
         lastCheckedAt={lastCheckedAt}
         projectId={projectId}

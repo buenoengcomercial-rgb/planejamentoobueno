@@ -1,5 +1,6 @@
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import { toast } from 'sonner';
+import { serializeProject } from '@/lib/cloudProjectDraftCore';
 import type { DailyReport, Project } from '@/types/project';
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import type { ConfirmDeleteOptions } from '@/components/ConfirmDeleteDialog';
@@ -129,9 +130,8 @@ export function saveDailyReportEdits(before: Project, after: Project, context: D
         toast.warning('A legenda ou campo já havia sido alterado em outro aparelho. Foi mantida a primeira edição salva e o rascunho foi preservado.');
       }
     });
-    dailyReportSaveQueueRef.current = request;
-    void request.catch(async error => {
-      if (rawProjectRef.current?.id !== after.id) return;
+    const settled = request.catch(async error => {
+      if (rawProjectRef.current?.id !== after.id) throw error;
       console.warn('Falha ao salvar o Diário diretamente.', error);
       const message = error instanceof Error ? error.message : 'Não foi possível salvar o Diário. Nenhuma alteração foi confirmada.';
       setDailyReportSaveErrors(errors => ({ ...errors, [date]: draftProtected ? message : `${message} A cópia está somente nesta aba. Baixe o rascunho antes de fechar.` }));
@@ -149,6 +149,7 @@ export function saveDailyReportEdits(before: Project, after: Project, context: D
         return next;
       });
       toast.error(message);
+      throw error;
     }).finally(() => {
       pendingDailyReportSavesRef.current = Math.max(0, pendingDailyReportSavesRef.current - 1);
       if (pendingDailyReportSavesRef.current === 0) {
@@ -156,9 +157,13 @@ export function saveDailyReportEdits(before: Project, after: Project, context: D
           ? 'conflict'
           : partialSyncPendingRef.current?.projectId === after.id
             ? 'error'
-            : Object.keys(dailyReportDraftsRef.current).length > 0 ? 'error' : 'saved');
+            : Object.keys(dailyReportDraftsRef.current).length > 0 ? 'error'
+              : rawProjectRef.current && serializeProject(rawProjectRef.current) !== lastSavedProjectJsonRef.current
+                ? 'pending' : 'saved');
       }
     });
+    dailyReportSaveQueueRef.current = settled;
+    void settled.catch(() => undefined);
   });
 }
 

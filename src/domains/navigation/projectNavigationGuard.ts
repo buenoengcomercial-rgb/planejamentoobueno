@@ -51,6 +51,10 @@ export async function flushPendingProjectSave(context: PendingSaveGuardContext):
     if (!requireCloudConfirmation || !project) return true;
     const latest = rawProjectRef.current;
     if (!latest || latest.id !== project.id) return false;
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
     if (serializeProject(latest) === lastSavedProjectJsonRef.current) return true;
     setSaveStatus('saving');
     try {
@@ -98,32 +102,43 @@ export async function flushPendingProjectSave(context: PendingSaveGuardContext):
     if (conflictDetectedRef.current) return false;
   }
 
-  if (saveTimerRef.current) {
-    window.clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = null;
-    setSaveStatus('saving');
+  while (pendingDailyReportSavesRef.current > 0 || inFlightSaveRef.current) {
+    if (pendingDailyReportSavesRef.current > 0) {
+      try { await dailyReportSaveQueueRef.current; } catch { return false; }
+      if (conflictDetectedRef.current) return false;
+      continue;
+    }
     try {
-      await persistProject(project, orgId);
-      return confirmLatestProject();
+      await inFlightSaveRef.current;
     } catch (error) {
-      console.warn(error);
-      if (error instanceof CloudProjectConflictError) {
-        await handleCloudConflict(project);
-      } else {
-        setSaveStatus(navigator.onLine ? 'error' : 'offline');
-        toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
+      if (error instanceof CloudProjectConflictError && rawProjectRef.current && !conflictDetectedRef.current) {
+        await handleCloudConflict(rawProjectRef.current);
       }
       return false;
     }
   }
 
-  if (inFlightSaveRef.current) {
+  // Keep the scheduled edit if the active write fails before the flush.
+  const timer = saveTimerRef.current;
+  if (timer !== null) {
+    window.clearTimeout(timer);
+    saveTimerRef.current = null;
+  }
+  if (timer !== null && !requireCloudConfirmation && !conflictDetectedRef.current
+    && partialSyncPendingRef.current?.projectId !== project.id) {
+    const latest = rawProjectRef.current;
+    if (latest?.id !== project.id) return false;
+    setSaveStatus('saving');
     try {
-      await inFlightSaveRef.current;
+      await persistProject(latest, orgId);
       return confirmLatestProject();
     } catch (error) {
-      if (error instanceof CloudProjectConflictError && rawProjectRef.current) {
-        await handleCloudConflict(rawProjectRef.current);
+      console.warn(error);
+      if (error instanceof CloudProjectConflictError) {
+        await handleCloudConflict(latest);
+      } else {
+        setSaveStatus(navigator.onLine ? 'error' : 'offline');
+        toast.error('Erro ao salvar na nuvem. Sua alteração ficou apenas neste navegador.');
       }
       return false;
     }

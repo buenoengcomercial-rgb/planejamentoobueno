@@ -96,8 +96,36 @@ describe('navegação protegida da obra', () => {
     });
 
     await expect(flushPendingProjectSave(context)).resolves.toBe(true);
-    expect(context.persistProject).toHaveBeenNthCalledWith(1, first, 'org-1');
-    expect(context.persistProject).toHaveBeenNthCalledWith(2, latest, 'org-1');
+    expect(context.persistProject).toHaveBeenCalledExactlyOnceWith(latest, 'org-1');
+  });
+
+  it('une dois pedidos de envio enquanto aguarda o recibo anterior', async () => {
+    const context = saveContext();
+    const latest = { ...project, name: 'Edição mais recente' };
+    context.requireCloudConfirmation = true;
+    context.rawProjectRef.current = latest;
+    let finishPrevious!: () => void;
+    let finishLatest!: () => void;
+    context.inFlightSaveRef.current = new Promise<void>(resolve => { finishPrevious = resolve; });
+    context.persistProject = vi.fn(async saved => {
+      const request = new Promise<void>(resolve => { finishLatest = resolve; });
+      context.inFlightSaveRef.current = request;
+      await request;
+      context.lastSavedProjectJsonRef.current = serializeProject(saved);
+      context.inFlightSaveRef.current = null;
+    });
+
+    const first = flushPendingProjectSave(context);
+    const second = flushPendingProjectSave(context);
+    expect(context.persistProject).not.toHaveBeenCalled();
+
+    context.inFlightSaveRef.current = null;
+    finishPrevious();
+    await Promise.resolve();
+    expect(context.persistProject).toHaveBeenCalledExactlyOnceWith(latest, 'org-1');
+
+    finishLatest();
+    await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
   });
 
   it('impede duas navegações simultâneas e libera a trava ao terminar', async () => {
