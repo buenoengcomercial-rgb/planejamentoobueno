@@ -457,3 +457,26 @@ describe('WarehouseEquipmentsTab - leitura por IA', () => {
     expect(screen.getByLabelText('Descrição')).toHaveValue('');
   });
 });
+
+
+it('mostra todos os termos ativos do patrimônio e não oferece devolução sem termo ativo', () => {
+  const current = projectWithEquipmentList([
+    { id: 'a', name: 'Furadeira', status: 'em_uso' },
+    { id: 'b', name: 'Serra', status: 'em_uso' },
+  ]);
+  const term = { equipmentId: 'a', equipmentName: 'Furadeira', issuedAt: '2026-08-18', createdAt: '2026-08-18' };
+  current.warehouse!.custodyTerms = [
+    { ...term, id: 'one', number: 'TC-001', workerName: 'João', status: 'em_uso' },
+    { ...term, id: 'two', number: 'TC-002', workerName: 'Ana', status: 'em_uso' },
+    { ...term, id: 'three', number: 'TC-003', workerName: 'Bia', status: 'devolvido' },
+  ];
+  render(<WarehouseEquipmentsTab project={current} onProjectChange={vi.fn()} canEdit={false} canArchive={false} />);
+  const [drill, saw] = screen.getAllByTestId('equipment-card');
+  expect(drill).toHaveTextContent('Em uso por: João');
+  expect(drill).toHaveTextContent('Em uso por: Ana');
+  expect(drill).not.toHaveTextContent('Bia');
+  expect(within(drill).getAllByRole('button', { name: /^Devolver Furadeira/ })).toHaveLength(2);
+  expect(within(saw).queryByRole('button', { name: /^Devolver/ })).not.toBeInTheDocument();
+  fireEvent.click(within(drill).getByRole('button', { name: /Devolver Furadeira.*TC-002/ }));
+  expect(screen.getByRole('dialog', { name: 'Devolver equipamento' })).toHaveTextContent('TC-002');
+});

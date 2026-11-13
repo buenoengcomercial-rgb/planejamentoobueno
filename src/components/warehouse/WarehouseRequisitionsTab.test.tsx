@@ -48,7 +48,7 @@ function expandAllWithdrawalDateGroups() {
 }
 
 function expandAllCustodyDateGroups() {
-  const tab = screen.getByRole('tab', { name: 'Histórico completo' });
+  const tab = screen.getByRole('tab', { name: 'Histórico por data / prédio' });
   fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
   fireEvent.click(tab);
   screen.getAllByTestId('custody-date-group').filter(element => element.tagName === 'SECTION').forEach(element => {
@@ -650,7 +650,7 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.mouseDown(equipmentTab, { button: 0, ctrlKey: false });
     fireEvent.click(equipmentTab);
 
-    const historyTab = screen.getByRole('tab', { name: 'Histórico completo' });
+    const historyTab = screen.getByRole('tab', { name: 'Histórico por data / prédio' });
     fireEvent.mouseDown(historyTab, { button: 0, ctrlKey: false });
     fireEvent.click(historyTab);
     const buildingRows = screen.getAllByTestId('custody-building-group').filter(element => element.tagName === 'SECTION');
@@ -675,7 +675,7 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.mouseDown(equipmentTab, { button: 0, ctrlKey: false });
     fireEvent.click(equipmentTab);
 
-    const historyTab = screen.getByRole('tab', { name: 'Histórico completo' });
+    const historyTab = screen.getByRole('tab', { name: 'Histórico por data / prédio' });
     fireEvent.mouseDown(historyTab, { button: 0, ctrlKey: false });
     fireEvent.click(historyTab);
     expect(screen.getAllByText('06/09/2026').length).toBeGreaterThan(0);
