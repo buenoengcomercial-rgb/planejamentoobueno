@@ -1,7 +1,7 @@
 import { type ComponentProps } from 'react';
 import { type NavigateFunction } from 'react-router-dom';
 import type { AppView, Project } from '@/types/project';
-import type { OrgRole } from '@/lib/organizations';
+import { canAccessAppView, type OrgRole } from '@/lib/organizations';
 import type { AuditUserInfo } from '@/lib/audit';
 import type { WarehouseTab } from '@/lib/projectDataScope';
 import { lazyWithReload } from '@/lib/lazyWithReload';
@@ -16,6 +16,7 @@ import UndoButton from '@/components/UndoButton';
 const Dashboard = lazyWithReload(() => import('@/components/Dashboard'));
 const ManagementRoutine = lazyWithReload(() => import('@/components/OperationalManagementRoutine'));
 const GanttChart = lazyWithReload(() => import('@/components/OperationalGanttChart'));
+const MonthlyExecutionSchedule = lazyWithReload(() => import('@/components/MonthlyExecutionSchedule'));
 const DailyProductionWorkspace = lazyWithReload(() => import('@/components/DailyProductionWorkspace'));
 const Measurement = lazyWithReload(() => import('@/components/Measurement'));
 const Additive = lazyWithReload(() => import('@/components/Additive'));
@@ -41,6 +42,7 @@ export interface ProjectAreaContentProps {
   userId: string | undefined;
   locationSearch: string;
   navigate: NavigateFunction;
+  onViewChange: (view: AppView) => void;
   onProductionNavigation: () => void;
   onRoutineNavigation: () => void;
   productionWorkspaceInitialTab: 'production' | 'dailyReport';
@@ -79,7 +81,7 @@ export interface ProjectAreaContentProps {
 export default function ProjectAreaContent({
   project, safeCurrentView, currentViewDataReady, dataLoadError, onRetryDataLoad,
   role, editor, dailyReportEditor, warehouseEditor, auditActor, orgId, userId,
-  locationSearch, navigate, onProductionNavigation, onRoutineNavigation,
+  locationSearch, navigate, onViewChange, onProductionNavigation, onRoutineNavigation,
   productionWorkspaceInitialTab, dailyReportInitialDate, dailyReportInitialFilter,
   dailyReportNavKey, independentMeasurementConfirmed, onIndependentReady,
   onOpenDailyReport: handleOpenDailyReport,
@@ -158,22 +160,33 @@ export default function ProjectAreaContent({
         </>
       );
     case 'gantt':
-      return <GanttChart
+      return <MonthlyExecutionSchedule
+        key={JSON.stringify([project.id, userId])}
         project={project}
-        onProjectChange={ganttSetter}
-        readOnly={!editor}
-        canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
-        canApproveReschedule={role === 'owner' || role === 'admin'}
-        auditActor={auditActor}
-        calendarConfig={resolveObraConfig(project)}
-        canManageCalendar={role === 'owner' || role === 'admin'}
-        onCalendarConfigChange={config => ganttSetter(previous => logToProject({ ...previous, scheduleCalendar: config }, {
-          ...auditActor, entityType: 'project', entityId: previous.id, action: 'updated',
-          title: 'Calendário da obra atualizado',
-          description: `Calendário operacional atualizado; ${config.exceptions?.length ?? 0} exceção(ões) de expediente ativa(s).`,
-          before: previous.scheduleCalendar, after: config,
-        }))}
-        undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />}
+        userId={userId}
+        independentMeasurementConfirmed={independentMeasurementConfirmed}
+        openMeasurement={role && canAccessAppView(role, 'measurement') ? () => onViewChange('measurement') : undefined}
+        openAdditive={role && canAccessAppView(role, 'additive') ? () => onViewChange('additive') : undefined}
+        renderGantt={additives => (
+          <GanttChart
+            project={project}
+            confirmedAdditives={additives}
+            onProjectChange={ganttSetter}
+            readOnly={!editor}
+            canRequestReschedule={role === 'owner' || role === 'admin' || role === 'engineer'}
+            canApproveReschedule={role === 'owner' || role === 'admin'}
+            auditActor={auditActor}
+            calendarConfig={resolveObraConfig(project)}
+            canManageCalendar={role === 'owner' || role === 'admin'}
+            onCalendarConfigChange={config => ganttSetter(previous => logToProject({ ...previous, scheduleCalendar: config }, {
+              ...auditActor, entityType: 'project', entityId: previous.id, action: 'updated',
+              title: 'Calendário da obra atualizado',
+              description: `Calendário operacional atualizado; ${config.exceptions?.length ?? 0} exceção(ões) de expediente ativa(s).`,
+              before: previous.scheduleCalendar, after: config,
+            }))}
+            undoButton={<UndoButton canUndo={canUndo('gantt')} onUndo={() => handleUndo('gantt')} size="xs" />}
+          />
+        )}
       />;
     case 'tasks':
       return (

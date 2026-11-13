@@ -192,7 +192,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const pendingOperation = useRef<Promise<boolean>>(Promise.resolve(true));
   const uncertainCommit = useRef<Workspace | null>(null);
   const uncertainAfter = useRef<{ operationId: string; callback: () => void } | null>(null);
-  const uncertainCommandKey = useRef<string | null>(null);
+  const uncertainCommand = useRef<{ key: string; operationId: string } | null>(null);
   const lastSaveFailure = useRef('');
   const recoveryRef = useRef(recovery);
   recoveryRef.current = recovery;
@@ -480,20 +480,21 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       // A previous task save may still be uncertain when this command could
       // not run. Only keep the command locked for its own submitted operation.
       if (commandOperationId && uncertainCommit.current?.audit.at(-1)?.id === commandOperationId)
-        uncertainCommandKey.current = key;
+        uncertainCommand.current = { key, operationId: commandOperationId };
       else finishCommand(key);
     }, () => finishCommand(key));
     return true;
   };
   const finishUncertainCommand = (operationId: string) => {
     const pending = uncertainAfter.current;
-    if (!pending || pending.operationId !== operationId) return;
-    uncertainAfter.current = null;
-    try { pending.callback(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    if (uncertainCommandKey.current) {
-      finishCommand(uncertainCommandKey.current);
-      uncertainCommandKey.current = null;
+    if (pending?.operationId === operationId) {
+      uncertainAfter.current = null;
+      try { pending.callback(); }
+      catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    }
+    if (uncertainCommand.current?.operationId === operationId) {
+      finishCommand(uncertainCommand.current.key);
+      uncertainCommand.current = null;
     }
   };
   const drainDetailQueue = async (): Promise<boolean> => {
@@ -1125,7 +1126,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       lastSaveFailure.current = cause instanceof Error ? cause.message : String(cause);
       if (cause instanceof MeasurementCommitRejectedError) {
         uncertainCommit.current = null; uncertainAfter.current = null;
-        if (uncertainCommandKey.current) { finishCommand(uncertainCommandKey.current); uncertainCommandKey.current = null; }
+        if (uncertainCommand.current) { finishCommand(uncertainCommand.current.key); uncertainCommand.current = null; }
         if (latest && !repository.loadedOffline?.()) {
           adopt(latest);
           setActive(previous => {
@@ -1308,7 +1309,31 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         <button className={button} disabled={!actor.canEdit || !!deletionBlock || !!commandInFlight} title={deletionBlock ?? 'Excluir a última medição'} onClick={() => { setError(''); setLifecycle({ kind: 'delete', id: active }); }}>Excluir medição</button>
         {lastDeleted && <button className={button} disabled={!actor.canEdit || !!commandInFlight} onClick={() => { setError(''); setLifecycle({ kind: 'restore', id: lastDeleted.id }); }}>Restaurar medição excluída</button>}
 
-        {approvedAdditives.filter(a => ['aprovado', 'contratado', 'aditivo_contratado'].includes(a.status ?? '') && !a.editUnlocked).map(additive => <button key={additive.id} className={button} disabled={!!locked} onClick={() => apply(w => incorporateApprovedAdditive(w, actor, additive, period!.number).workspace)}>Incorporar serviços e quantitativos · {additive.name} (a partir da {period!.number}ª medição)</button>)}
+        {period && period.number >= 3 && approvedAdditives.filter(a => ['aprovado', 'contratado', 'aditivo_contratado'].includes(a.status ?? '') && !a.editUnlocked).map(additive => <button key={additive.id} className={button} disabled={locked || !!commandInFlight} onClick={() => {
+          const key = `incorporate:${additive.id}`;
+          if (!beginCommand(key)) return;
+          void (async () => {
+            let queued = false;
+            try {
+              if (uncertainCommit.current || recovery) {
+                setError('Confira a gravação pendente antes de iniciar outra incorporação.');
+                return;
+              }
+              if (!await flushConfirmedEdits()) return;
+              const latest = await (repository.loadForRetry?.() ?? repository.load());
+              if (!latest || repository.loadedOffline?.()) throw new Error('Não foi possível conferir o catálogo da Medição na nuvem.');
+              const confirmedPeriod = latest.periods.find(item => item.id === period.id);
+              if (!confirmedPeriod || confirmedPeriod.number !== period.number) throw new Error('O período da Medição mudou. Confira antes de incorporar.');
+              if (busy.current || detailQueue.current.length || bufferedDetail.current) throw new Error('Confirme os lançamentos em andamento antes de incorporar.');
+              adopt(latest);
+              queued = queueCommand(key, w => incorporateApprovedAdditive(w, actor, additive, period.number).workspace, undefined, true);
+            } catch (cause) {
+              setError(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+              if (!queued) finishCommand(key);
+            }
+          })();
+        }}>Incorporar na Medição · {additive.name} (a partir da {period.number}ª medição)</button>)}
         <button className={`${button} ml-auto`} disabled={locked || !actor.canReview || !!commandInFlight || fiscalCurrent && !fiscalPending} title={fiscalCurrent && !fiscalPending ? 'Nenhuma alteração desde o último envio à fiscalização' : undefined} onClick={() => { setError(''); setFiscalOpen(true); }}><FileCheck2 className="h-3.5 w-3.5"/>{period?.status === 'in_review' ? 'Reenviar para fiscalização' : 'Enviar para fiscalização'}</button>
         {period?.status === 'in_review' && <button className={button} disabled={locked || !actor.canReview || !!commandInFlight || fiscalPending} title={fiscalPending ? 'Confirme todos os lançamentos desta medição na nuvem antes da aprovação' : undefined} onClick={() => { setError(''); setLifecycle({ kind: 'approve', id: active }); }}>Aprovado pela fiscalização</button>}
       </div>

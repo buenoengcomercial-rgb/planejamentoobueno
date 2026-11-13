@@ -63,6 +63,8 @@ interface GanttChartProps {
   }>;
   /** Tarefas exibidas a partir de uma prévia de aditivo e editáveis somente nela. */
   lockedTaskLabels?: Record<string, string>;
+  /** Visible archive rows have no task record that could own a persisted link. */
+  displayOnlyTaskIds?: ReadonlySet<string>;
   readOnly?: boolean;
   /** Allows planning dates of blocked work in an approved additive without releasing execution. */
   allowSuspendedDateEditing?: boolean;
@@ -89,6 +91,7 @@ export default function GanttChart({
   financialForecastNode,
   monthlyFinancialForecast,
   lockedTaskLabels = {},
+  displayOnlyTaskIds,
   readOnly = false,
   allowSuspendedDateEditing = false,
   collapsedPhaseIds: controlledCollapsedPhaseIds,
@@ -823,9 +826,9 @@ export default function GanttChart({
     updateTask(taskId, { baseline: newBaseline });
   };
   const handleChapterDateChange = (phaseId: string, field: 'start' | 'end', date: Date | undefined) => {
-    if (!date || !onProjectChange) return;
+    if (!date || readOnly || !onProjectChange) return;
     const phase = project.phases.find(p => p.id === phaseId);
-    if (!phase || getVisiblePhaseTasks(phase).length === 0) return;
+    if (!phase || getVisiblePhaseTasks(phase).length === 0 || flattenTaskTree(phase.tasks).every(task => isTaskScheduleLocked(task.id))) return;
 
     const range = getPhaseRange(phase);
     const oldStart = new Date(range.start);
@@ -1074,7 +1077,7 @@ export default function GanttChart({
 
     for (const num of nums) {
       const depTaskId = numberToTaskId.get(num);
-      if (!depTaskId || depTaskId === taskId || seen.has(depTaskId)) {
+      if (!depTaskId || depTaskId === taskId || seen.has(depTaskId) || displayOnlyTaskIds?.has(depTaskId)) {
         ignored++;
         continue;
       }
@@ -2012,7 +2015,7 @@ export default function GanttChart({
                         )}
                         <Popover>
                           <PopoverTrigger asChild>
-                            <button className="text-muted-foreground hover:text-primary transition-colors">
+                            <button disabled={readOnly || !onProjectChange || visiblePhaseTasks.every(task => isTaskScheduleLocked(task.id))} className="text-muted-foreground hover:text-primary transition-colors">
                               Início: <span className="font-semibold text-foreground">{phaseRange.start ? formatDateFull(phaseRange.start) : '—'}</span>
                             </button>
                           </PopoverTrigger>
@@ -2031,7 +2034,7 @@ export default function GanttChart({
                         </Popover>
                         <Popover>
                           <PopoverTrigger asChild>
-                            <button className="text-muted-foreground hover:text-primary transition-colors">
+                            <button disabled={readOnly || !onProjectChange || visiblePhaseTasks.every(task => isTaskScheduleLocked(task.id))} className="text-muted-foreground hover:text-primary transition-colors">
                               Fim: <span className="font-semibold text-foreground">{phaseRange.end ? formatDateFull(phaseRange.end) : '—'}</span>
                             </button>
                           </PopoverTrigger>

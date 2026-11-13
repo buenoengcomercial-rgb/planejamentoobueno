@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { toast } from 'sonner';
 import {
@@ -21,6 +21,7 @@ import {
   type AdditiveAnalyticImportPreview,
 } from '@/lib/additiveImport';
 import { contractAdditiveKeepingBase } from '@/lib/additiveContractSeparation';
+import { discardCloudProjectRecord, loadStableCloudProjectRecord } from '@/lib/cloudProjects';
 import { calculateLineTotal, trunc2 } from '@/lib/financialEngine';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import {
@@ -68,6 +69,7 @@ const createPhaseId = () => {
 
 export function useAdditiveActions({ project, onProjectChange, onSaveNow, state, canFormalize = false }: Params) {
   const [savingApproval, setSavingApproval] = useState(false);
+  const contracting = useRef(false);
   const { user } = useAuth();
   const auditUser = useMemo(() => userInfoFromSupabaseUser(user), [user]);
   const obraConfig = useMemo(() => resolveObraConfig(project), [project]);
@@ -1139,13 +1141,17 @@ export function useAdditiveActions({ project, onProjectChange, onSaveNow, state,
   };
 
   const handleContractAdditive = async (effectiveDate: string): Promise<boolean> => {
-    if (!active) return false;
+    if (!active || contracting.current) return false;
     if (!canFormalize) {
       toast.error('Somente Proprietario ou Administrador pode contratar um aditivo.');
       return false;
     }
     if (active.status !== 'aprovado' && !active.isContracted) {
       toast.error('O aditivo precisa estar Aprovado para ser contratado.');
+      return false;
+    }
+    if (!onSaveNow) {
+      toast.error('A confirmação na nuvem é necessária para integrar o Aditivo.');
       return false;
     }
     const parsedEffectiveDate = new Date(`${effectiveDate}T00:00:00Z`);
@@ -1162,7 +1168,22 @@ export function useAdditiveActions({ project, onProjectChange, onSaveNow, state,
     }
     const isReintegration = !!active.isContracted;
     const novosServicos = active.compositions.filter(c => c.isNewService);
+    contracting.current = true;
     try {
+      const record = await loadStableCloudProjectRecord(project.id, { collections: ['additives'], strict: true });
+      if (!record) throw new Error('Não foi possível conferir o Aditivo na nuvem.');
+      discardCloudProjectRecord(record);
+      const confirmed = record.project.additives?.find(additive => additive.id === active.id);
+      const expectedVersion = isReintegration ? (active.version ?? 0) + 1 : (active.version ?? 0);
+      if (confirmed?.status === 'aditivo_contratado' && confirmed.isContracted
+        && confirmed.contractRevisionId && !confirmed.editUnlocked && confirmed.version === expectedVersion) {
+        toast.success('O aditivo já está integrado e confirmado na nuvem. Confira no Cronograma.');
+        return true;
+      }
+      if (!confirmed || confirmed.version !== active.version || confirmed.status !== active.status
+        || !!confirmed.editUnlocked !== !!active.editUnlocked) {
+        throw new Error('O Aditivo mudou na nuvem. Confira a versão atual antes de integrar.');
+      }
       flushSync(() => onProjectChange(prev => {
       const settledProject = settleAdditiveScheduleDraft(prev, active.id, obraConfig);
       const currentAdditive = (settledProject.additives ?? []).find(item => item.id === active.id);
@@ -1203,8 +1224,7 @@ export function useAdditiveActions({ project, onProjectChange, onSaveNow, state,
         },
       });
       }));
-      const expectedVersion = active.isContracted ? (active.version ?? 0) + 1 : (active.version ?? 0);
-      if (!onSaveNow || !await onSaveNow({ additiveId: active.id, version: expectedVersion, status: 'aditivo_contratado' })) {
+      if (!await onSaveNow({ additiveId: active.id, version: expectedVersion, status: 'aditivo_contratado' })) {
         toast.warning('A integração ainda não foi confirmada na nuvem. A tentativa local foi preservada; use “Salvar agora” antes de sair.');
         return false;
       }
@@ -1213,6 +1233,8 @@ export function useAdditiveActions({ project, onProjectChange, onSaveNow, state,
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Falha ao confirmar a integração na nuvem.');
       return false;
+    } finally {
+      contracting.current = false;
     }
   };
 
