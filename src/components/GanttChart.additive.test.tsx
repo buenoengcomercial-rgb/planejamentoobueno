@@ -540,3 +540,16 @@ it('exibe histórico e fechamento sem habilitar itens zerados e oculta o resumo 
   expect(screen.getByTestId('gantt-sidebar-row-closing')).toBeInTheDocument();
   expect(screen.queryByTestId('gantt-sidebar-row-summary')).not.toBeInTheDocument();
 });
+
+it('mantém novos marcos recolhidos após sincronizar preferências e recarregar o gráfico', () => {
+  localStorage.clear();
+  const candidate=structuredClone(project);
+  candidate.phases.push({id:'release-phase:phase-1',parentId:'phase-1',name:'Marcos de liberação',color:'#64748b',tasks:[{...candidate.phases[0].tasks[0],id:'release:one',name:'Marco de teste',phase:'release-phase:phase-1',duration:0,quantity:undefined,team:undefined,scheduleDisplayKind:'release'}]});
+  const mounted=render(<GanttChart project={candidate} readOnly />);
+  expect(screen.queryByTestId('gantt-sidebar-row-release:one')).not.toBeInTheDocument();
+  mounted.rerender(<GanttChart project={structuredClone(candidate)} readOnly />);
+  expect(screen.queryByTestId('gantt-sidebar-row-release:one')).not.toBeInTheDocument();
+  mounted.unmount();
+  render(<GanttChart project={candidate} readOnly />);
+  expect(screen.queryByTestId('gantt-sidebar-row-release:one')).not.toBeInTheDocument();
+});
