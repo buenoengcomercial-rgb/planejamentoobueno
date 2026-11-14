@@ -1,3 +1,5 @@
+import { settleReleaseProject } from '@/lib/scheduleReleaseMath';
+import { applyExecutionRevision, includeReleaseMilestones } from '@/lib/scheduleExecutionRevision';
 import { includeMeasuredSchedule, stripMeasuredSchedule } from '@/lib/measuredSchedule';
 import type { MeasurementWorkspace } from '@/lib/measurementWorkspace';
 import { includeClosingSchedule, calculateClosingCPM } from '@/lib/closingSchedule';
@@ -30,7 +32,11 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
   const display = useMemo(() => includeContractedAdditiveTasks(operationalProject, confirmedAdditives), [operationalProject, confirmedAdditives]);
   const closing = useMemo(() => includeClosingSchedule(display.project), [display.project]);
   const measured = useMemo(() => includeMeasuredSchedule(closing.project, confirmedMeasurement, confirmedAdditives), [closing.project, confirmedMeasurement, confirmedAdditives]);
-  const ganttProject = useMemo(() => calculateClosingCPM(measured.project), [measured.project]);
+  const ganttProject = useMemo(() => {
+    const projected = includeReleaseMilestones(measured.project);
+    const revised = projected.phases.some(p => p.tasks.some(t => t.operationalReschedule?.executionRevision));
+    return calculateClosingCPM(revised ? settleReleaseProject(projected) : projected);
+  }, [measured.project]);
   const suspensionMap = useMemo(() => buildOfficialAdditiveSuspensionMap(display.project), [display.project]);
   const lockedTaskLabels = useMemo(() => Object.fromEntries([
     ...Array.from(getPendingAdditiveScheduleControls(project), ([taskId, control]) => [taskId, control.additiveName]),
@@ -48,8 +54,23 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
     });
   }, [confirmedAdditives, display, measured.lockedIds, onProjectChange]);
 
+  const reviseExecution = () => {
+    if (!confirmedMeasurement) return;
+    try {
+      if (Object.keys(lockedTaskLabels).length) throw Error('Concilie os controles pendentes do aditivo antes da revisão.');
+      onProjectChange(previous => {
+        const operational = buildOperationalProjectFromPendingAdditives(calculateProjectSchedule(previous, true));
+        const current = includeContractedAdditiveTasks(operational, confirmedAdditives);
+        const revised = applyExecutionRevision(current.project, confirmedMeasurement, confirmedAdditives, props.auditActor ?? {});
+        const captured = captureContractedTaskSchedules(current.project, current.project, revised, confirmedAdditives, current.projectedTaskIds);
+        return applyProjectedProjectOperation('gantt', previous, current.project, mergeOperationalProjectIntoRaw(previous, current.project), mergeOperationalProjectIntoRaw(previous, captured));
+      });
+    } catch (error) { setImportError(error instanceof Error ? error.message : 'Não foi possível revisar o cronograma.'); }
+  };
+
   return (
     <>
+    {!props.readOnly && props.canManageCalendar && confirmedMeasurement && <button className="rounded border px-3 py-2 mb-2 text-sm" disabled={display.project.phases.some(p => p.tasks.some(t => t.operationalReschedule?.executionRevision))} onClick={reviseExecution}>Aplicar revisão do executado e limite de duas predecessoras</button>}
     {!props.readOnly && props.canManageCalendar && <details className="rounded border p-3 mb-3 text-sm">
       <summary className="cursor-pointer">Importar programação revisada</summary>
       <p className="my-2">Confira o arquivo antes de aplicar. Datas, equipes e vínculos serão atualizados; execução e valores contratuais serão preservados.</p>
@@ -78,14 +99,14 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
       </div>}
       {importError && <p role="alert" className="mt-2 text-destructive">{importError}</p>}
     </details>}
-    {measured.measuredCount > 0 && <p className="my-2 text-sm">{measured.measuredCount} serviços com execução nas medições 1–2. Itens concluídos usam as datas registradas ou o intervalo da medição; itens parciais mantêm apenas o saldo no planejamento futuro. O histórico por período está disponível ao final do Gantt, em consulta.</p>}
+    {measured.measuredCount > 0 && <p className="my-2 text-sm">{measured.measuredCount} serviços com execução nas medições 1–2. Executado identificado no próprio subcapítulo, com datas comprovadas ou referência convencionada em 15/09 e 15/10/2026. Somente o saldo permanece no planejamento futuro.</p>}
     {closing.taskIds.size > 0 && <p className="my-2 text-sm">Fechamento incluído no caminho crítico até {getDeadline(display.project)}. Folgas em dias úteis, considerando as datas liberadas e os vínculos. Etapas operacionais sem quantidade ou valor contratual.</p>}
     <GanttChart
       {...props}
       project={ganttProject}
       onProjectChange={updateOperationalProject}
       displayOnlyTaskIds={new Set([...measured.lockedIds].filter(id => id.startsWith('measured:')))}
-      lockedTaskLabels={{ ...lockedTaskLabels, ...Object.fromEntries([...measured.lockedIds].map(id => [id, 'Execução registrada nas medições 1–2 — somente consulta'])), ...Object.fromEntries([...closing.taskIds].map(id => [id, 'Etapa operacional de fechamento — atualizar pela programação revisada'])) }}
+      lockedTaskLabels={{ ...lockedTaskLabels, ...Object.fromEntries([...measured.lockedIds].map(id => [id, 'Execução registrada nas medições 1–2 — somente consulta'])), ...Object.fromEntries(ganttProject.phases.flatMap(p => p.tasks).filter(t => t.scheduleDisplayKind === 'release').map(t => [t.id, 'Marco de liberação — atualizar pela revisão do cronograma'])), ...Object.fromEntries([...closing.taskIds].map(id => [id, 'Etapa operacional de fechamento — atualizar pela programação revisada'])) }}
       suspensionMap={props.suspensionMap ?? suspensionMap}
       financialForecastNode={props.financialForecastNode === undefined && display.projectedTaskIds.size > 0
         ? <GanttFinancialForecast project={operationalProject} trabalhaSabado={props.calendarConfig?.trabalhaSabado} />

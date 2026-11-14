@@ -119,6 +119,8 @@ export interface TaskLocation {
 }
 
 export interface Task {
+  /** Gantt-only rows; never contractual quantities. */
+  scheduleDisplayKind?: "history" | "completed-summary" | "release" | "closing";
   id: string;
   name: string;
   phase: string;
@@ -316,7 +318,14 @@ export interface ClosingScheduleActivity {
   reason: string;
 }
 
+export interface MeasuredScheduleReference {
+  number: number; start: string; end: string; qty: number; precise: boolean;
+}
+export interface ScheduleReleaseMilestone {
+  id: string; name: string; startDate: string; phase: string; dependencies: TaskDependency[];
+}
 export interface TaskOperationalReschedule {
+  executionRevision?: { version: 1; approvedAt: string; approvedBy?: string; references: MeasuredScheduleReference[]; completed: boolean; originalDependencies: TaskDependency[]; milestones: ScheduleReleaseMilestone[] };
   closingActivities?: ClosingScheduleActivity[];
   closingDeadline?: string;
   requestId: string;

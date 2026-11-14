@@ -1,3 +1,4 @@
+import { settleReleaseProject } from './scheduleReleaseMath';
 import { Task, Project, DependencyType, TaskDependency, TaskBaseline } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { mapTaskTree, replaceProjectTasksById } from '@/lib/taskTree';
@@ -529,6 +530,19 @@ export function dependencyRequiredStart(
     case 'TT': required = previousWorkStartForEnd(predecessorEnd, successor.duration, cal); break;
     case 'IT': required = previousWorkStartForEnd(predecessorStart, successor.duration, cal); break;
   }
+  if (predecessor.duration === 0 || successor.duration === 0) {
+    // Milestones are event boundaries, not one-day activities.
+    const finishBoundary = predecessor.duration === 0 ? predecessorStart : nextWorkDayAfter(predecessorEnd, cal);
+    required = new Date(type === 'TI' || type === 'TT' ? finishBoundary : predecessorStart);
+    if ((type === 'TT' || type === 'IT') && successor.duration > 0) {
+      let capacity = 0, guard = 0;
+      do {
+        required.setDate(required.getDate() - 1);
+        capacity = cal ? scheduleWorkdayWeight(required, cal) : required.getDay() === 0 ? 0 : 1;
+      } while (capacity <= 0 && guard++ < 20000);
+      required = previousWorkStartForEnd(required, successor.duration, cal);
+    }
+  }
   let remaining = Math.abs(dependencyLag({ lag }));
   const direction = lag < 0 ? -1 : 1;
   let safety = 0;
@@ -620,6 +634,11 @@ function cascadeDependencyDates(
   initialTaskIds: string[],
   cal?: WorkCalendar,
 ): { tasks: Task[]; changed: boolean; adjustedTypes: Set<DependencyType> } {
+  if (cal && tasks.some(t => t.scheduleDisplayKind === 'release')) {
+    const project = { id: 'release-calculation', name: '', startDate: tasks.map(t=>t.startDate).sort()[0], endDate: '', phases: [{id:'release-calculation',name:'',color:'',tasks}], scheduleCalendar: { ...cal, jornadaDiaria: cal.jornadaDiaria ?? 8 } } as Project;
+    const next = getAllTasks(settleReleaseProject(project));
+    return {tasks:next,changed:next.some((t,i)=>t.startDate!==tasks[i].startDate),adjustedTypes:new Set<DependencyType>(next.flatMap(t=>t.dependencyDetails?.map(d=>d.type)??[]))};
+  }
   const taskMap = new Map(tasks.map(task => [task.id, { ...task }]));
   const graph = buildAcyclicDependencyGraph(tasks);
   const queue = initialTaskIds.filter(taskId => taskMap.has(taskId));
@@ -688,6 +707,7 @@ export function propagateAllDependencies(
   changedTaskId: string,
   cal?: WorkCalendar,
 ): { tasks: Task[]; changed: boolean; adjustedTypes: Set<DependencyType> } {
+  if (cal && tasks.some(t => t.scheduleDisplayKind === 'release')) return cascadeDependencyDates(tasks, [changedTaskId], cal);
   const graph = buildAcyclicDependencyGraph(tasks);
   return cascadeDependencyDates(tasks, [...(graph.successors.get(changedTaskId) ?? [])], cal);
 }
@@ -705,6 +725,7 @@ export function recalculateTaskAndSuccessors(
  * Settle ALL dependency relationships in the project.
  */
 export function settleAllDependencies(project: Project, cal?: WorkCalendar): Project {
+  if (project.scheduleCalendar && getAllTasks(project).some(t => t.scheduleDisplayKind === 'release')) return settleReleaseProject(project);
   let allTasks = getAllTasks(project);
   if (allTasks.length === 0) return project;
 
