@@ -323,9 +323,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       const operationId = 'operationId' in stored ? stored.operationId : stored.candidate.audit.at(-1)?.id;
       if (!operationId) throw new Error('Há um lançamento local sem identificação. Confira o rascunho.');
       if (stored.baseRevision < remote.revision) {
-        const receiptRevision = await compactedReceiptRevision(operationId);
-        const applied = remote.audit.some(event => event.id === operationId)
-          || receiptRevision !== null && receiptRevision >= stored.baseRevision + 1 && receiptRevision <= remote.revision;
+        const inAudit = remote.audit.some(event => event.id === operationId);
+        const receiptRevision = inAudit ? null : await compactedReceiptRevision(operationId);
+        const applied = inAudit || receiptRevision !== null && receiptRevision >= stored.baseRevision + 1 && receiptRevision <= remote.revision;
         if (!applied && (('format' in stored && stored.format === 'entry-patch-v1')
           || localStorage.getItem(measurementCommandKey(scope.userId, scope.projectId, operationId)))) {
           pending.push(await restorePending(stored));

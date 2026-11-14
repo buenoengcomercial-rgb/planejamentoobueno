@@ -282,7 +282,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     return entries === base.entries ? base : { ...base, entries };
   }, []);
   const adopt = useCallback((w: Workspace) => { current.current = w; setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(w))); }, [displayWithFailedTasks]);
-  const realtime = useMeasurementRealtime({ repository, projectId: workspace?.projectId, revision: workspace?.revision,
+  const realtime = useMeasurementRealtime({ repository, projectId: workspace?.projectId, revision: current.current?.revision,
     canRefresh: () => !busy.current && !recovery && !detailQueue.current.length && !destinationRef.current && !lifecycle && !periodOpen
       && !writingDrafts.current && (repository.concurrentEntries || !bufferedDetail.current && !draftChanges.current.size && !drafts.length
         && !document.activeElement?.closest('.measurement-workspace input, .measurement-workspace textarea, .measurement-workspace select')),
