@@ -4,6 +4,7 @@ import { applyProjectOperation, projectWriteOrigin } from '@/lib/projectOperatio
 import { mergeOperationalProjectIntoRaw } from '@/lib/operationalProject';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import type { Additive } from '@/types/project';
+import { flattenPhasesByChapter, getChapterNumbering } from '@/lib/chapters';
 
 const confirmedAdditive: Additive = {
   id: 'ad', name: 'Aditivo', importedAt: '', version: 2, status: 'aditivo_contratado', isContracted: true,
@@ -20,6 +21,50 @@ const confirmedAdditive: Additive = {
 };
 
 describe('serviços aditivados no Gantt', () => {
+  it('resolve o subcapítulo por item e o ordena no fim do capítulo correspondente', () => {
+    const { project } = measurementFixture();
+    project.phases[0].customNumber = '2';
+    project.phases[1].order = 10;
+    const existing = { id: 'new-central', parentId: 'building', name: 'Serviços – Itens Novos', color: '#000', order: 0, customNumber: '2.9', tasks: [] };
+    project.phases.push(existing, { id: 'other', name: 'Outro prédio', customNumber: '3', color: '#000', tasks: [] });
+    const composition = confirmedAdditive.compositions[0];
+    const archive = confirmedAdditive.scheduleSnapshots![0];
+    const additive = { ...confirmedAdditive, compositions: [
+      { ...composition, item: '2.9.1', phaseId: 'stale' },
+      { ...composition, id: 'second', item: '3.9.1', linkedTaskId: undefined },
+    ], scheduleSnapshots: [{ ...archive, rows: [
+      { ...archive.rows[0], item: '2.9.1' },
+      { ...archive.rows[0], item: '3.9.1', compositionId: 'second', taskId: 'add-ad-second' },
+    ] }] };
+    const { project: projected } = includeContractedAdditiveTasks(project, [additive]);
+    expect(projected.phases.filter(phase => !phase.parentId)).toEqual([project.phases[0], project.phases[3]]);
+    const phases = flattenPhasesByChapter(projected);
+    expect(phases.map(phase => phase.id).slice(0, 4)).toEqual(['building', 'alarm', existing.id, 'other']);
+    expect(phases[2].tasks[0]).toMatchObject({ id: 'add-ad-new', phase: existing.id });
+    const created = phases.at(-1)!;
+    expect(created).toMatchObject({ parentId: 'other', name: 'SERVIÇOS - ITENS NOVOS', tasks: [{ id: 'add-ad-second' }] });
+    expect(getChapterNumbering(projected).get(created.id)).toBe('3.9');
+  });
+
+  it('projeta 21 + 7 como 28 e recalcula RUP sem reaplicar acréscimo já integrado', () => {
+    const { project } = measurementFixture();
+    const task = project.phases[1].tasks[0];
+    Object.assign(task, { quantity: 21, duration: 3, durationMode: 'rup', isManual: false,
+      laborCompositions: [{ role: 'Instalador', rup: 1, workerCount: 1 }] });
+    const composition = { ...confirmedAdditive.compositions[0], isNewService: false, item: '2.1.7',
+      baseTaskId: task.id, originalQuantity: 21, addedQuantity: 7, unit: task.unit! };
+    const additive = { ...confirmedAdditive, compositions: [composition] };
+    const result = includeContractedAdditiveTasks(project, [additive]);
+    expect(result.project.phases[1].tasks[0]).toMatchObject({ quantity: 28, duration: 4 });
+    expect(result.projectedTaskIds.size).toBe(0);
+    expect(result.quantityAdjustments.get(task.id)).toEqual({ base: 21, added: 7, suppressed: 0, total: 28 });
+    expect(task).toMatchObject({ quantity: 21, duration: 3 });
+    expect(includeContractedAdditiveTasks(result.project, [additive]).project.phases[1].tasks[0].quantity).toBe(28);
+    task.quantity = 28;
+    task.additiveHistory = [{ additiveId: additive.id, additiveName: additive.name, version: 1,
+      at: '', kind: 'acrescimo', previousQuantity: 21, newQuantity: 28, addedQuantity: 7, suppressedQuantity: 0 }];
+    expect(includeContractedAdditiveTasks(project, [additive]).project.phases[1].tasks[0].quantity).toBe(28);
+  });
   it('persiste datas operacionais sem criar tarefas fiscais nem modificar o arquivo aprovado', () => {
     const { project } = measurementFixture();
     const untouched = JSON.stringify({ project, confirmedAdditive });

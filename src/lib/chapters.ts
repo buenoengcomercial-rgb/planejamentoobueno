@@ -20,6 +20,13 @@ export interface ChapterNode {
   children: ChapterNode[]; // subcapítulos diretos (recursivo)
 }
 
+export const NEW_SERVICES_CHAPTER = 'SERVIÇOS - ITENS NOVOS';
+
+export function isNewServicesChapter(phase: Phase): boolean {
+  return !!phase.parentId && phase.name.normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .toUpperCase().replace(/\s*[-–—]\s*/g, ' - ').trim() === 'SERVICOS - ITENS NOVOS';
+}
+
 /** Encontra o prédio (capítulo principal) de uma tarefa, inclusive em subcapítulos aninhados. */
 export function rootChapterId(phases: Phase[], phaseId: string): string | undefined {
   const byId = new Map(phases.map(phase => [phase.id, phase]));
@@ -38,7 +45,8 @@ export function rootChapterId(phases: Phase[], phaseId: string): string | undefi
 export function getChapterTree(project: Project): ChapterNode[] {
   const phases = [...project.phases];
   const sortFn = (a: Phase, b: Phase) =>
-    (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER);
+    Number(isNewServicesChapter(a)) - Number(isNewServicesChapter(b))
+    || (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER);
 
   const childrenByParent = new Map<string, Phase[]>();
   phases.forEach(p => {
