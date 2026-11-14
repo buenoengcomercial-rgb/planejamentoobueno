@@ -635,7 +635,7 @@ describe('Medição somente nuvem', () => {
     expect(mocks.rpc).toHaveBeenLastCalledWith('patch_measurement_entries_v2', { p_project_id: base.projectId, p_expected_revision: base.revision, p_patch: patch });
     const later = editMeasuredRow(next, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 402 });
     mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: later.revision, patch }, error: null });
-    await expect(repo.commit(later, next.revision)).rejects.toThrow('não confirmou');
+    await expect(repo.commit(later, next.revision)).rejects.toThrow('Gravação ainda não confirmada');
     expect(mocks.stored).toEqual([]);
   });
 
@@ -701,6 +701,19 @@ describe('Medição somente nuvem', () => {
     mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
     expect(await repo.commit(next, base.revision)).toEqual(next);
     expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('consulta o recibo persistido antes de repetir um sucesso incompleto', async () => {
+    const base = await fixture();
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('journal-probe'), multiplier: 7 });
+    await repo.stage!(next, base);
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: next.revision }, error: null });
+    await expect(repo.commit(next, base.revision)).rejects.toThrow('Gravação ainda não confirmada');
+    mocks.eventRevision = next.revision;
+    expect(await repo.commit(next, base.revision)).toEqual(next);
+    expect(mocks.rpc.mock.calls.filter(([name]) => name === 'patch_measurement_entries_v2')).toHaveLength(1);
   });
 
   it('consulta recibo após rejeição de transporte e aceita o recibo compacto sem recarregar', async () => {

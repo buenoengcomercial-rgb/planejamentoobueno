@@ -131,6 +131,8 @@ interface DetailOperation {
   base?: Workspace;
   candidate?: Workspace;
   durable?: Promise<void>;
+  originalRevision?: number;
+  attempted?: boolean;
 }
 interface FailedTaskEdit {
   operation: DetailOperation;
@@ -139,7 +141,34 @@ interface FailedTaskEdit {
   measurementId: string;
   serviceId: string;
   message: string;
+  requiresReview?: boolean;
+  resolved?: Set<string>;
 }
+const quantityFields = ['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD'] as const;
+type QuantityField = typeof quantityFields[number];
+type QuantityProposal = { rowId: string; field: QuantityField; value: number; manual: boolean };
+
+function detailTaskKeys(operation: DetailOperation): string[] {
+  return operation.candidate?.audit.at(-1)?.affected.map(item => `${item.measurementId}:${item.serviceId}`) ?? [];
+}
+
+function quantityProposals(failed: FailedTaskEdit): QuantityProposal[] {
+  const event = failed.operation.candidate?.audit.at(-1);
+  const before = event?.before.find(entry => entry.measurementId === failed.measurementId && entry.serviceId === failed.serviceId);
+  return (failed.previewEntry?.rows ?? []).flatMap(row => {
+    const original = before?.rows.find(value => value.id === row.id);
+    return quantityFields.flatMap(field => typeof row[field] === 'number' && row[field] !== (original?.[field] ?? 0)
+      ? [{ rowId: row.id, field, value: row[field], manual: row.origin?.kind === 'manual' && failed.previewEntry?.rows.length === 1 }]
+      : []);
+  }).filter(item => !failed.resolved?.has(`${item.rowId}:${item.field}`));
+}
+
+function cloudProposalRow(workspace: Workspace, failed: FailedTaskEdit, proposal: QuantityProposal) {
+  const rows = entryFor(workspace, failed.measurementId, failed.serviceId).rows;
+  return rows.find(row => row.id === proposal.rowId)
+    ?? (proposal.manual && rows.length === 1 && rows[0].origin?.kind === 'manual' ? rows[0] : undefined);
+}
+
 /** Keep consecutive DXF captures below the clicked cell without overwriting
  * an existing quantity. Reuse the immediate next row only if it is empty. */
 function nextCaptureRow(workspace: Workspace, target: Destination, preferredRowId?: string): Destination {
@@ -344,7 +373,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         if (queued.length) {
           let previous = w;
           detailQueue.current = queued.map(({ candidate }) => {
-            const operation = { base: previous, candidate, edit: () => candidate, durable: Promise.resolve(),
+            const operation = { base: previous, candidate, edit: () => candidate, durable: Promise.resolve(), attempted: true,
             // A recovered operation may share a task with an unfinished field.
             // Keep its draft until the exact cell can be reconciled.
             after: undefined,
@@ -538,12 +567,20 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         try {
           await operation.durable;
           setStatus('Sincronizando');
-          const candidate = operation.candidate ??= operation.edit(confirmed);
+          let candidate = operation.candidate ??= operation.edit(confirmed);
+          if (repository.concurrentEntries && !operation.attempted && operation.base && candidate.revision > confirmed.revision + 1
+            && candidate.audit.at(-1)?.action === 'Editar detalhe' && !candidate.audit.at(-1)?.beforePlans) {
+            // A rejected predecessor did not advance the server. Fix only the
+            // revision of this unsent batch, keeping the original field values.
+            const revision = Math.min(operation.originalRevision ?? confirmed.revision, confirmed.revision);
+            operation.base = { ...operation.base, revision };
+            operation.candidate = candidate = { ...candidate, revision: revision + 1 };
+            await repository.stage?.(candidate, operation.base);
+          }
+          operation.attempted = true;
           const saved = candidate === confirmed ? confirmed : await repository.commit(candidate, repository.concurrentEntries ? candidate.revision - 1 : confirmed.revision);
           if (!await confirmedCommitResponse(repository, candidate, saved)) throw new Error('Resposta de salvamento inválida.');
           current.current = saved; detailQueue.current.shift();
-          for (const affected of candidate.audit.at(-1)?.affected ?? [])
-            failedTaskEdits.current.delete(`${affected.measurementId}:${affected.serviceId}`);
           let next = saved;
           for (const queued of detailQueue.current) {
             const candidate = queued.candidate;
@@ -564,30 +601,53 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           detailQueue.current.shift();
           // A later edit of the same task depends on this failed edit. Hold it
           // for an ordered retry while independent tasks continue to save.
-          const failedKey = affected.length === 1 ? `${affected[0].measurementId}:${affected[0].serviceId}` : null;
+          const message = cause instanceof Error ? cause.message : String(cause);
+          const requiresReview = !!repository.concurrentEntries && /conflito|mudou em outro/i.test(message);
+          const blocked = new Set(detailTaskKeys(operation));
           const deferred: DetailOperation[] = [];
-          if (failedKey) {
+          if (repository.concurrentEntries) {
             detailQueue.current = detailQueue.current.filter(queued => {
-              const queuedAffected = queued.candidate?.audit.at(-1)?.affected;
-              if (queuedAffected?.length !== 1 || `${queuedAffected[0].measurementId}:${queuedAffected[0].serviceId}` !== failedKey) return true;
+              const keys = detailTaskKeys(queued);
+              if (!keys.some(key => blocked.has(key))) return true;
+              keys.forEach(key => blocked.add(key));
+              deferred.push(queued);
+              return false;
+            });
+          } else if (blocked.size === 1) {
+            detailQueue.current = detailQueue.current.filter(queued => {
+              const keys = detailTaskKeys(queued);
+              if (keys.length !== 1 || !blocked.has(keys[0])) return true;
               deferred.push(queued);
               return false;
             });
           }
-          for (const task of affected) failedTaskEdits.current.set(`${task.measurementId}:${task.serviceId}`, {
-            operation, deferred,
-            previewEntry: (deferred.at(-1)?.candidate ?? operation.candidate)?.entries.find(entry => entry.measurementId === task.measurementId && entry.serviceId === task.serviceId),
-            measurementId: task.measurementId, serviceId: task.serviceId,
-            message: cause instanceof Error ? cause.message : String(cause),
-          });
+          const held = [operation, ...deferred];
+          for (const key of blocked) {
+            const touching = held.filter(item => detailTaskKeys(item).includes(key));
+            const first = touching[0], last = touching.at(-1);
+            const task = first.candidate!.audit.at(-1)!.affected.find(item => `${item.measurementId}:${item.serviceId}` === key)!;
+            failedTaskEdits.current.set(key, {
+              operation: first, deferred: touching.slice(1),
+              previewEntry: last?.candidate?.entries.find(entry => entry.measurementId === task.measurementId && entry.serviceId === task.serviceId),
+              measurementId: task.measurementId, serviceId: task.serviceId, message,
+              requiresReview: requiresReview || !!repository.concurrentEntries && deferred.length > 0,
+            });
+          }
+          if (requiresReview) {
+            for (const item of held) {
+              const id = item.candidate?.audit.at(-1)?.id;
+              if (!id) continue;
+              try { await item.durable; await repository.archivePending(id); }
+              catch { setError('Não foi possível preservar a revisão do lote neste navegador. Mantenha esta página aberta.'); }
+            }
+          }
           markFailedTaskChange(value => value + 1);
-          // Later tasks are rebuilt against the last confirmed revision. A
-          // failed task stays visible, but never becomes the base of another.
           try {
-            const latest = await repository.load();
+            const latest = await (repository.loadForRetry?.() ?? repository.load());
             if (latest && !repository.loadedOffline?.()) current.current = latest;
-          } catch { /* Keep the confirmed copy until the next task can retry. */ }
-          for (const queued of detailQueue.current) queued.candidate = undefined;
+          } catch { /* The original field expectations remain valid for retry. */ }
+          if (!repository.concurrentEntries)
+            for (const queued of detailQueue.current) queued.candidate = undefined;
           detailPreview.current = null;
           setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(current.current!)));
           setStatus('Aguardando nuvem');
@@ -635,7 +695,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         });
       }
       latestLocalStage.current = durable;
-      detailQueue.current.push({ edit, after, base, candidate: preview, durable });
+      detailQueue.current.push({ edit, after, base, candidate: preview, durable, originalRevision: current.current.revision });
       detailPreview.current = preview; setWorkspace(displayWithFailedTasks(preview));
       setStatus('Aguardando nuvem');
       if (!busy.current) {
@@ -701,6 +761,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (!current.current) return false;
     const failed = failedTaskEdits.current.get(`${active}:${serviceId}`);
     if (!failed) return true;
+    if (failed.requiresReview) return false;
     try {
       const base = detailPreview.current ?? current.current;
       const { preview, queued } = rebaseFailedTask(failed, base, true);
@@ -714,7 +775,34 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return false; }
   };
   const bufferDetail = (serviceId: string, edit: DetailEdit, after?: () => void, rowId?: string): boolean => {
-    if (!current.current || !resumeFailedTaskEdit(serviceId)) return false;
+    if (!current.current) return false;
+    const failed = failedTaskEdits.current.get(`${active}:${serviceId}`);
+    if (failed?.requiresReview) {
+      if (!failed.previewEntry) return false;
+      try {
+        const withProposal = displayWithFailedTasks(current.current);
+        const proposed = edit(withProposal);
+        const event = proposed.audit.at(-1);
+        if (proposed !== withProposal && (event?.action !== 'Editar detalhe' || event.beforePlans
+          || event.affected.some(item => item.measurementId !== active || item.serviceId !== serviceId))) {
+          setError('Confira o conflito antes de alterar a estrutura ou os vínculos da linha.');
+          return false;
+        }
+        failed.previewEntry = entryFor(proposed, active, serviceId);
+        if (rowId) {
+          const target = rowId === '__manual__' ? failed.previewEntry.rows[0]?.id : rowId;
+          for (const field of quantityFields) {
+            const before = entryFor(withProposal, active, serviceId).rows.find(row => row.id === target);
+            const after = failed.previewEntry.rows.find(row => row.id === target);
+            if (before?.[field] !== after?.[field]) failed.resolved?.delete(`${target}:${field}`);
+          }
+        }
+        markFailedTaskChange(value => value + 1);
+        setWorkspace(displayWithFailedTasks(detailPreview.current ?? current.current));
+        return true;
+      } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return false; }
+    }
+    if (!resumeFailedTaskEdit(serviceId)) return false;
     if (bufferedDetail.current && (bufferedDetail.current.measurementId !== active
       || !repository.concurrentEntries && !bufferedDetail.current.serviceIds.has(serviceId))
       && !flushBufferedDetail()) return false;
@@ -1090,7 +1178,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         let base = latest;
         detailQueue.current = staged.map(({ candidate }) => {
           const prior = existing.get(candidate.audit.at(-1)?.id);
-          const operation = { base, candidate, edit: prior?.edit ?? (() => candidate), after: prior?.after, durable: Promise.resolve() };
+          const operation = { base, candidate, edit: prior?.edit ?? (() => candidate), after: prior?.after, durable: Promise.resolve(), attempted: true };
           base = candidate;
           return operation;
         });
@@ -1255,9 +1343,72 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     }
     return true;
   };
+  const resolveQuantityProposal = async (key: string, proposal: QuantityProposal, useLocal: boolean) => {
+    const failed = failedTaskEdits.current.get(key);
+    const shown = current.current;
+    if (!failed?.requiresReview || !shown || busy.current || retryingFailedTask.current
+      || detailQueue.current.length || bufferedDetail.current) return;
+    const shownRow = cloudProposalRow(shown, failed, proposal);
+    const shownValue = shownRow?.[proposal.field];
+    retryingFailedTask.current = key;
+    setRetryingFailedKey(key);
+    setError('');
+    try {
+      const latest = await (repository.loadForDraftResolution?.() ?? repository.loadForRetry?.() ?? repository.load());
+      if (!latest || repository.loadedOffline?.()) throw new Error('Não foi possível conferir o valor atual da nuvem.');
+      const stillCurrent = () => failedTaskEdits.current.get(key) === failed && quantityProposals(failed).some(item =>
+        item.rowId === proposal.rowId && item.field === proposal.field && item.value === proposal.value);
+      if (!stillCurrent()) return;
+      const row = cloudProposalRow(latest, failed, proposal);
+      adopt(latest);
+      if (row?.id !== shownRow?.id || row?.[proposal.field] !== shownValue)
+        throw new Error('O valor na nuvem mudou. Confira os valores atualizados antes de decidir.');
+      const finish = () => {
+        if (!stillCurrent()) return;
+        (failed.resolved ??= new Set()).add(`${proposal.rowId}:${proposal.field}`);
+        if (failed.previewEntry) failed.previewEntry = { ...failed.previewEntry,
+          rows: failed.previewEntry.rows.map(item => item.id === proposal.rowId ? {
+            ...item, [proposal.field]: useLocal ? proposal.value : shownValue ?? 0,
+          } : item) };
+        if (!quantityProposals(failed).length) failedTaskEdits.current.delete(key);
+        const draftRowId = proposal.manual ? '__manual__' : proposal.rowId;
+        const storageKey = draftKey(failed.measurementId, failed.serviceId, draftRowId);
+        const changes = draftChanges.current.get(storageKey);
+        if (changes) {
+          const remaining = { ...changes };
+          delete remaining[proposal.field];
+          if (Object.keys(remaining).length) draftChanges.current.set(storageKey, remaining);
+          else draftChanges.current.delete(storageKey);
+        }
+        const previousWrite = draftWrites.current.get(storageKey) ?? Promise.resolve();
+        const cleanup = previousWrite.catch(() => undefined).then(async () => {
+          await repository.clearDraftField?.(failed.measurementId, failed.serviceId, draftRowId, proposal.field, proposal.value);
+          if (repository.clearDraftField) setDrafts(await repository.drafts());
+        }).catch(() => setError('Não foi possível limpar o valor já conferido deste navegador.'));
+        draftWrites.current.set(storageKey, cleanup);
+        markFailedTaskChange(value => value + 1);
+        if (current.current) setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(current.current)));
+        if (!failedTaskEdits.current.size && !detailQueue.current.length) setStatus('Confirmado');
+      };
+      if (!useLocal || shownValue === proposal.value) { finish(); return; }
+      const period = latest.periods.find(item => item.id === failed.measurementId);
+      const source = sourceFields[quantityFields.indexOf(proposal.field)];
+      if (!row || row.sharedRecordId || row[source] || !period || isPeriodLocked(period) || !actor.canEdit)
+        throw new Error('Este campo precisa ser conferido no detalhe da Medição, incluindo seus vínculos.');
+      detailPreview.current = null;
+      if (!applyDetail(base => {
+        const previous = cloudProposalRow(base, failed, proposal);
+        if (!previous || previous.id !== row.id || previous[proposal.field] !== shownValue)
+          throw new Error('O valor na nuvem mudou. Confira o campo antes de aplicar.');
+        return editMeasuredRow(base, actor, failed.measurementId, failed.serviceId, { ...previous, [proposal.field]: proposal.value });
+      }, finish)) return;
+      await detailDrain.current;
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { retryingFailedTask.current = null; setRetryingFailedKey(null); }
+  };
   const retryFailedTask = async (key: string): Promise<boolean> => {
     const failed = failedTaskEdits.current.get(key);
-    if (!failed) return false;
+    if (!failed || failed.requiresReview) return false;
     if (busy.current || retryingFailedTask.current) {
       setError('Aguarde a gravação em andamento antes de reenviar esta tarefa.');
       return false;
@@ -1484,7 +1635,28 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       <ul className="mt-1 list-disc pl-5">{additiveExcesses.map(line => <li key={line.service.id}>Item {line.service.item}: {line.accumulated} {line.service.unit} medidos; {line.service.contracted} {line.service.unit} contratados após o Aditivo.</li>)}</ul>
       <p className="mt-1">Os lançamentos anteriores permanecem registrados para conferência fiscal.</p>
     </div>}
-    {failedVisible.length > 0 && <div role="status" className="flex flex-wrap gap-2 px-2 py-1 text-[11px] text-red-800">{failedVisible.map(([key, failed]) => <div key={key} className="flex flex-wrap items-center gap-1 rounded border border-red-200 bg-red-50 px-2 py-1"><button className="underline disabled:no-underline disabled:opacity-60" disabled={saving || retryingFailedKey !== null} onClick={() => void retryFailedTask(key)}>Reenviar {workspace.services.find(service => service.id === failed.serviceId)?.item ?? 'tarefa'}</button><span>· {failed.message}</span></div>)}{saving && <span className="self-center text-amber-800">Aguarde a gravação em andamento para reenviar.</span>}</div>}
+    {failedVisible.length > 0 && <div role="status" className="flex flex-wrap gap-2 px-2 py-1 text-[11px] text-red-800">
+      {failedVisible.map(([key, failed]) => <div key={key} className="flex flex-wrap items-center gap-1 rounded border border-red-200 bg-red-50 px-2 py-1">
+        {failed.requiresReview ? <>
+          <span>Item {workspace.services.find(service => service.id === failed.serviceId)?.item ?? 'pendente'} · {failed.message}</span>
+          {quantityProposals(failed).map(proposal => {
+            const row = current.current && cloudProposalRow(current.current, failed, proposal);
+            const label = ['Unidades', 'Quantidade', 'Dimensão C', 'Dimensão D'][quantityFields.indexOf(proposal.field)];
+            return <div key={`${proposal.rowId}:${proposal.field}`} className="flex w-full flex-wrap gap-2">
+              <span>{label} · local {proposal.value} · nuvem {row?.[proposal.field] ?? '—'}</span>
+              <button className="underline" disabled={saving || retryingFailedKey !== null} onClick={() => void resolveQuantityProposal(key, proposal, false)}>Manter valor da nuvem</button>
+              <button className="underline" disabled={saving || retryingFailedKey !== null || !actor.canEdit || !row || !!row.sharedRecordId
+                || !!row[sourceFields[quantityFields.indexOf(proposal.field)]] || locked}
+                onClick={() => void resolveQuantityProposal(key, proposal, true)}>Aplicar proposta local</button>
+            </div>;
+          })}
+        </> : <>
+          <button className="underline disabled:no-underline disabled:opacity-60" disabled={saving || retryingFailedKey !== null}
+            onClick={() => void retryFailedTask(key)}>Reenviar {workspace.services.find(service => service.id === failed.serviceId)?.item ?? 'tarefa'}</button>
+          <span>· {failed.message}</span>
+        </>}
+      </div>)}
+    </div>}
     {lifecycle && <MeasurementLifecycleDialog key={`${lifecycle.kind}:${lifecycle.id}`} selection={lifecycle} workspace={workspace} actor={actor} busy={saving || !!commandInFlight} error={error}
       hasDraft={drafts.some(d => d.measurementId === lifecycle.id)} onClose={() => setLifecycle(null)} onConfirm={(edit, id) => { if (lifecycle.kind === 'approve' && fiscalPending) { setError('Aguarde a confirmação dos lançamentos na nuvem antes da aprovação.'); return; } queueCommand(`${lifecycle.kind}:${id}`, edit, () => {
         setLifecycle(null); setExpanded(null); setClipboard(null);
