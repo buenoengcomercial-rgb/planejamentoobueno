@@ -54,3 +54,22 @@ it('salva alteração de uma data derivada sem mudar tarefas ou medições não 
   expect(saved.phases[0].tasks[0]).toEqual(raw.phases[0].tasks[0]);
   expect(saved.measurements).toEqual(raw.measurements);
 });
+
+it('exibe a quantidade aditivada sem gravá-la ao editar uma data', () => {
+  const { project } = measurementFixture();
+  const task = project.phases[1].tasks[0];
+  task.quantity = 21;
+  const additive = { id: 'ad', name: 'Aditivo', importedAt: '', version: 1, status: 'contratado' as const,
+    compositions: [{ id: 'increase', item: '2.1.7', description: task.name, code: '', bank: '', unit: 'UN',
+      baseTaskId: task.id, quantity: 21, addedQuantity: 7, unitPriceNoBDI: 10, unitPriceWithBDI: 10, total: 280, inputs: [] }],
+  };
+  let saved = project;
+  render(<OperationalGanttChart project={project} confirmedAdditives={[additive]}
+    onProjectChange={next => { saved = typeof next === 'function' ? next(saved) : next; }} />);
+  expect(captured.props!.contractedQuantityAdjustments?.get(task.id)).toEqual({ base: 21, added: 7, suppressed: 0, total: 28 });
+  const updated = structuredClone(captured.props!.project);
+  updated.phases[1].tasks[0].startDate = '2026-11-13';
+  captured.props!.onProjectChange(updated);
+  expect(saved.phases[1].tasks[0]).toEqual({ ...task, startDate: '2026-11-13' });
+  expect(saved.measurements).toBe(project.measurements);
+});

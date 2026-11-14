@@ -1,5 +1,5 @@
 import type { Additive, Project, Task } from '@/types/project';
-import { approvedAdditiveRows, isContractedAdditive } from './contractedAdditiveSchedule';
+import { approvedAdditiveRows, isContractedAdditive, type ContractedQuantityAdjustment } from './contractedAdditiveSchedule';
 import { monthlyLines, type MeasurementWorkspace } from './measurementWorkspace';
 import { detailPartial } from './productionQuantityDetails';
 import { getAllTasks } from '@/data/sampleProject';
@@ -13,7 +13,8 @@ export function stripMeasuredSchedule(before: Project, edited: Project, lockedId
 }
 
 /** Read-only evidence from measurements 1–2. Never persists inferred execution dates. */
-export function includeMeasuredSchedule(project: Project, workspace?: MeasurementWorkspace | null, additives: readonly Additive[] = project.additives ?? []) {
+export function includeMeasuredSchedule(project: Project, workspace?: MeasurementWorkspace | null,
+  additives: readonly Additive[] = project.additives ?? [], quantityAdjustments?: ReadonlyMap<string, ContractedQuantityAdjustment>) {
   const lockedIds = new Set<string>();
   if (!workspace || !project.scheduleCalendar) return { project, lockedIds, measuredCount: 0 };
   const cal = project.scheduleCalendar;
@@ -46,7 +47,7 @@ export function includeMeasuredSchedule(project: Project, workspace?: Measuremen
     const t = byId.get(id)!;
     const service = workspace.services.find(s => (s.sourceTaskId ?? s.id) === id)!;
     const executed = windows.reduce((n, w) => n + w.qty, 0);
-    const finalQuantity = contracted.get(id) ?? service.contracted;
+    const finalQuantity = quantityAdjustments?.get(id)?.total ?? contracted.get(id) ?? service.contracted;
     const complete = executed >= finalQuantity - 1e-8;
     for (const w of windows) {
       const historyId = `measured:${id}:${w.number}`;

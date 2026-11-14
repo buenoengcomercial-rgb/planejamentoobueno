@@ -126,6 +126,13 @@ const suspensionMap: Record<string, AdditiveScheduleSuspensionMeta> = {
 describe('GanttChart no Cronograma do Aditivo', () => {
   beforeEach(() => localStorage.clear());
 
+  it('mostra a quantidade vigente e o acréscimo no Cronograma de Obra', () => {
+    render(<GanttChart project={project} readOnly contractedQuantityAdjustments={new Map([
+      ['partial-existing', { base: 21, added: 7, suppressed: 0, total: 28 }],
+    ])} />);
+    expect(screen.getByText('28 UN · +7 aditivadas')).toHaveAttribute('title', 'Quantidade contratual: 21 + 7 de acréscimo');
+  });
+
   it('após aprovação permite planejar datas de item suspenso sem liberar sua execução', () => {
     const onProjectChange = vi.fn();
     render(<GanttChart project={project} context="additive-preview" suspensionMap={suspensionMap}
