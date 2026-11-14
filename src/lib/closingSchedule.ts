@@ -14,7 +14,7 @@ export function includeClosingSchedule(project: Project) {
       duration: activity.duration, team: activity.team, dependencies: activity.dependencies.map(d => d.taskId),
       dependencyDetails: activity.dependencies, responsible: '', percentComplete: 0, materials: [], level: 0,
       isManual: true, durationMode: 'manual' as const, manualDuration: activity.duration, observations: activity.reason,
-      operationalReschedule: { requestId: activity.id, scope: 'whole_task' as const, startDate: activity.startDate, duration: activity.duration, quantity: 0, endDate: activity.startDate, reason: activity.reason, approvedAt: parent.operationalReschedule?.approvedAt ?? '' },
+      operationalReschedule: { requestId: activity.id, scope: 'whole_task' as const, startDate: activity.startDate, duration: activity.duration, quantity: 0, endDate: project.scheduleCalendar ? operationalEndDate(activity.startDate, activity.duration, project.scheduleCalendar) : activity.startDate, reason: activity.reason, approvedAt: parent.operationalReschedule?.approvedAt ?? '' },
     })));
   return { project: tasks.length ? { ...project, phases: [...phases, {
     id: phaseId, name: 'Fechamento operacional — sem valor contratual', color: '#7c3aed', tasks,
