@@ -55,6 +55,32 @@ it('salva alteração de uma data derivada sem mudar tarefas ou medições não 
   expect(saved.measurements).toEqual(raw.measurements);
 });
 
+it('grava a revisão na fronteira do cronograma sem converter histórico em serviços contratuais', async () => {
+  const { fireEvent, screen } = await import('@testing-library/react');
+  const { prepareIncorporation } = await import('@/lib/measurementIncorporation');
+  const { newMeasuredRow } = await import('@/lib/measurementWorkspace');
+  const { getAllTasks } = await import('@/data/sampleProject');
+  const {project,plans}=measurementFixture();
+  project.scheduleCalendar={uf:'RO',municipio:'Porto Velho',trabalhaSabado:false,jornadaDiaria:8};
+  const {candidate}=prepareIncorporation({project,plans,drafts:[],id:'b',createdAt:'',manifest:{dataHash:'',files:[]}});
+  candidate.entries=[{projectId:project.id,serviceId:'detectors',measurementId:'m1',rows:[{...newMeasuredRow('r'),multiplier:400}]}];
+  let saved=project;
+  const before=JSON.stringify(candidate);
+  render(<OperationalGanttChart project={project} confirmedMeasurement={candidate} canManageCalendar onProjectChange={next=>{saved=typeof next==='function'?next(saved):next;}} />);
+  fireEvent.click(screen.getByRole('button',{name:'Aplicar revisão do executado e limite de duas predecessoras'}));
+  const original=getAllTasks(project).find(t=>t.id==='detectors')!;
+  const changed=getAllTasks(saved).find(t=>t.id==='detectors')!;
+  expect(changed.startDate).toBe('2026-09-15');
+  expect(changed.dependencies).toEqual([]);
+  expect(changed.operationalReschedule?.executionRevision?.completed).toBe(true);
+  expect(changed.quantity).toBe(original.quantity);
+  expect(changed.percentComplete).toBe(original.percentComplete);
+  expect(changed.baseline).toEqual(original.baseline);
+  expect(getAllTasks(saved)).toHaveLength(getAllTasks(project).length);
+  expect(getAllTasks(saved).some(t=>t.id.startsWith('measured:')||t.id.startsWith('release:'))).toBe(false);
+  expect(JSON.stringify(candidate)).toBe(before);
+});
+
 it('exibe a quantidade aditivada sem gravá-la ao editar uma data', () => {
   const { project } = measurementFixture();
   const task = project.phases[1].tasks[0];

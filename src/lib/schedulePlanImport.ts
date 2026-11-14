@@ -1,3 +1,4 @@
+import { includeReleaseMilestones } from './scheduleExecutionRevision';
 import { z } from 'zod';
 import type { Additive, Project, ProjectScheduleCalendar, Task, TaskDependency } from '@/types/project';
 import { approvedAdditiveRows, isContractedAdditive } from './contractedAdditiveSchedule';
@@ -42,7 +43,9 @@ export function applySchedulePlanImport(project: Project, input: SchedulePlanImp
   const plan = parseSchedulePlanImport(input);
   if (plan.projectId !== project.id) throw new Error('A programação pertence a outra obra.');
   const projected = includeClosingSchedule(project);
-  let all = getAllTasks(projected.project);
+  let all = getAllTasks(includeReleaseMilestones(projected.project));
+  const limited = all.some(t => t.operationalReschedule?.executionRevision);
+  if (limited && plan.tasks.some(t => t.dependencies.length > 2 || t.closingActivities?.some(a => a.dependencies.length > 2))) throw Error('Máximo de duas predecessoras por atividade nesta programação.');
   const added: Task[] = [];
   const closingIds = new Set<string>();
   for (const row of plan.tasks) {
@@ -127,7 +130,7 @@ export function applySchedulePlanImport(project: Project, input: SchedulePlanImp
     }
   }
   const next = { ...replaceProjectTasksById(project, changes), teams, scheduleCalendar: calendar };
-  if (getAllTasks(calculateClosingCPM(includeClosingSchedule(next).project)).some(t => t.float !== undefined && t.float < -1e-8)) {
+  if (getAllTasks(calculateClosingCPM(includeReleaseMilestones(includeClosingSchedule(next).project))).some(t => t.float !== undefined && t.float < -1e-8)) {
     throw new Error('A programação excede o prazo de fechamento; revise as durações e os vínculos.');
   }
   return logToProject(next, { ...actor, entityType: 'project', entityId: project.id, action: 'updated',

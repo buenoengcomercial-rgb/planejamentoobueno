@@ -155,6 +155,12 @@ export default function GanttChart({
   const [showLaborOnlyDeficits, setShowLaborOnlyDeficits] = useState(true);
   const [laborPanelExpanded, setLaborPanelExpanded] = useState(false);
   const [laborIssueMode, setLaborIssueMode] = useState<'deficit' | 'availability' | 'data'>('deficit');
+  const seenReleasePhases = useRef(new Set<string>());
+  useEffect(() => {
+    const added = project.phases.filter(p => p.id.startsWith('release-phase:') && !seenReleasePhases.current.has(p.id)).map(p => p.id);
+    added.forEach(id => seenReleasePhases.current.add(id));
+    if (added.length) setCollapsedPhases(current => new Set([...current, ...added]));
+  }, [project.phases]);
   const [highlightedLaborTaskIds, setHighlightedLaborTaskIds] = useState<Set<string>>(() => new Set());
   const [obraConfig, setObraConfig] = useState<ObraConfig>(() => calendarConfig ?? loadObraConfig());
   useEffect(() => { if (calendarConfig) setObraConfig(calendarConfig); }, [calendarConfig]);
@@ -291,6 +297,7 @@ export default function GanttChart({
   const today = new Date();
 
   const isZeroOrSuppressedTask = useCallback((task: Task) => {
+    if (task.scheduleDisplayKind && task.scheduleDisplayKind !== 'completed-summary') return false;
     const latest = task.additiveHistory?.[task.additiveHistory.length - 1];
     const projected = contractedQuantityAdjustments?.get(task.id);
     if (projected) return projected.total <= 0;
@@ -358,6 +365,7 @@ export default function GanttChart({
 
   const visibleTaskIds = useMemo(() => {
     return new Set(tasks
+      .filter(task => task.scheduleDisplayKind !== 'completed-summary')
       .filter(task => isStatusOnlyTask(task.id) || showZeroSuppressed || !isZeroOrSuppressedTask(task))
       .filter(task => isStatusOnlyTask(task.id) || teamFilter === 'all' || (task.team ?? '_none') === teamFilter)
       .filter(task => !selectedPhaseIds || project.phases.some(phase => (
@@ -686,7 +694,7 @@ export default function GanttChart({
     const start = diffDays(projectStart, parseISODateLocal(task.startDate));
     const endISO = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig);
     const endOffset = diffDays(projectStart, parseISODateLocal(endISO));
-    const width = (endOffset - start + 1) * dayWidth;
+    const width = task.scheduleDisplayKind === 'release' ? 10 : (endOffset - start + 1) * dayWidth;
     const isDelayed = addDays(parseISODateLocal(task.startDate), Math.max(0, task.duration - 1)) < today && task.percentComplete < 100;
     const isCritical = !!task.isCritical && !isDelayed && task.percentComplete < 100;
     const isComplete = task.percentComplete === 100;
@@ -1098,6 +1106,10 @@ export default function GanttChart({
       }
       seen.add(depTaskId);
       deps.push({ taskId: depTaskId, type: existingByTaskId.get(depTaskId)?.type || 'TI', lag: parsed.lag ?? dependencyLag(existingByTaskId.get(depTaskId) ?? {}) });
+    }
+    if (tasks.some(t => t.operationalReschedule?.executionRevision) && deps.length > 2) {
+      toast.error('Máximo de duas predecessoras. Use a revisão para agrupar as condições em marcos de liberação.');
+      return;
     }
     const unchanged = deps.length === existingDetails.length
       && deps.every((dependency, index) => (
@@ -2879,7 +2891,8 @@ export default function GanttChart({
                                     width: barWidth,
                                     top: (rowHeight - (density === 'compact' ? 12 : 20)) / 2,
                                     height: density === 'compact' ? 12 : 20,
-                                    borderRadius: 6,
+                                    borderRadius: task.scheduleDisplayKind === 'release' ? 0 : 6,
+                                    transform: task.scheduleDisplayKind === 'release' ? 'rotate(45deg)' : undefined,
                                     background: (() => {
                                       const td = teamDef(task.team);
                                       if (task.team && td) return td.barColor;

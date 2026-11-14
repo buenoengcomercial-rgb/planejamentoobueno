@@ -524,3 +524,19 @@ describe('GanttChart no Cronograma do Aditivo', () => {
     expect(onProjectChange).toHaveBeenCalledTimes(1);
   });
 });
+
+it('exibe histórico e fechamento sem habilitar itens zerados e oculta o resumo duplicado', () => {
+  localStorage.clear();
+  const candidate=structuredClone(project);
+  const seed={...candidate.phases[0].tasks[0],dependencies:[],quantity:undefined,team:undefined};
+  candidate.phases[0].tasks=[
+    {...seed,id:'historical',name:'Parcela medida',scheduleDisplayKind:'history',percentComplete:100},
+    {...seed,id:'closing',name:'Teste integrado',scheduleDisplayKind:'closing'},
+    {...seed,id:'summary',name:'Resumo concluído',scheduleDisplayKind:'completed-summary',percentComplete:100},
+  ];
+  render(<GanttChart project={candidate} readOnly />);
+  expect(screen.getByRole('checkbox',{name:'Mostrar itens zerados/suprimidos'})).not.toBeChecked();
+  expect(screen.getByTestId('gantt-sidebar-row-historical')).toBeInTheDocument();
+  expect(screen.getByTestId('gantt-sidebar-row-closing')).toBeInTheDocument();
+  expect(screen.queryByTestId('gantt-sidebar-row-summary')).not.toBeInTheDocument();
+});
