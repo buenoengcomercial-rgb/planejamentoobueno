@@ -52,7 +52,7 @@ describe('serviços aditivados no Gantt', () => {
     Object.assign(task, { quantity: 21, duration: 3, durationMode: 'rup', isManual: false,
       laborCompositions: [{ role: 'Instalador', rup: 1, workerCount: 1 }] });
     const composition = { ...confirmedAdditive.compositions[0], isNewService: false, item: '2.1.7',
-      baseTaskId: task.id, originalQuantity: 21, addedQuantity: 7, unit: task.unit! };
+      baseTaskId: task.id, quantity: 0, addedQuantity: 7, unit: task.unit! };
     const additive = { ...confirmedAdditive, compositions: [composition] };
     const result = includeContractedAdditiveTasks(project, [additive]);
     expect(result.project.phases[1].tasks[0]).toMatchObject({ quantity: 28, duration: 4 });

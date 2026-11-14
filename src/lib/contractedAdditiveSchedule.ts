@@ -95,7 +95,8 @@ function projectContractedQuantities(project: Project, tasks: Map<string, Task>,
     const task = tasks.get(taskId)!;
     const history = task.additiveHistory ?? [];
     const composition = rows[0].composition;
-    const base = history[0]?.previousQuantity ?? composition.originalQuantity ?? task.baseline?.quantity ?? composition.quantity;
+    const base = history[0]?.previousQuantity ?? task.quantityContracted ?? composition.originalQuantity
+      ?? task.baseline?.quantity ?? task.quantity ?? composition.quantity;
     const byAdditive = new Map(rows.map(({ additiveId, composition }) => [additiveId, {
       addedQuantity: trunc2(composition.addedQuantity), suppressedQuantity: trunc2(composition.suppressedQuantity),
     }]));
@@ -107,7 +108,7 @@ function projectContractedQuantities(project: Project, tasks: Map<string, Task>,
     const suppressed = money2(adjustments.reduce((sum, item) => sum + item.suppressedQuantity, 0));
     const total = Math.max(0, money2(base + added - suppressed));
     quantityAdjustments.set(taskId, { base, added, suppressed, total });
-    const next = { ...task, quantity: total, suppressedByAdditive: total === 0 };
+    const next = { ...task, quantity: total, quantityContracted: base, suppressedByAdditive: total === 0 };
     const rup = total > 0 && task.durationMode === 'rup' && !task.isManual
       && task.laborCompositions?.length && !task.operationalReschedule
       ? calculateRupDuration(next, project.scheduleCalendar) : undefined;
