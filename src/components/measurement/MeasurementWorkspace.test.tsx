@@ -6,12 +6,13 @@ import MeasurementWorkspace from './MeasurementWorkspace';
 import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
 import type { MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
-import { addMeasuredPeriod, captureMeasurement, freezeMeasuredPeriod, newMeasuredRow } from '@/lib/measurementWorkspace';
+import { addMeasuredPeriod, captureMeasurement, freezeMeasuredPeriod, monthlyLines, newMeasuredRow } from '@/lib/measurementWorkspace';
 import { deleteMeasuredPeriod } from '@/lib/measurementLifecycle';
 import { MeasurementCommitRejectedError } from '@/lib/measurementWorkspaceStore';
 import { selectedMeasurement } from '@/lib/measurementSelection';
 import { measurementDeletionPatch } from '@/lib/measurementDeletionPatch';
 import { encodeMeasurementWorkspace } from '@/lib/measurementCloudCodec';
+import { measurementPresentation } from './measurementWorkspacePresentation';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 beforeEach(() => localStorage.clear());
@@ -22,6 +23,31 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('mostra serviços já incorporados dentro do capítulo original e preserva o catálogo', async () => {
+    const { w, repository } = fixture();
+    Object.assign(w.services[0], { chapter: 'Incêndio - Palácio Central', path: 'Incêndio - Palácio Central › Hidrantes', item: '2.1.7' });
+    w.services.push({ ...w.services[0], id: 'additive:ad:new', item: '2.9.1', description: 'Abrigo novo',
+      chapterId: 'subchapter-2-9', chapter: 'Aditivo', path: '2.9 SERVIÇOS - ITENS NOVOS',
+      additiveId: 'ad', additiveVersion: 1, availableFromNumber: 3 });
+    const saved = structuredClone(w);
+    const { groupTree, totals } = measurementPresentation(monthlyLines(w, 'm3'));
+    expect(groupTree).toHaveLength(1);
+    expect(groupTree[0]).toMatchObject({ number: '2', name: 'Incêndio - Palácio Central',
+      children: [{ number: '2.1' }, { number: '2.9', name: 'SERVIÇOS - ITENS NOVOS', rows: [{ taskId: 'additive:ad:new' }] }],
+      totals });
+    render(<TooltipProvider><MeasurementWorkspace repository={repository} actor={actor} /></TooltipProvider>);
+    const period = await screen.findByRole('combobox', { name: 'Medição selecionada' });
+    fireEvent.change(period, { target: { value: 'm2' } });
+    expect(screen.queryByRole('button', { name: /ITENS NOVOS/i })).not.toBeInTheDocument();
+    fireEvent.change(period, { target: { value: 'm3' } });
+    const parent = await screen.findByRole('button', { name: /Palácio Central/i });
+    if (!screen.queryByRole('button', { name: /2\.9 SERVIÇOS - ITENS NOVOS/i })) fireEvent.click(parent);
+    expect(screen.getByRole('button', { name: /^2\.9 SERVIÇOS - ITENS NOVOS/i })).toBeVisible();
+    fireEvent.click(parent);
+    expect(screen.queryByRole('button', { name: /ITENS NOVOS/i })).not.toBeInTheDocument();
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(w).toEqual(saved);
+  });
   it.each([
     { activeStatus: 'draft', defaultTarget: '1', chosen: '1' },
     { activeStatus: 'in_review', defaultTarget: '3', chosen: '2' },

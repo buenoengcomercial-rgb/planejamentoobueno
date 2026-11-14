@@ -22,7 +22,7 @@ import MeasurementFilters from './MeasurementFilters';
 import MeasurementTable from './MeasurementTable';
 import MeasurementTotals from './MeasurementTotals';
 import MeasurementSummaryCards from './MeasurementSummaryCards';
-import { measurementPresentation } from './measurementWorkspacePresentation';
+import { measurementChapterOverrides, measurementPresentation } from './measurementWorkspacePresentation';
 import { measurementStatusLabels as states } from '@/lib/measurementWorkspace';
 import { nextMeasurementPeriod } from '@/lib/measurementPeriodSequence';
 import { fiscalReviewIssuesForWorkspace } from '@/lib/measurementFiscalReview';
@@ -967,12 +967,18 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const fiscalWarnings = fiscalIssues.filter(issue => issue.level !== 'error');
   const lineByTaskId = useMemo(() => new Map(calculatedLines.map(line => [line.service.id, line])), [calculatedLines]);
   const entryByTaskId = useMemo(() => new Map(workspace?.entries.filter(entry => entry.measurementId === active).map(entry => [entry.serviceId, entry]) ?? []), [workspace, active]);
+  const chapterOverrides = useMemo(() => measurementChapterOverrides(calculatedLines), [calculatedLines]);
   const calculatedPresentation = useMemo(() => {
     const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-    const visible = calculatedLines.filter(l => (chapterFilter === 'all' || l.service.chapterId === chapterFilter) && normalize([l.service.item, l.service.code, l.service.bank, l.service.description, l.service.path].join(' ')).includes(normalize(search)));
-    const presentation = measurementPresentation(visible);
-    return { presentation, allTotals: visible.length === calculatedLines.length ? presentation.totals : measurementPresentation(calculatedLines).totals };
-  }, [calculatedLines, chapterFilter, search]);
+    const term = normalize(search);
+    const visible = calculatedLines.filter(({ service }) => {
+      const override = chapterOverrides.get(service.id);
+      return (chapterFilter === 'all' || (override?.id ?? service.chapterId) === chapterFilter)
+        && normalize([service.item, service.code, service.bank, service.description, override?.path ?? service.path].join(' ')).includes(term);
+    });
+    const presentation = measurementPresentation(visible, chapterOverrides);
+    return { presentation, allTotals: visible.length === calculatedLines.length ? presentation.totals : measurementPresentation(calculatedLines, chapterOverrides).totals };
+  }, [calculatedLines, chapterOverrides, chapterFilter, search]);
   const retryPendingSave = async (): Promise<boolean> => {
     if (busy.current || recoveryAction.current || !current.current) return false;
     recoveryAction.current = true;
@@ -1266,14 +1272,18 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     && !periodRestorationBlock(workspace, event.id));
   const locked = !actor.canEdit || !period || isPeriodLocked(period);
   const quantityLocked = locked;
-  const lines = calculatedLines;
   const { presentation, allTotals } = calculatedPresentation;
   const percentage = (value: number) => allTotals.contracted > 0 ? value / allTotals.contracted * 100 : 0;
   const summaryTotals = { ...allTotals, pctPeriod: percentage(allTotals.period), pctAccum: percentage(allTotals.accum), pctBalance: percentage(allTotals.balance) };
   const summaryBdi = workspace.contract?.bdiPercent ?? period?.originalSnapshot?.bdiPercent ?? (allTotals.contractedNoBDI > 0 ? (allTotals.contracted / allTotals.contractedNoBDI - 1) * 100 : 0);
   const forecast = forecastByPeriod.find(p => p.number === period?.number && p.startDate === period.startDate && p.endDate === period.endDate);
-  const chapters = [...new Map(lines.map(l => [l.service.chapterId, { id: l.service.chapterId, name: l.service.chapter }])).values()];
-  const numbering = new Map(lines.map(l => [l.service.chapterId, l.service.item.split('.')[0]]));
+  const chapters = [...new Map(calculatedLines.map(({ service }) => {
+    const chapter = chapterOverrides.get(service.id) ?? { id: service.chapterId, name: service.chapter };
+    return [chapter.id, chapter];
+  })).values()];
+  const numbering = new Map(calculatedLines.map(({ service }) => [
+    chapterOverrides.get(service.id)?.id ?? service.chapterId, service.item.split('.')[0],
+  ]));
   const targetService = workspace.services.find(s => s.id === destination?.serviceId);
   const targetEntry = destination ? entryFor(workspace, destination.measurementId, destination.serviceId) : null;
   const marks = targetEntry?.rows.flatMap(r => sourceFields.flatMap(f => r[f] ? [r[f]!.measureId] : [])) ?? [];
