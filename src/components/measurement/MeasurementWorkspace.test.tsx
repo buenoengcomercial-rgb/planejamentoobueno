@@ -114,10 +114,11 @@ describe('Tela própria de Medição', () => {
   });
   it('limpa apenas o rascunho de quantidade já confirmado na nuvem ao reabrir', async () => {
     const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
-    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), origin: { kind: 'manual' }, multiplier: 4 }] }];
+    w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('r'), origin: { kind: 'manual' }, multiplier: 12 }] },
+      { projectId: 'p', measurementId: 'm2', serviceId: 's', rows: [{ ...newMeasuredRow('different'), origin: { kind: 'manual' }, multiplier: 11 }] }];
     const drafts = [
-      { projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: '__manual__', changes: { multiplier: '4' } },
-      { projectId: 'p', measurementId: 'm2', serviceId: 's', rowId: '__manual__', changes: { multiplier: '7' } },
+      { projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: '__manual__', changes: { multiplier: '12' } },
+      { projectId: 'p', measurementId: 'm2', serviceId: 's', rowId: '__manual__', changes: { multiplier: '0' } },
     ];
     repository.drafts = vi.fn(async () => [...drafts]);
     repository.clearDraft = vi.fn(async (_mid, _sid, rowId) => {
@@ -128,6 +129,8 @@ describe('Tela própria de Medição', () => {
     expect(await screen.findByText('1 rascunho(s) local(is) da Medição aguardando conferência')).toBeVisible();
     expect(repository.clearDraft).toHaveBeenCalledWith('m1', 's', '__manual__');
     expect(repository.clearDraft).not.toHaveBeenCalledWith('m2', 's', '__manual__');
+    fireEvent.click(screen.getByText('1 rascunho(s) local(is) da Medição aguardando conferência'));
+    expect(screen.getByText('multiplier: local 0 · nuvem 11')).toBeVisible();
     expect(screen.getByText('Aguardando envio à nuvem')).toBeVisible();
   });
   it('mostra qual rascunho não confirmado mantém o aviso após a recarga', async () => {

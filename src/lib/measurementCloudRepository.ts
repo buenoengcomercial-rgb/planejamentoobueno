@@ -12,6 +12,39 @@ import { applyMeasurementPlanCatalogReceipt, measurementPlanCatalogPatch } from 
 import type { MeasurementWorkspace } from './measurementWorkspace';
 import { measurementConcurrentCommand, measurementCommandKey, type MeasurementConcurrentCommand } from './measurementConcurrentCommand';
 
+const ENTRY_RECOVERY_WAITING = 'Banco demorou a responder. Gravação ainda não confirmada.';
+const ENTRY_RECOVERY_CONFIRMED = 'Gravação confirmada na nuvem. Conferindo os dados mais recentes.';
+const ENTRY_TAIL_LIMIT = 16;
+
+const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v)
+  ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+
+type CompactEntryEvent = { revision: number; operation_id: string; actor_id: string; after_data: {
+  revision: number; entries: MeasurementWorkspace['entries']; event: MeasurementWorkspace['audit'][number];
+} };
+
+function applyEntryTail(base: MeasurementWorkspace, rows: CompactEntryEvent[], target: number): MeasurementWorkspace | null {
+  if (rows.length !== target - base.revision) return null;
+  const key = (entry: MeasurementWorkspace['entries'][number]) => JSON.stringify([entry.measurementId, entry.serviceId]);
+  let next = base;
+  for (const { revision, operation_id, actor_id, after_data: delta } of rows) {
+    if (revision !== next.revision + 1 || delta?.revision !== revision
+      || delta.event?.id !== operation_id || delta.event.actor?.id !== actor_id
+      || !Array.isArray(delta.entries) || !Array.isArray(delta.event.before)
+      || canonical(delta.entries) !== canonical(delta.event.after)) return null;
+    const replacements = new Map(delta.entries.map(entry => [key(entry), entry]));
+    const originals = new Map(next.entries.map(entry => [key(entry), entry]));
+    if (replacements.size !== delta.entries.length || delta.event.before.length !== delta.entries.length
+      || delta.entries.some((entry, index) => entry.projectId !== base.projectId || !Array.isArray(entry.rows)
+        || canonical(delta.event.before[index]) !== canonical(originals.get(key(entry))
+          ?? { projectId: base.projectId, measurementId: entry.measurementId, serviceId: entry.serviceId, rows: [] }))) return null;
+    const entries = next.entries.map(entry => replacements.get(key(entry)) ?? entry);
+    entries.push(...delta.entries.filter(entry => !originals.has(key(entry))));
+    next = { ...next, revision, entries, audit: [...next.audit, delta.event] };
+  }
+  return next;
+}
+
 const WRITE_RESPONSE_TIMEOUT_MS = 45_000;
 
 // A missing HTTP response is uncertain, not a failed commit. The caller keeps
@@ -218,12 +251,67 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     // Older operation payloads may have been compacted after a verified
     // checkpoint. Only a matching server receipt proves that a local pending
     // write reached the cloud; a missing table/network response proves nothing.
-    const { data, error } = await supabase.from('measurement_workspace_compacted_receipts' as never)
-      .select('revision,actor_id').eq('project_id', scope.projectId).eq('operation_id', operationId).maybeSingle();
+    const { data, error } = await withReadDeadline(supabase.from('measurement_workspace_compacted_receipts' as never)
+      .select('revision,actor_id').eq('project_id', scope.projectId).eq('operation_id', operationId).maybeSingle());
     if (error) throw new Error(`Não foi possível conferir o recibo da Medição: ${error.message}`);
     const receipt = data as { revision?: number; actor_id?: string } | null;
     const revision = Number(receipt?.revision);
     return receipt?.actor_id === scope.userId && Number.isSafeInteger(revision) && revision >= 0 ? revision : null;
+  };
+  const uncertainEntries = new Set<string>();
+  const confirmedEntryReceipts = new Map<string, { revision: number; patch: PendingMeasurementEntrySave['patch'] }>();
+  const liveEntryReceipt = async (operationId: string): Promise<number | null> => {
+    const { data, error } = await withReadDeadline(supabase.from('measurement_workspace_events' as never)
+      .select('revision,actor_id').eq('project_id', scope.projectId).eq('operation_id', operationId).maybeSingle());
+    if (error) throw error;
+    const row = data as { revision: number; actor_id: string } | null;
+    if (!row) return compactedReceiptRevision(operationId);
+    if (row.actor_id !== scope.userId || !Number.isSafeInteger(row.revision) || row.revision < 1)
+      throw new Error('Recibo da Medição inválido.');
+    return row.revision;
+  };
+  const catchUpEntries = async (base: MeasurementWorkspace, target: number): Promise<MeasurementWorkspace | null> => {
+    if (target - base.revision > ENTRY_TAIL_LIMIT || target <= base.revision) return null;
+    const { data, error } = await withReadDeadline(supabase.from('measurement_workspace_events' as never)
+      .select('revision,operation_id,actor_id,after_data').eq('project_id', scope.projectId)
+      .gt('revision', base.revision).lte('revision', target)
+      .in('after_data->>kind', ['entry_patch_v1', 'entry_patch_v2']).order('revision').limit(ENTRY_TAIL_LIMIT));
+    return !error && Array.isArray(data) ? applyEntryTail(base, data as CompactEntryEvent[], target) : null;
+  };
+  const acceptEntryReceipt = async (candidate: MeasurementWorkspace, operationId: string, revision: number,
+    patch: PendingMeasurementEntrySave['patch']): Promise<MeasurementWorkspace> => {
+    if (!Number.isSafeInteger(revision) || revision < candidate.revision) throw new Error(ENTRY_RECOVERY_WAITING);
+    const alreadyConfirmed = confirmedEntryReceipts.has(operationId);
+    confirmedEntryReceipts.set(operationId, { revision, patch });
+    uncertainEntries.delete(operationId);
+    let saved = confirmed;
+    let cachePatch: PendingMeasurementEntrySave['patch'] | undefined;
+    if (!saved || saved.revision < revision) {
+      if (saved?.revision === revision - 1 && revision === candidate.revision) {
+        saved = applyEntryTail(saved, [{ revision, operation_id: operationId, actor_id: scope.userId,
+          after_data: { revision, entries: patch.entries, event: patch.event } }], revision);
+        if (saved) cachePatch = patch;
+      } else if (saved) {
+        try { saved = await catchUpEntries(saved, revision); } catch { saved = null; }
+      }
+      // A gap only affects the read model. Keep the receipt and never resend
+      // the accepted write. A following retry joins the background read.
+      if (!saved || saved.revision < revision) {
+        if (!alreadyConfirmed) {
+          void loadRemote().catch(() => undefined);
+          throw new Error(ENTRY_RECOVERY_CONFIRMED);
+        }
+        saved = await loadRemote();
+        if (!saved || loadedOffline || saved.revision < revision) throw new Error(ENTRY_RECOVERY_CONFIRMED);
+      }
+    }
+    if (confirmed && confirmed.revision > saved.revision) { saved = confirmed; cachePatch = undefined; }
+    confirmed = saved;
+    loadedOffline = false;
+    state = { source: 'cloud', checking: !!loading };
+    discardConfirmedPending(operationId, saved, cachePatch);
+    confirmedEntryReceipts.delete(operationId);
+    return saved;
   };
   const queued = async (knownRemote?: MeasurementWorkspace | null): Promise<PendingMeasurementSave[]> => {
     const remote = knownRemote ?? await loadRemote();
@@ -235,9 +323,9 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       const operationId = 'operationId' in stored ? stored.operationId : stored.candidate.audit.at(-1)?.id;
       if (!operationId) throw new Error('Há um lançamento local sem identificação. Confira o rascunho.');
       if (stored.baseRevision < remote.revision) {
-        const receiptRevision = await compactedReceiptRevision(operationId);
-        const applied = remote.audit.some(event => event.id === operationId)
-          || receiptRevision !== null && receiptRevision >= stored.baseRevision + 1 && receiptRevision <= remote.revision;
+        const inAudit = remote.audit.some(event => event.id === operationId);
+        const receiptRevision = inAudit ? null : await compactedReceiptRevision(operationId);
+        const applied = inAudit || receiptRevision !== null && receiptRevision >= stored.baseRevision + 1 && receiptRevision <= remote.revision;
         if (!applied && (('format' in stored && stored.format === 'entry-patch-v1')
           || localStorage.getItem(measurementCommandKey(scope.userId, scope.projectId, operationId)))) {
           pending.push(await restorePending(stored));
@@ -426,6 +514,8 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     commit: async (candidate, baseRevision) => {
       const operationId = candidate.audit.at(-1)?.id;
       if (!operationId || candidate.projectId !== scope.projectId || candidate.revision !== baseRevision + 1) throw new MeasurementCommitRejectedError('Operação de Medição inválida.');
+      const knownEntry = confirmedEntryReceipts.get(operationId);
+      if (knownEntry) return acceptEntryReceipt(candidate, operationId, knownEntry.revision, knownEntry.patch);
       // The caller keeps an unconfirmed candidate in memory until cloud acknowledgement.
       const latestEvent = candidate.audit.at(-1);
       const needsPlanPaths = candidate.plans.some(plan => !plan.storagePath)
@@ -524,6 +614,8 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       }
       const deletionPatch = manualUnlinkPatch ?? (!lifecyclePatch && !additivePatch && !catalogPatch && !capturePatch && !patch
         && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null);
+      if (latestEvent?.action === 'Editar detalhe' && !latestEvent.beforePlans && !latestEvent.afterPlans && !patch)
+        throw new MeasurementCommitRejectedError('Os quantitativos não formam um lote válido. Os lançamentos foram preservados.');
       const send = () => lifecyclePatch
         ? supabase.rpc('commit_measurement_lifecycle' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_patch: encodeMeasurementWorkspace(lifecyclePatch),
@@ -547,8 +639,34 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         : supabase.rpc('commit_measurement_workspace' as never, {
           p_project_id: scope.projectId, p_expected_revision: baseRevision, p_candidate: encodeMeasurementWorkspace(next),
         } as never);
-      let { data, error } = await withWriteResponseDeadline(send());
-      if (error && /57014|statement timeout|canceling statement|timeout|failed to fetch/i.test(`${error.code ?? ''} ${error.message}`)) {
+      const recoverEntry = async () => {
+        try { return await liveEntryReceipt(operationId); }
+        catch { throw new Error(ENTRY_RECOVERY_WAITING); }
+      };
+      if (patch) {
+        if (uncertainEntries.has(operationId)) {
+          const receipt = await recoverEntry();
+          if (receipt !== null) return acceptEntryReceipt(next, operationId, receipt, patch);
+        }
+      }
+      const write = async () => {
+        try { return await withWriteResponseDeadline(send()); }
+        catch (cause) {
+          if (!patch) throw cause;
+          return { data: null, error: { code: '', message: cause instanceof Error ? cause.message : String(cause) } };
+        }
+      };
+      let { data, error } = await write();
+      if (patch && error && !['P0001', 'P0002', '42501', '23502', '23503', '23505', '23514', '22003', '22P02'].includes(String(error.code))) {
+        uncertainEntries.add(operationId);
+        const receipt = await recoverEntry();
+        if (receipt !== null) return acceptEntryReceipt(next, operationId, receipt, patch);
+        ({ data, error } = await write());
+      }
+      if (patch && error && !['P0001', 'P0002', '42501', '23502', '23503', '23505', '23514', '22003', '22P02'].includes(String(error.code)))
+        throw new Error(ENTRY_RECOVERY_WAITING);
+      if (patch && error) uncertainEntries.delete(operationId);
+      if (!patch && error && /57014|statement timeout|canceling statement|timeout|failed to fetch/i.test(`${error.code ?? ''} ${error.message}`)) {
         // A timeout may arrive after PostgreSQL committed. Check the immutable
         // operation ID before retrying the same candidate; never generate a new
         // audit event or assume that a missing HTTP response means failure.
@@ -583,22 +701,14 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         throw new Error(`${error.message}. A resposta da nuvem é incerta; confira esta operação antes de sair.`);
       }
       const compactPatch = additivePatch?.payload ?? patch ?? (deletionPatch || capturePatch || catalogPatch ? encodeMeasurementWorkspace(deletionPatch ?? capturePatch ?? catalogPatch) : null);
-      const canonical = (value: unknown): string => JSON.stringify(value, (_key, v) => v && typeof v === 'object' && !Array.isArray(v)
-        ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
       if (patch && (data as { reconciled?: boolean } | null)?.reconciled) {
         const receipt = data as { projectId: string; revision: number; patch: unknown };
         if (receipt.projectId !== scope.projectId || !Number.isSafeInteger(receipt.revision)
           || receipt.revision < next.revision || canonical(receipt.patch) !== canonical(patch)) {
-          throw new Error('O recibo reconciliado da Medição está incompleto. Mantenha esta página aberta.');
+          uncertainEntries.add(operationId);
+          throw new Error(ENTRY_RECOVERY_WAITING);
         }
-        const latest = await loadRemote();
-        if (!latest || loadedOffline || latest.revision < receipt.revision
-          || !latest.audit.some(event => event.id === operationId)
-            && await compactedReceiptRevision(operationId) !== receipt.revision) {
-          throw new Error('A operação foi confirmada, mas a versão reconciliada não pôde ser conferida. Mantenha esta página aberta.');
-        }
-        discardConfirmedPending(operationId, latest);
-        return latest;
+        return acceptEntryReceipt(next, operationId, receipt.revision, patch);
       }
       if ((lifecyclePatch || compactPatch) && (data as { replayed?: unknown } | null)?.replayed === true) {
         // An idempotent receipt proves the original operation, but its revision
@@ -654,6 +764,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       confirmed = saved;
       loadedOffline = false;
       state = { source: 'cloud', checking: !!loading };
+      uncertainEntries.delete(operationId);
       discardConfirmedPending(operationId, saved, patch ?? undefined);
       return saved;
     },

@@ -79,7 +79,7 @@ beforeEach(() => {
   mocks.revision = 0; mocks.eventRevision = null; mocks.compactedRevision = null; mocks.missingVersion = false;
   mocks.from.mockImplementation((table: string) => ({ select: () => ({ eq: () => ({
     eq: () => ({ maybeSingle: async () => ({ data: table === 'measurement_workspace_events' && mocks.eventRevision !== null
-      ? { revision: mocks.eventRevision }
+      ? { revision: mocks.eventRevision, actor_id: actor.id }
       : table === 'measurement_workspace_compacted_receipts' && mocks.compactedRevision !== null
         ? { revision: mocks.compactedRevision, actor_id: actor.id } : null, error: null }) }),
     maybeSingle: async () => ({ data: table === 'measurement_workspace_versions' && !mocks.missingVersion ? { revision: mocks.revision } : null, error: null }),
@@ -603,8 +603,8 @@ describe('Medição somente nuvem', () => {
     const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 3 });
     await repo.stage!(next, base);
     await repo.stage!(next, base);
-    mocks.rpc.mockResolvedValueOnce({ data: null, error: { message: 'Sem conexão' } });
-    await expect(repo.commit(next, base.revision)).rejects.toThrow('Sem conexão');
+    mocks.rpc.mockResolvedValue({ data: null, error: { message: 'Sem conexão' } });
+    await expect(repo.commit(next, base.revision)).rejects.toThrow('Gravação ainda não confirmada');
     expect(mocks.stored).toHaveLength(1);
     expect(mocks.stored[0]).toMatchObject({ format: 'entry-patch-v1', operationId: next.audit.at(-1)!.id, baseRevision: base.revision });
     expect((await repo.pending())?.candidate.entries).toEqual(next.entries);
@@ -620,7 +620,9 @@ describe('Medição somente nuvem', () => {
     mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: remote.revision,
       patch: measurementEntryPatch(base,next), reconciled: true }, error: null });
     loaded(remote);
+    await expect(repo.commit(next,base.revision)).rejects.toThrow('Gravação confirmada na nuvem');
     expect(await repo.commit(next,base.revision)).toEqual(remote);
+    expect(mocks.rpc.mock.calls.filter(([name]) => name === 'patch_measurement_entries_v2')).toHaveLength(1);
     expect(await repo.confirmedOperation!(next.audit.at(-1)!.id, next.revision)).toBe(true);
   });
 
@@ -701,13 +703,46 @@ describe('Medição somente nuvem', () => {
     expect(mocks.rpc).toHaveBeenCalledTimes(2);
   });
 
-  it('sem linha de versão não presume confirmação de timeout', async () => {
+  it('consulta recibo após rejeição de transporte e aceita o recibo compacto sem recarregar', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 7 });
+    mocks.compactedRevision = next.revision;
+    mocks.rpc.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    expect(await repo.commit(next, base.revision)).toEqual(next);
+    expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(['load_measurement_workspace', 'patch_measurement_entries_v2']);
+  });
+
+  it('aplica uma sequência compacta após a mesclagem sem pedir a planilha inteira', async () => {
+    const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    loaded(base); await repo.load();
+    const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 7 });
+    const remote = editMeasuredRow(base, actor, 'm1', 'repeaters', { ...newMeasuredRow('other'), multiplier: 3 });
+    const confirmed = { ...editMeasuredRow(remote, actor, 'm1', 'signs', next.audit.at(-1)!.after[0].rows[0]) };
+    confirmed.audit.at(-1)!.id = next.audit.at(-1)!.id;
+    const delta = (previous: MeasurementWorkspace, saved: MeasurementWorkspace) => {
+      const { event, entries } = measurementEntryPatch(previous, saved)!;
+      return { revision: saved.revision, operation_id: event.id, actor_id: actor.id,
+        after_data: { revision: saved.revision, entries, event } };
+    };
+    const limit = vi.fn(async () => ({ data: [delta(base, remote), delta(remote, confirmed)], error: null }));
+    mocks.from.mockReturnValueOnce({ select: () => ({ eq: () => ({ gt: () => ({ lte: () => ({
+      in: () => ({ order: () => ({ limit }) }),
+    }) }) }) }) });
+    mocks.rpc.mockResolvedValueOnce({ data: { projectId: base.projectId, revision: confirmed.revision,
+      patch: measurementEntryPatch(base, next), reconciled: true }, error: null });
+    expect(await repo.commit(next, base.revision)).toEqual(confirmed);
+    expect(limit).toHaveBeenCalledWith(16);
+    expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(['load_measurement_workspace', 'patch_measurement_entries_v2']);
+  });
+
+  it('sem recibo e com segundo timeout não presume confirmação', async () => {
     const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     loaded(base); await repo.load();
     const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 7 });
     mocks.missingVersion = true;
-    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'statement timeout' } });
-    await expect(repo.commit(next, base.revision)).rejects.toThrow('Não foi possível conferir a revisão');
+    mocks.rpc.mockResolvedValue({ data: null, error: { code: '57014', message: 'statement timeout' } });
+    await expect(repo.commit(next, base.revision)).rejects.toThrow('Gravação ainda não confirmada');
     expect(mocks.stored).toEqual([]);
   });
 
@@ -724,9 +759,9 @@ describe('Medição somente nuvem', () => {
     const base = await fixture(); const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
     loaded(base); await repo.load();
     const next = editMeasuredRow(base, actor, 'm1', 'signs', { ...newMeasuredRow('r'), multiplier: 7 });
-    mocks.rpc.mockResolvedValueOnce({ data: null, error: { code: 'PGRST000', status: 502, message: 'Bad Gateway' } });
-    await expect(repo.commit(next, base.revision)).rejects.not.toBeInstanceOf(MeasurementCommitRejectedError);
-    expect(mocks.rpc).toHaveBeenCalledTimes(2);
+    mocks.rpc.mockResolvedValue({ data: null, error: { code: 'PGRST000', status: 502, message: 'Bad Gateway' } });
+    await expect(repo.commit(next, base.revision)).rejects.toThrow('Gravação ainda não confirmada');
+    expect(mocks.rpc).toHaveBeenCalledTimes(3);
   });
 
   it('mantém candidato incerto quando upload da planta retorna timeout', async () => {
