@@ -1,8 +1,11 @@
-import type { Additive, AdditiveComposition, ContractedTaskSchedule, Project, Task } from '@/types/project';
+import type { Additive, AdditiveComposition, ContractedTaskSchedule, Phase, Project, Task } from '@/types/project';
 import { computeAdditiveRow, resolveAdditivePricingRule } from '@/lib/additiveImport';
 import { executionMonth } from '@/lib/monthlyExecution';
 import { sortTasksForSchedule } from '@/lib/taskOrdering';
-import { flattenTaskTree } from '@/lib/taskTree';
+import { flattenTaskTree, replaceProjectTasksById } from '@/lib/taskTree';
+import { getChapterNumbering, isNewServicesChapter, NEW_SERVICES_CHAPTER } from '@/lib/chapters';
+import { calculateRupDuration } from '@/lib/calculations';
+import { money2, trunc2 } from '@/lib/financialEngine';
 
 export function isContractedAdditive(additive: Additive) {
   return !!additive.isContracted || additive.status === 'aditivo_contratado' || additive.status === 'contratado';
@@ -64,13 +67,97 @@ export function isNewAdditiveTaskLinked(tasks: ReadonlySet<string>, additive: Ad
   return tasks.has(additiveTaskId(additive.id, composition.id)) || !!linkedTask && tasks.has(linkedTask);
 }
 
+export interface ContractedQuantityAdjustment {
+  base: number;
+  added: number;
+  suppressed: number;
+  total: number;
+}
+
+function projectContractedQuantities(project: Project, tasks: Map<string, Task>, additives: readonly Additive[]) {
+  const changes = new Map<string, Array<{ additiveId: string; composition: AdditiveComposition }>>();
+  for (const additive of additives.filter(isContractedAdditive)) {
+    const snapshot = approvedAdditiveSnapshot(additive);
+    if (!snapshot && additive.editUnlocked) continue;
+    for (const composition of snapshot?.compositions ?? additive.compositions) {
+      if (composition.isNewService || !composition.addedQuantity && !composition.suppressedQuantity) continue;
+      const taskId = [composition.baseTaskId, composition.linkedTaskId, composition.taskId].find(id => id && tasks.has(id));
+      if (!taskId) continue;
+      const rows = changes.get(taskId) ?? [];
+      rows.push({ additiveId: additive.id, composition });
+      changes.set(taskId, rows);
+    }
+  }
+
+  const replacements = new Map<string, Task>();
+  const quantityAdjustments = new Map<string, ContractedQuantityAdjustment>();
+  for (const [taskId, rows] of changes) {
+    const task = tasks.get(taskId)!;
+    const history = task.additiveHistory ?? [];
+    const composition = rows[0].composition;
+    const base = history[0]?.previousQuantity ?? task.quantityContracted ?? composition.originalQuantity
+      ?? task.baseline?.quantity ?? task.quantity ?? composition.quantity;
+    const byAdditive = new Map(rows.map(({ additiveId, composition }) => [additiveId, {
+      addedQuantity: trunc2(composition.addedQuantity), suppressedQuantity: trunc2(composition.suppressedQuantity),
+    }]));
+    // Integrated revisions are already represented by the approved rows.
+    // Retain legacy changes for additives no longer present in the source.
+    const legacy = history.filter(entry => !byAdditive.has(entry.additiveId));
+    const adjustments = [...byAdditive.values(), ...legacy];
+    const added = money2(adjustments.reduce((sum, item) => sum + item.addedQuantity, 0));
+    const suppressed = money2(adjustments.reduce((sum, item) => sum + item.suppressedQuantity, 0));
+    const total = Math.max(0, money2(base + added - suppressed));
+    quantityAdjustments.set(taskId, { base, added, suppressed, total });
+    const next = { ...task, quantity: total, quantityContracted: base, suppressedByAdditive: total === 0 };
+    const rup = total > 0 && task.durationMode === 'rup' && !task.isManual
+      && task.laborCompositions?.length && !task.operationalReschedule
+      ? calculateRupDuration(next, project.scheduleCalendar) : undefined;
+    if (task.quantity === total && (!rup || task.duration === rup.duration)) continue;
+    replacements.set(taskId, rup ? { ...next, ...rup, calculatedDuration: rup.duration } : next);
+  }
+  return { project: replacements.size ? replaceProjectTasksById(project, replacements) : project, quantityAdjustments };
+}
+
 /** The archived schedule supplies the rows that are intentionally absent from the base EAP. */
 export function includeContractedAdditiveTasks(project: Project, additives: readonly Additive[]) {
-  const taskIds = new Set(flattenTaskTree(project.phases.flatMap(phase => phase.tasks)).map(task => task.id));
+  const baseTasks = new Map(flattenTaskTree(project.phases.flatMap(phase => phase.tasks)).map(task => [task.id, task]));
+  const taskIds = new Set(baseTasks.keys());
+  const quantities = projectContractedQuantities(project, baseTasks, additives);
   const projectedTaskIds = new Set<string>();
-  const existingPhases = new Set(project.phases.map(phase => phase.id));
+  const existingPhases = new Map(project.phases.map(phase => [phase.id, phase]));
+  const roots = project.phases.filter(phase => !phase.parentId);
+  const numbering = getChapterNumbering(project);
+  const rootsByNumber = new Map(roots.map(phase => [numbering.get(phase.id), phase]));
+  const newServicesByParent = new Map<string, Phase[]>();
+  for (const phase of project.phases.filter(isNewServicesChapter)) {
+    const siblings = newServicesByParent.get(phase.parentId!) ?? [];
+    siblings.push(phase);
+    newServicesByParent.set(phase.parentId!, siblings);
+  }
   const tasksByPhase = new Map<string, Task[]>();
-  const projectedPhases: Project['phases'] = [];
+  const projectedPhases = new Map<string, Phase>();
+
+  function resolvePhase(composition: AdditiveComposition, items: Array<string | undefined>, fallback: Phase): Phase {
+    const explicit = composition.phaseId && existingPhases.get(composition.phaseId);
+    if (explicit) return explicit;
+    const match = items.flatMap(item => {
+      const [, rootNumber, childNumber] = /^(\d+)\.(\d+)(?:\.|$)/.exec(item?.trim() ?? '') ?? [];
+      const root = rootsByNumber.get(rootNumber);
+      return root ? [{ root, subchapter: `${rootNumber}.${childNumber}` }] : [];
+    })[0];
+    const root = match?.root ?? roots.find(phase => phase.name === composition.phaseChain?.split('›')[0].trim());
+    if (!root) return fallback;
+    const children = newServicesByParent.get(root.id) ?? [];
+    const existing = children.find(phase => numbering.get(phase.id) === match?.subchapter) ?? children[0];
+    if (existing) return existing;
+    const id = `gantt-additive-new-services:${root.id}`;
+    const created = projectedPhases.get(id) ?? {
+      id, parentId: root.id, name: NEW_SERVICES_CHAPTER, color: root.color,
+      customNumber: match?.subchapter, tasks: [],
+    };
+    projectedPhases.set(id, created);
+    return created;
+  }
 
   for (const additive of additives) {
     const archive = contractedScheduleArchive(additive);
@@ -79,8 +166,7 @@ export function includeContractedAdditiveTasks(project: Project, additives: read
       .filter(composition => composition.isNewService);
     const byComposition = new Map(compositions.map(composition => [composition.id, composition]));
     const byTask = new Map(compositions.map(composition => [additiveTaskId(additive.id, composition.id), composition]));
-    const orphans: Task[] = [];
-    const fallbackId = `gantt-additive-${additive.id}`;
+    const fallback: Phase = { id: `gantt-additive-${additive.id}`, name: additive.name, color: '#0369a1', tasks: [] };
     for (const row of archive.rows) {
       const composition = row.compositionId ? byComposition.get(row.compositionId) : byTask.get(row.taskId);
       if (!composition || row.classification !== 'proposed_addition' || row.quantity <= 0
@@ -91,29 +177,29 @@ export function includeContractedAdditiveTasks(project: Project, additives: read
       const schedule = savedSchedule?.archiveId === archive.id ? contractedTaskSchedule(savedSchedule, archive.id) : {};
       taskIds.add(id);
       projectedTaskIds.add(id);
-      const phaseId = composition.phaseId && existingPhases.has(composition.phaseId)
-        ? composition.phaseId : fallbackId;
-      const tasks = phaseId === fallbackId ? orphans : tasksByPhase.get(phaseId) ?? [];
-      if (phaseId !== fallbackId) tasksByPhase.set(phaseId, tasks);
+      const destination = resolvePhase(composition, [composition.itemNumber, composition.item, row.item], fallback);
+      const phaseId = destination.id;
+      const tasks = tasksByPhase.get(phaseId) ?? [];
+      tasksByPhase.set(phaseId, tasks);
       tasks.push({
         id, phase: phaseId, name: row.description, startDate: row.startDate, duration: row.duration,
         dependencies: row.dependencies, dependencyDetails: row.dependencyDetails,
         responsible: row.responsible, team: row.team, scheduleOrder: row.scheduleOrder, contractOrder: row.contractOrder,
         durationMode: row.durationMode, isManual: row.isManual, manualDuration: row.manualDuration,
         percentComplete: 0, materials: [], level: 0, quantity: row.quantity, unit: row.unit,
-        unitPrice: row.unitPriceWithBDI, itemCode: row.code ?? composition.code, contractItem: row.item ?? composition.itemNumber ?? composition.item,
+        unitPrice: row.unitPriceWithBDI, itemCode: row.code ?? composition.code, contractItem: row.item || composition.itemNumber || composition.item,
         originAdditiveId: additive.id, originAdditiveName: additive.name, originAdditiveVersion: archive.version,
         ...schedule,
       });
     }
-    if (orphans.length) projectedPhases.push({ id: fallbackId, name: additive.name, color: '#0369a1', tasks: sortTasksForSchedule(orphans) });
+    if (tasksByPhase.has(fallback.id)) projectedPhases.set(fallback.id, fallback);
   }
-  const phases = project.phases.map(phase => {
+  const phases = [...quantities.project.phases, ...projectedPhases.values()].map(phase => {
     const additions = tasksByPhase.get(phase.id);
     return additions ? { ...phase, tasks: sortTasksForSchedule([...phase.tasks, ...additions]) } : phase;
   });
   return {
-    project: projectedTaskIds.size ? { ...project, phases: [...phases, ...projectedPhases] } : project,
-    projectedTaskIds, taskIds,
+    project: projectedTaskIds.size ? { ...quantities.project, phases } : quantities.project,
+    projectedTaskIds, taskIds, quantityAdjustments: quantities.quantityAdjustments,
   };
 }

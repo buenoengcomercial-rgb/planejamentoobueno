@@ -4,6 +4,7 @@ import type { Additive, Project, Task, TaskDependency, ScheduleReleaseMilestone 
 import { getAllTasks } from '@/data/sampleProject';
 import { replaceProjectTasksById } from './taskTree';
 import { includeMeasuredSchedule } from './measuredSchedule';
+import type { ContractedQuantityAdjustment } from './contractedAdditiveSchedule';
 import type { MeasurementWorkspace } from './measurementWorkspace';
 import { includeClosingSchedule } from './closingSchedule';
 import { operationalEndDate, parseScheduleDate, scheduleDateISO, scheduleWorkdayWeight } from './scheduleCalendar';
@@ -92,10 +93,10 @@ export function includeReleaseMilestones(project: Project): Project {
   return replaceProjectTasksById(projected,map);
 }
 
-export function applyExecutionRevision(project: Project, workspace: MeasurementWorkspace, additives: readonly Additive[], actor: AuditUserInfo): Project {
+export function applyExecutionRevision(project: Project, workspace: MeasurementWorkspace, additives: readonly Additive[], actor: AuditUserInfo, quantityAdjustments?: ReadonlyMap<string, ContractedQuantityAdjustment>): Project {
   if (!project.scheduleCalendar) throw Error('Confirme o calendário da obra.');
   const closed = includeClosingSchedule(project).project;
-  const measured = includeMeasuredSchedule(closed, workspace, additives);
+  const measured = includeMeasuredSchedule(closed, workspace, additives, quantityAdjustments);
   const owners = new Map(closed.phases.flatMap(p => getAllTasks({...closed,phases:[p]}).map(t => [t.id,p.id] as const)));
   const visible = getAllTasks(measured.project).filter(t => !t.id.startsWith('measured:')).map(t => ({...t,phase:owners.get(t.id) ?? t.phase}));
   const all = new Map(visible.map(t => [t.id, t]));

@@ -158,6 +158,8 @@ export interface Task {
   manualDuration?: number;
   // RUP fields
   quantity?: number;
+  /** Quantidade original usada na projeção operacional de um aditivo contratado. */
+  quantityContracted?: number;
   unit?: string;
   /** Preço unitário contratado (R$/unidade). Usado na Planilha de Medição. */
   unitPrice?: number;

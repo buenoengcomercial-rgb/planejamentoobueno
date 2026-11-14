@@ -16,7 +16,7 @@ import GanttChart from './GanttChart';
 import GanttFinancialForecast from './gantt/GanttFinancialForecast';
 
 type ProjectUpdate = Project | ((previous: Project) => Project);
-type Props = Omit<ComponentProps<typeof GanttChart>, 'project' | 'onProjectChange' | 'lockedTaskLabels' | 'displayOnlyTaskIds'> & {
+type Props = Omit<ComponentProps<typeof GanttChart>, 'project' | 'onProjectChange' | 'lockedTaskLabels' | 'displayOnlyTaskIds' | 'contractedQuantityAdjustments'> & {
   project: Project;
   confirmedAdditives?: readonly Additive[];
   confirmedMeasurement?: MeasurementWorkspace | null;
@@ -31,7 +31,7 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
   const operationalProject = useMemo(() => buildOperationalProjectFromPendingAdditives(project), [project]);
   const display = useMemo(() => includeContractedAdditiveTasks(operationalProject, confirmedAdditives), [operationalProject, confirmedAdditives]);
   const closing = useMemo(() => includeClosingSchedule(display.project), [display.project]);
-  const measured = useMemo(() => includeMeasuredSchedule(closing.project, confirmedMeasurement, confirmedAdditives), [closing.project, confirmedMeasurement, confirmedAdditives]);
+  const measured = useMemo(() => includeMeasuredSchedule(closing.project, confirmedMeasurement, confirmedAdditives, display.quantityAdjustments), [closing.project, confirmedMeasurement, confirmedAdditives, display.quantityAdjustments]);
   const ganttProject = useMemo(() => {
     const projected = includeReleaseMilestones(measured.project);
     const revised = projected.phases.some(p => p.tasks.some(t => t.operationalReschedule?.executionRevision));
@@ -61,7 +61,7 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
       onProjectChange(previous => {
         const operational = buildOperationalProjectFromPendingAdditives(calculateProjectSchedule(previous, true));
         const current = includeContractedAdditiveTasks(operational, confirmedAdditives);
-        const revised = applyExecutionRevision(current.project, confirmedMeasurement, confirmedAdditives, props.auditActor ?? {});
+        const revised = applyExecutionRevision(current.project, confirmedMeasurement, confirmedAdditives, props.auditActor ?? {}, current.quantityAdjustments);
         const captured = captureContractedTaskSchedules(current.project, current.project, revised, confirmedAdditives, current.projectedTaskIds);
         return applyProjectedProjectOperation('gantt', previous, current.project, mergeOperationalProjectIntoRaw(previous, current.project), mergeOperationalProjectIntoRaw(previous, captured));
       });
@@ -104,6 +104,7 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
     <GanttChart
       {...props}
       project={ganttProject}
+      contractedQuantityAdjustments={display.quantityAdjustments}
       onProjectChange={updateOperationalProject}
       displayOnlyTaskIds={new Set([...measured.lockedIds].filter(id => id.startsWith('measured:')))}
       lockedTaskLabels={{ ...lockedTaskLabels, ...Object.fromEntries([...measured.lockedIds].map(id => [id, 'Execução registrada nas medições 1–2 — somente consulta'])), ...Object.fromEntries(ganttProject.phases.flatMap(p => p.tasks).filter(t => t.scheduleDisplayKind === 'release').map(t => [t.id, 'Marco de liberação — atualizar pela revisão do cronograma'])), ...Object.fromEntries([...closing.taskIds].map(id => [id, 'Etapa operacional de fechamento — atualizar pela programação revisada'])) }}

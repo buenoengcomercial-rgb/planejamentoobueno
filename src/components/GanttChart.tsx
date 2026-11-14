@@ -45,6 +45,7 @@ import TaskRescheduleDialog from '@/components/TaskRescheduleDialog';
 import { approveRescheduleRequest, rejectRescheduleRequest, submitRescheduleRequest } from '@/lib/taskRescheduling';
 import { readGanttCollapsedPhases, writeGanttCollapsedPhases } from '@/lib/projectViewPreferences';
 import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
+import type { ContractedQuantityAdjustment } from '@/lib/contractedAdditiveSchedule';
 
 interface GanttChartProps {
   project: Project;
@@ -66,6 +67,7 @@ interface GanttChartProps {
   lockedTaskLabels?: Record<string, string>;
   /** Visible archive rows have no task record that could own a persisted link. */
   displayOnlyTaskIds?: ReadonlySet<string>;
+  contractedQuantityAdjustments?: ReadonlyMap<string, ContractedQuantityAdjustment>;
   readOnly?: boolean;
   /** Allows planning dates of blocked work in an approved additive without releasing execution. */
   allowSuspendedDateEditing?: boolean;
@@ -93,6 +95,7 @@ export default function GanttChart({
   monthlyFinancialForecast,
   lockedTaskLabels = {},
   displayOnlyTaskIds,
+  contractedQuantityAdjustments,
   readOnly = false,
   allowSuspendedDateEditing = false,
   collapsedPhaseIds: controlledCollapsedPhaseIds,
@@ -296,6 +299,8 @@ export default function GanttChart({
   const isZeroOrSuppressedTask = useCallback((task: Task) => {
     if (task.scheduleDisplayKind && task.scheduleDisplayKind !== 'completed-summary') return false;
     const latest = task.additiveHistory?.[task.additiveHistory.length - 1];
+    const projected = contractedQuantityAdjustments?.get(task.id);
+    if (projected) return projected.total <= 0;
     const finalQuantity = latest?.newQuantity ?? task.quantity ?? task.remainingQuantity ?? 0;
     const totalAdded = (task.additiveHistory ?? []).reduce((sum, item) => sum + (item.addedQuantity || 0), 0);
     const totalSuppressed = (task.additiveHistory ?? []).reduce((sum, item) => sum + (item.suppressedQuantity || 0), 0);
@@ -304,7 +309,7 @@ export default function GanttChart({
 
     // Only schedule visibility changes here. Contract tabs still render these tasks.
     return task.suppressedByAdditive === true || finalQuantity <= 0 || fullySuppressed;
-  }, []);
+  }, [contractedQuantityAdjustments]);
 
   const isDelayedTask = useCallback((task: Task) => {
     const endDate = addDays(parseISODateLocal(task.startDate), Math.max(0, task.duration - 1));
@@ -432,6 +437,7 @@ export default function GanttChart({
     const hasActualDates = hasActualProgress && !!task.current?.startDate;
     const hasTwoLineProduction = hasActualProgress && !!task.quantity;
     const hasScheduleLabel = isTaskScheduleLocked(task.id);
+    const hasContractedIncrease = (contractedQuantityAdjustments?.get(task.id)?.added ?? 0) > 0;
     const hasManualBlockingNotice = context === 'additive-preview'
       && suspensionMap[task.id]?.kind === 'manual'
       && !!suspensionMap[task.id]?.blockingCompositions?.length;
@@ -439,9 +445,9 @@ export default function GanttChart({
     // Datas real/prevista, produção real e a origem no aditivo ocupam linhas
     // adicionais. O bloqueio manual também acrescenta uma linha explicativa.
     // A altura precisa ser a mesma na tabela e na área das barras.
-    if (!hasActualDates && !hasTwoLineProduction && !hasScheduleLabel && !hasManualBlockingNotice) return descriptionRowHeight;
+    if (!hasActualDates && !hasTwoLineProduction && !hasScheduleLabel && !hasManualBlockingNotice && !hasContractedIncrease) return descriptionRowHeight;
     return Math.max(descriptionRowHeight, density === 'compact' ? 56 : 60);
-  }, [context, density, descriptionRowHeight, isTaskScheduleLocked, suspensionMap]);
+  }, [context, contractedQuantityAdjustments, density, descriptionRowHeight, isTaskScheduleLocked, suspensionMap]);
   const chartWidth = useMemo(() => totalDays * dayWidth, [totalDays, dayWidth]);
 
   const todayOffset = diffDays(projectStart, today);
@@ -2129,6 +2135,7 @@ export default function GanttChart({
                           const scheduleLocked = isTaskScheduleLocked(task.id);
                           const scheduleLockSource = scheduleLockLabel(task.id);
                           const additiveHistory = task.additiveHistory ?? [];
+                          const contractualQuantity = contractedQuantityAdjustments?.get(task.id);
                           const hasAdditiveAttention = scheduleLocked || !!task.originAdditiveId || additiveHistory.length > 0 || !!task.suppressedByAdditive;
                           const hasAttention = task.isCritical || hasViolation || noWorkDays || hasLaborConflict || hasAdditiveAttention || !!suspension;
                           const attentionCount = [task.isCritical, hasViolation, noWorkDays, hasLaborConflict, hasAdditiveAttention, !!suspension].filter(Boolean).length;
@@ -2262,6 +2269,9 @@ export default function GanttChart({
                                         data-testid={`gantt-task-description-${task.id}`}
                                         className={`line-clamp-2 break-words pr-4 text-[11px] font-medium leading-tight ${rowTeamDef ? '' : 'text-foreground'}`}
                                       >
+                                        {context === 'official' && task.originAdditiveId && task.contractItem && (
+                                          <span className="mr-1 font-mono text-muted-foreground">{task.contractItem}</span>
+                                        )}
                                         {task.name}
                                       </p>
                                     </TooltipTrigger>
@@ -2269,6 +2279,12 @@ export default function GanttChart({
                                       {task.name}
                                     </TooltipContent>
                                   </Tooltip>
+                                  {contractualQuantity && contractualQuantity.added > 0 && (
+                                    <p className="truncate text-[9px] font-semibold leading-tight text-sky-800"
+                                      title={`Quantidade contratual: ${contractualQuantity.base} + ${contractualQuantity.added} de acréscimo${contractualQuantity.suppressed ? ` − ${contractualQuantity.suppressed} de supressão` : ''}`}>
+                                      {contractualQuantity.total.toLocaleString('pt-BR')} {task.unit} · +{contractualQuantity.added.toLocaleString('pt-BR')} aditivadas
+                                    </p>
+                                  )}
                                   {task.operationalReschedule && (
                                     <p className="truncate text-[8px] font-semibold leading-tight text-violet-700" title={task.operationalReschedule.reason}>
                                       Reprogramada: {task.operationalReschedule.startDate} → {task.operationalReschedule.endDate}

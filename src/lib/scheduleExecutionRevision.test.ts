@@ -45,6 +45,16 @@ it('removes future scheduling and all predecessors when known production complet
   expect(done.executedQuantityTotal).toBe(400);
 });
 
+it('does not treat the new additive quantity as already executed when the original item was complete', () => {
+  const { project, candidate } = fixture();
+  const task = getAllTasks(project).find(t => t.id === 'detectors')!;
+  task.quantityContracted = 400; task.quantity = 420; task.percentComplete = 100;
+  candidate.entries = [{ projectId: project.id, serviceId: task.id, measurementId: 'm1', rows: [{ ...newMeasuredRow('r'), multiplier: 400 }] }];
+  const adjustments = new Map([[task.id, { base: 400, added: 20, suppressed: 0, total: 420 }]]);
+  const revised = applyExecutionRevision(project, candidate, [], {}, adjustments);
+  expect(getAllTasks(revised).find(t => t.id === task.id)?.operationalReschedule).toMatchObject({ quantity: 20, executionRevision: { completed: false } });
+});
+
 it('binary zero-duration gates preserve all four relation types and signed lags across weekends', () => {
   const { project } = fixture();
   const make = (id:string,startDate:string,duration:number):Task => ({id,name:id,phase:'p',startDate,duration,dependencies:[],percentComplete:0,responsible:'',materials:[],level:0});

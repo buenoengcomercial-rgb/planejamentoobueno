@@ -1,5 +1,5 @@
 import type { Additive, Project, Task, MeasuredScheduleReference } from '@/types/project';
-import { approvedAdditiveRows, isContractedAdditive } from './contractedAdditiveSchedule';
+import { approvedAdditiveRows, isContractedAdditive, type ContractedQuantityAdjustment } from './contractedAdditiveSchedule';
 import { monthlyLines, type MeasurementWorkspace } from './measurementWorkspace';
 import { detailPartial } from './productionQuantityDetails';
 import { getAllTasks } from '@/data/sampleProject';
@@ -13,7 +13,8 @@ export function stripMeasuredSchedule(before: Project, edited: Project, lockedId
 }
 
 /** Read-only evidence from measurements 1–2. Never persists inferred execution dates. */
-export function includeMeasuredSchedule(project: Project, workspace?: MeasurementWorkspace | null, additives: readonly Additive[] = project.additives ?? []) {
+export function includeMeasuredSchedule(project: Project, workspace?: MeasurementWorkspace | null,
+  additives: readonly Additive[] = project.additives ?? [], quantityAdjustments?: ReadonlyMap<string, ContractedQuantityAdjustment>) {
   const lockedIds = new Set<string>();
   const balances = new Map<string,number>();
   const references = new Map<string, MeasuredScheduleReference[]>();
@@ -56,8 +57,8 @@ export function includeMeasuredSchedule(project: Project, workspace?: Measuremen
     const t = byId.get(id)!;
     const service = workspace.services.find(s => (s.sourceTaskId ?? s.id) === id)!;
     const executed = windows.reduce((n, w) => n + w.qty, 0);
-    const finalQuantity = contracted.get(id) ?? service.contracted;
-    const knownExecution = Math.max(executed, t.executedQuantityTotal ?? 0, t.percentComplete >= 100 ? t.quantity ?? 0 : 0);
+    const finalQuantity = quantityAdjustments?.get(id)?.total ?? contracted.get(id) ?? service.contracted;
+    const knownExecution = Math.max(executed, t.executedQuantityTotal ?? 0, t.percentComplete >= 100 ? t.quantityContracted ?? t.quantity ?? 0 : 0);
     const complete = knownExecution >= finalQuantity - 1e-8;
     references.set(id, windows);
     balances.set(id, Math.max(0,finalQuantity-knownExecution));
