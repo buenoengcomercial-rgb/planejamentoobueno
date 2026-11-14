@@ -23,6 +23,7 @@ import MeasurementTable from './MeasurementTable';
 import MeasurementTotals from './MeasurementTotals';
 import MeasurementSummaryCards from './MeasurementSummaryCards';
 import { measurementChapterOverrides, measurementPresentation } from './measurementWorkspacePresentation';
+import { withMeasurementAdditiveReferences } from '@/lib/measurementAdditiveReferences';
 import { measurementStatusLabels as states } from '@/lib/measurementWorkspace';
 import { nextMeasurementPeriod } from '@/lib/measurementPeriodSequence';
 import { fiscalReviewIssuesForWorkspace } from '@/lib/measurementFiscalReview';
@@ -168,7 +169,9 @@ function coalesceTaskEdits(base: Workspace, edits: DetailEdit[], actor: Measurem
   };
   return { ...final, revision: base.revision + 1, audit: [...base.audit, event] };
 }
-export default function MeasurementWorkspace({ repository, actor, incorporationBackup, approvedAdditives = [], analyticProject, forecastByPeriod = [] }: MeasurementWorkspaceProps) {
+const NO_APPROVED_ADDITIVES: Additive[] = [];
+
+export default function MeasurementWorkspace({ repository, actor, incorporationBackup, approvedAdditives = NO_APPROVED_ADDITIVES, analyticProject, forecastByPeriod = [] }: MeasurementWorkspaceProps) {
   const [workspace, setWorkspace] = useState<Workspace | null>(null), current = useRef<Workspace | null>(null);
   const [active, setActive] = useState(''), [expanded, setExpanded] = useState<MeasurementDetailSelection | null>(null);
   const [saving, setSaving] = useState(false), busy = useRef(false);
@@ -957,6 +960,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     catch (e) { setError(e instanceof Error ? e.message : String(e)); } finally { setSaving(false); }
   };
   const calculatedLines = useMemo(() => workspace && workspace.periods.some(p => p.id === active) ? monthlyLines(workspace, active) : [], [workspace, active]);
+  const displayLines = useMemo(() => withMeasurementAdditiveReferences(calculatedLines, approvedAdditives), [calculatedLines, approvedAdditives]);
   const activeNumber = workspace?.periods.find(p => p.id === active)?.number ?? 0;
   const additiveExcesses = useMemo(() => calculatedLines.filter(line => line.service.additiveAdjustments?.some(adjustment => adjustment.firstNumber <= activeNumber)
     && line.accumulated > line.service.contracted + 1e-8), [calculatedLines, activeNumber]);
@@ -971,14 +975,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const calculatedPresentation = useMemo(() => {
     const normalize = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
     const term = normalize(search);
-    const visible = calculatedLines.filter(({ service }) => {
+    const visible = displayLines.filter(({ service }) => {
       const override = chapterOverrides.get(service.id);
       return (chapterFilter === 'all' || (override?.id ?? service.chapterId) === chapterFilter)
         && normalize([service.item, service.code, service.bank, service.description, override?.path ?? service.path].join(' ')).includes(term);
     });
     const presentation = measurementPresentation(visible, chapterOverrides);
-    return { presentation, allTotals: visible.length === calculatedLines.length ? presentation.totals : measurementPresentation(calculatedLines, chapterOverrides).totals };
-  }, [calculatedLines, chapterOverrides, chapterFilter, search]);
+    return { presentation, allTotals: visible.length === displayLines.length ? presentation.totals : measurementPresentation(displayLines, chapterOverrides).totals };
+  }, [displayLines, chapterOverrides, chapterFilter, search]);
   const retryPendingSave = async (): Promise<boolean> => {
     if (busy.current || recoveryAction.current || !current.current) return false;
     recoveryAction.current = true;
@@ -1350,7 +1354,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     })();
   };
   const pageHeader = <>
-    <MeasurementHeader compact onExportXLSX={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'xlsx', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} onPrint={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'pdf', { forecastTotal: forecast?.value ?? null }); })().catch(e => setError(e.message)); }} showHistory={false} onOpenHistory={() => undefined}/>
+    <MeasurementHeader compact onExportXLSX={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'xlsx', { forecastTotal: forecast?.value ?? null, approvedAdditives }); })().catch(e => setError(e.message)); }} onPrint={() => { void (async () => { if (await flushConfirmedEdits() && current.current) await exportMonthlyMeasurement(current.current, active, 'pdf', { forecastTotal: forecast?.value ?? null, approvedAdditives }); })().catch(e => setError(e.message)); }} showHistory={false} onOpenHistory={() => undefined}/>
     <section className="rounded border border-border bg-card p-2">
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(allTotals.period) : '—'}</strong></span><div className="flex flex-col items-end">{repository.savedLabel === 'Salvo na nuvem'
         ? <div role="status"><SaveStatusIndicator status={cloudStatus} cloudReadStatus={cloudReadStatus} confirmedAt={confirmedAt} lastCheckedAt={realtime.lastCheckedAt} projectId={workspace.projectId} live={online && !readFailed && !cachedBase && realtime.connected}/>{online && (readFailed || cachedBase) && !saving && <div className="mt-1 text-[10px] text-amber-800">{cachedBase && <span>Cópia local preservada. </span>}{cloudReadFailure && <span>{cloudReadFailure} </span>}<button disabled={recovery || realtime.checking || !!bufferedDetail.current || detailQueue.current.length > 0 || writingDrafts.current > 0} className="underline disabled:opacity-50" onClick={() => realtime.available ? realtime.retry() : (setLoading(true), setLoadAttempt(attempt => attempt + 1))}>Tentar consultar novamente</button></div>}</div>

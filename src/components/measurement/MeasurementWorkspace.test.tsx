@@ -48,6 +48,26 @@ describe('Tela própria de Medição', () => {
     expect(repository.commit).not.toHaveBeenCalled();
     expect(w).toEqual(saved);
   });
+
+  it('exibe código e banco da versão incorporada sem regravar o lançamento', async () => {
+    const { w, repository } = fixture();
+    w.services.push({ ...w.services[0], id: 'additive:ad:abrigo', item: '4.9.1', description: 'Abrigo novo',
+      additiveId: 'ad', additiveVersion: 1, availableFromNumber: 3 });
+    const composition = { id: 'abrigo', item: '4.9.1', code: '12345', bank: 'SINAPI', description: 'Abrigo novo',
+      unit: 'UN', quantity: 1, unitPriceNoBDI: 10, unitPriceWithBDI: 12.5, total: 12.5, inputs: [], isNewService: true };
+    const newer = { ...composition, code: '99999', bank: 'OUTRO' };
+    const snapshot = { approvedAt: '2026-01-01', bdiPercent: 25, globalDiscountPercent: 0, totals: {}, issues: [] };
+    const additive: Additive = { id: 'ad', name: 'Aditivo', importedAt: '', version: 2, compositions: [newer],
+      approvalSnapshots: [{ ...snapshot, version: 1, compositions: [composition] }, { ...snapshot, version: 2, compositions: [newer] }] };
+    const before = structuredClone(w);
+    render(<TooltipProvider><MeasurementWorkspace repository={repository} actor={actor} approvedAdditives={[additive]} /></TooltipProvider>);
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Medição selecionada' }), { target: { value: 'm3' } });
+    const row = await screen.findByRole('row', { name: /4\.9\.1.*Abrigo novo/i });
+    expect(within(row).getByText('12345')).toBeVisible();
+    expect(within(row).getByText('SINAPI')).toBeVisible();
+    expect(repository.commit).not.toHaveBeenCalled();
+    expect(w).toEqual(before);
+  });
   it.each([
     { activeStatus: 'draft', defaultTarget: '1', chosen: '1' },
     { activeStatus: 'in_review', defaultTarget: '3', chosen: '2' },
