@@ -1670,6 +1670,15 @@ export type Database = {
         Args: { p_project_id: string }
         Returns: Json
       }
+      measurement_contract_total_for_period: {
+        Args: {
+          period_number: number
+          price: number
+          s: Json
+          value_key: string
+        }
+        Returns: number
+      }
       measurement_detail_quantity: { Args: { rows: Json }; Returns: number }
       measurement_fiscal_line_rows: {
         Args: { period: Json; w: Json }
@@ -1688,6 +1697,10 @@ export type Database = {
         Returns: Json
       }
       measurement_money: { Args: { v: number }; Returns: number }
+      measurement_service_for_period: {
+        Args: { period_number: number; s: Json }
+        Returns: Json
+      }
       measurement_workspace_audit_digest: {
         Args: { p_audit: Json }
         Returns: string
@@ -1698,6 +1711,14 @@ export type Database = {
       }
       merge_concurrent_fields: {
         Args: { p_base: Json; p_current: Json; p_next: Json; p_path: string }
+        Returns: Json
+      }
+      patch_measurement_additive_catalog: {
+        Args: {
+          p_expected_revision: number
+          p_patch: Json
+          p_project_id: string
+        }
         Returns: Json
       }
       patch_measurement_capture: {
