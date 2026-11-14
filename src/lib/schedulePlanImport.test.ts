@@ -19,7 +19,7 @@ function fixture() {
 
 it('rejects more than two predecessors after the audited execution revision', () => {
   const { project, plan, task } = fixture();
-  task.operationalReschedule = { startDate: task.startDate, duration: task.duration, quantity: 70, scope: 'remaining_work', reason: 'Revisão', importedAt: '2026-11-14', executionRevision: { version: 1, approvedAt: '2026-11-14', references: [], completed: false, originalDependencies: [], milestones: [] } } as Task['operationalReschedule'];
+  task.operationalReschedule = { requestId: 'revision-test', startDate: task.startDate, duration: task.duration, quantity: 70, scope: 'remaining_work', reason: 'Revisão', endDate: '2026-09-04', approvedAt: '2026-11-14', executionRevision: { version: 1, approvedAt: '2026-11-14', references: [], completed: false, originalDependencies: [], milestones: [] } };
   plan.tasks[0].dependencies = ['b', 'c', 'd'].map(taskId => ({ taskId, type: 'TI' }));
   expect(() => applySchedulePlanImport(project, plan, {})).toThrow(/duas predecessoras/);
 });
