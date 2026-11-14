@@ -533,6 +533,17 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
                 const [mid, sid] = JSON.parse(key);
                 if (mid === affected.measurementId && sid === affected.serviceId) draftBases.current.set(key, advance(base));
               }
+              for (const queued of detailQueue.current) {
+                if (!queued.base) continue;
+                const base = advance(queued.base);
+                if (base === queued.base) continue;
+                queued.base = base;
+                queued.candidate = queued.edit(base);
+                const candidate = queued.candidate;
+                const priorDurable = queued.durable;
+                queued.durable = Promise.resolve(priorDurable).then(() => repository.stage?.(candidate, base));
+                void queued.durable.catch(() => undefined);
+              }
               const buffered = bufferedDetail.current;
               if (buffered?.measurementId === affected.measurementId && buffered.serviceId === affected.serviceId) {
                 const base = advance(buffered.base);

@@ -46,7 +46,7 @@ it('cloud saves a paused detail without switching tasks and preserves drafts unt
   await waitFor(() => expect(drafts()).toHaveLength(0));
 });
 
-it('cloud queues a newer edit during acknowledgement against its own confirmed value', async () => {
+it.each([false, true])('cloud queues a newer edit during acknowledgement against its own confirmed value (flushed=%s)', async flushed => {
   const { repository, drafts } = setup(1);
   repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
   repository.stage = vi.fn(async () => undefined);
@@ -60,8 +60,9 @@ it('cloud queues a newer edit during acknowledgement against its own confirmed v
   fireEvent.change(units, { target: { value: '3' } }); fireEvent.blur(units);
   await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1), { timeout: 1500 });
   fireEvent.change(units, { target: { value: '7' } }); fireEvent.blur(units);
+  if (flushed) await act(async () => { await new Promise(resolve => setTimeout(resolve, 750)); });
   await act(async () => { acknowledge?.(); });
-  expect(drafts()[0]?.changes.multiplier).toBe('7');
+  if (!flushed) expect(drafts()[0]?.changes.multiplier).toBe('7');
   await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2), { timeout: 1500 });
   const [candidate, revision] = vi.mocked(repository.commit).mock.calls[1];
   expect(revision).toBe(1);
