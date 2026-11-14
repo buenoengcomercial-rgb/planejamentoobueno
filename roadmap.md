@@ -1,5 +1,8 @@
 # Proteção dos dados e desempenho
 
+- [ ] Corrigir envio automático dos detalhes da Medição após pausa curta, sem exigir troca de tarefa; agrupar campos da mesma tarefa e preservar rascunhos, recibos e conflitos reais.
+- [ ] Validar digitação rápida, falha/reenvio e gravação autenticada com dados reversíveis, sem publicar.
+
 - [x] Estabilizar o contexto de autenticação contra divergência durante atualização de módulos; testes de sessão e regressão passaram, Medição autenticada abriu sem o erro e sem editar dados.
 
 - [x] Separar os botões PDF do dia e PDF da medição do aviso de salvamento; ambos acessíveis no Diário autenticado.
