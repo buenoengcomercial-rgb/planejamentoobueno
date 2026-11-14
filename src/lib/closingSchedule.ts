@@ -10,10 +10,11 @@ export function includeClosingSchedule(project: Project) {
   const phases = project.phases.filter(p => p.id !== phaseId);
   const tasks: Task[] = getAllTasks({ ...project, phases }).flatMap(parent =>
     (parent.operationalReschedule?.closingActivities ?? []).map(activity => ({
-      id: activity.id, name: activity.name, phase: phaseId, startDate: activity.startDate,
+      scheduleDisplayKind: 'closing' as const, id: activity.id, name: activity.name, phase: phaseId, startDate: activity.startDate,
       duration: activity.duration, team: activity.team, dependencies: activity.dependencies.map(d => d.taskId),
       dependencyDetails: activity.dependencies, responsible: '', percentComplete: 0, materials: [], level: 0,
       isManual: true, durationMode: 'manual' as const, manualDuration: activity.duration, observations: activity.reason,
+      operationalReschedule: { requestId: activity.id, scope: 'whole_task' as const, startDate: activity.startDate, duration: activity.duration, quantity: 0, endDate: project.scheduleCalendar ? operationalEndDate(activity.startDate, activity.duration, project.scheduleCalendar) : activity.startDate, reason: activity.reason, approvedAt: parent.operationalReschedule?.approvedAt ?? '' },
     })));
   return { project: tasks.length ? { ...project, phases: [...phases, {
     id: phaseId, name: 'Fechamento operacional — sem valor contratual', color: '#7c3aed', tasks,
@@ -30,7 +31,7 @@ export function calculateClosingCPM(project: Project): Project {
   const cal = project.scheduleCalendar;
   if (!deadlines.length || !cal) return project;
   const deadline = deadlines.sort()[0];
-  const active = all.filter(t => t.phase === phaseId || !!t.operationalReschedule);
+  const active = all.filter(t => t.scheduleDisplayKind === 'release' || t.phase === phaseId || (!!t.operationalReschedule && !t.operationalReschedule.executionRevision?.completed && (!t.operationalReschedule.executionRevision || t.operationalReschedule.quantity > 0)));
   const first = [...active.map(t => t.startDate), deadline].sort()[0];
   const offsets = new Map<string, number>();
   let count = 0;
@@ -43,6 +44,7 @@ export function calculateClosingCPM(project: Project): Project {
   const end = offsets.get(deadline)! + scheduleWorkdayWeight(parseScheduleDate(deadline), cal);
   const map = new Map(active.map(t => [t.id, t]));
   const span = (t: Task) => {
+    if (t.duration === 0) return 0;
     const finish = operationalEndDate(t.startDate, t.duration, cal);
     return offsets.get(finish)! + scheduleWorkdayWeight(parseScheduleDate(finish), cal) - offsets.get(t.startDate)!;
   };

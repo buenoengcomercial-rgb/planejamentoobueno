@@ -17,6 +17,13 @@ function fixture() {
   return { project, plan, task };
 }
 
+it('rejects more than two predecessors after the audited execution revision', () => {
+  const { project, plan, task } = fixture();
+  task.operationalReschedule = { requestId: 'revision-test', startDate: task.startDate, duration: task.duration, quantity: 70, scope: 'remaining_work', reason: 'Revisão', endDate: '2026-09-04', approvedAt: '2026-11-14', executionRevision: { version: 1, approvedAt: '2026-11-14', references: [], completed: false, originalDependencies: [], milestones: [] } };
+  plan.tasks[0].dependencies = ['b', 'c', 'd'].map(taskId => ({ taskId, type: 'TI' }));
+  expect(() => applySchedulePlanImport(project, plan, {})).toThrow(/duas predecessoras/);
+});
+
 it('aplica só planejamento, registra auditoria e conserva histórico, contrato e linha de base', () => {
   const { project, plan, task } = fixture(); const original = JSON.stringify(project);
   const next = applySchedulePlanImport(project, plan, { userName: 'Responsável' });
