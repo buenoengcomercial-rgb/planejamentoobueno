@@ -1,6 +1,7 @@
 import type { CellObject, WorkBook, WorkSheet, Range } from 'xlsx';
 import { measurementBulletin, measurementStatusLabels, monthlyLines, type MeasurementWorkspace } from './measurementWorkspace';
 import { measurementPresentation } from '@/components/measurement/measurementWorkspacePresentation';
+import { withMeasurementAdditiveReferences } from './measurementAdditiveReferences';
 import type { GroupNode, GroupTotals, Row } from '@/components/measurement/types';
 import { fmtDateBR } from '@/components/measurement/measurementFormat';
 import { monthlyPdfColumns, type MonthlyPdfOptions } from './measurementMonthlyPdf';
@@ -19,7 +20,7 @@ export async function buildMonthlyMeasurementExcel(w: MeasurementWorkspace, id: 
   const period = w.periods.find(p => p.id === id);
   if (!period) throw new Error('Medição não encontrada.');
   const bulletin = measurementBulletin(w, id), contract = bulletin.contract;
-  const { rows, groupTree, totals } = measurementPresentation(monthlyLines(w, id));
+  const { rows, groupTree, totals } = measurementPresentation(withMeasurementAdditiveReferences(monthlyLines(w, id), options.approvedAdditives));
   const sheet: WorkSheet = {}, merges: Range[] = [], heights: { hpt: number }[] = [];
   let row = 0;
   const style = (fill = 'FFFFFF', bold = false, color = ink, align = 'center', size = 10) => ({

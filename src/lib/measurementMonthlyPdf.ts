@@ -2,10 +2,12 @@ import type { jsPDF } from 'jspdf';
 import type { CellInput, RowInput } from 'jspdf-autotable';
 import { measurementBulletin, measurementStatusLabels, monthlyLines, type MeasurementWorkspace } from './measurementWorkspace';
 import { measurementPresentation } from '@/components/measurement/measurementWorkspacePresentation';
+import { withMeasurementAdditiveReferences } from './measurementAdditiveReferences';
+import type { Additive } from '@/types/project';
 import type { GroupNode, GroupTotals, Row } from '@/components/measurement/types';
 import { fmtBRL, fmtDateBR, fmtNum, fmtPct } from '@/components/measurement/measurementFormat';
 
-export interface MonthlyPdfOptions { forecastTotal?: number | null }
+export interface MonthlyPdfOptions { forecastTotal?: number | null; approvedAdditives?: readonly Additive[] }
 type Color = [number, number, number];
 const ink: Color = [15, 23, 42], muted: Color = [100, 116, 139], border: Color = [226, 232, 240];
 const blue: Color = [59, 130, 246], white: Color = [255, 255, 255];
@@ -22,8 +24,8 @@ const totalCells = (t: GroupTotals, label: string, fill: Color, text: Color = in
 ];
 
 /** Shares the screen's grouping and financial inputs, without changing the ledger. */
-export function monthlyPdfPresentation(w: MeasurementWorkspace, id: string) {
-  const presentation = measurementPresentation(monthlyLines(w, id));
+export function monthlyPdfPresentation(w: MeasurementWorkspace, id: string, approvedAdditives?: readonly Additive[]) {
+  const presentation = measurementPresentation(withMeasurementAdditiveReferences(monthlyLines(w, id), approvedAdditives));
   const body: RowInput[] = [];
   const item = (r: Row) => {
     const excess = r.qtyCurrentAccum - r.qtyContracted > 1e-9;
@@ -45,7 +47,7 @@ export async function buildMonthlyMeasurementPdf(w: MeasurementWorkspace, id: st
   const p = w.periods.find(period => period.id === id);
   if (!p) throw new Error('Medição não encontrada.');
   const b = measurementBulletin(w, id), c = b.contract;
-  const { body, totals: t, rows } = monthlyPdfPresentation(w, id);
+  const { body, totals: t, rows } = monthlyPdfPresentation(w, id, options.approvedAdditives);
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const margin = 8, width = doc.internal.pageSize.getWidth() - margin * 2;
   const height = doc.internal.pageSize.getHeight();
