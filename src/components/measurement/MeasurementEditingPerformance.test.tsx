@@ -528,3 +528,19 @@ it('recupera comentário e quantidade da mesma nova linha após falha, sem dupli
   expect(saved().entries[0].rows).toHaveLength(1);
   expect(saved().entries[0].rows[0]).toMatchObject({ id: originalId, comment: 'Térreo', multiplier: 3 });
 });
+
+it('lote: três linhas editadas em sequência saem em uma única operação', async () => {
+  const { repository } = setup(3);
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  for (const [n, v] of [[0, '1'], [1, '2'], [2, '3']] as const) {
+    const input = await screen.findByLabelText(`Quantidade de Serviço ${n}`);
+    act(() => input.focus()); fireEvent.change(input, { target: { value: v } }); fireEvent.blur(input);
+  }
+  expect(repository.commit).not.toHaveBeenCalled();
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1), { timeout: 4000 });
+  const [candidate] = vi.mocked(repository.commit).mock.calls[0];
+  expect(candidate.audit.at(-1)?.affected.map(a => a.serviceId)).toEqual(['s0', 's1', 's2']);
+  await new Promise(r => setTimeout(r, 2500));
+  expect(repository.commit).toHaveBeenCalledTimes(1);
+  expect((await repository.load())?.entries.map(e => [e.serviceId, e.rows[0].multiplier])).toEqual([['s0', 1], ['s1', 2], ['s2', 3]]);
+}, 15000);
