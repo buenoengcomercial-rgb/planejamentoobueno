@@ -156,11 +156,6 @@ export default function GanttChart({
   const [laborPanelExpanded, setLaborPanelExpanded] = useState(false);
   const [laborIssueMode, setLaborIssueMode] = useState<'deficit' | 'availability' | 'data'>('deficit');
   const seenReleasePhases = useRef(new Set<string>());
-  useEffect(() => {
-    const added = project.phases.filter(p => p.id.startsWith('release-phase:') && !seenReleasePhases.current.has(p.id)).map(p => p.id);
-    added.forEach(id => seenReleasePhases.current.add(id));
-    if (added.length) setCollapsedPhases(current => new Set([...current, ...added]));
-  }, [project.phases]);
   const [highlightedLaborTaskIds, setHighlightedLaborTaskIds] = useState<Set<string>>(() => new Set());
   const [obraConfig, setObraConfig] = useState<ObraConfig>(() => calendarConfig ?? loadObraConfig());
   useEffect(() => { if (calendarConfig) setObraConfig(calendarConfig); }, [calendarConfig]);
@@ -184,7 +179,12 @@ export default function GanttChart({
 
   // Synchronize controlled state when switching projects/additives.
   useEffect(() => {
-    const incoming = controlledCollapsedPhaseIds ?? readGanttCollapsedPhases(project);
+    const added = controlledCollapsedPhaseIds ? [] : project.phases.filter(p => p.id.startsWith('release-phase:') && !seenReleasePhases.current.has(`${project.id}:${p.id}`)).map(p => p.id);
+    added.forEach(id => seenReleasePhases.current.add(`${project.id}:${id}`));
+    const incoming = [...new Set([...(controlledCollapsedPhaseIds ?? readGanttCollapsedPhases(project)), ...added])];
+    // Store the default with the existing browser preference so the next
+    // project refresh cannot overwrite it with the old expanded state.
+    if (added.length) writeGanttCollapsedPhases(project.id, incoming);
     setCollapsedPhases(current => {
       const now = [...current].sort();
       const next = [...incoming].sort();
