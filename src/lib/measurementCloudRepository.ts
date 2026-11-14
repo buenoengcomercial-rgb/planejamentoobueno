@@ -604,13 +604,17 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       const manualUnlinkPatch = !lifecyclePatch && !catalogPatch && !capturePatch
         && latestEvent?.action === 'Editar detalhe' && !!latestEvent.beforePlans
         && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null;
-      let patch = !lifecyclePatch && !additivePatch && !catalogPatch && !capturePatch && !manualUnlinkPatch
-        && confirmed?.revision === baseRevision ? measurementEntryPatch(confirmed, next) : null;
-      if (!patch && !lifecyclePatch && !additivePatch && !catalogPatch && !capturePatch) {
-        const stored = (await local.storedPendingSaves!()).find(value => 'format' in value && value.format === 'entry-patch-v1'
-          && value.operationId === operationId && value.baseRevision === baseRevision);
-        if (stored && 'format' in stored && stored.format === 'entry-patch-v1'
-          && JSON.stringify(stored.patch.event) === JSON.stringify(latestEvent)) patch = stored.patch;
+      let patch: ReturnType<typeof measurementEntryPatch> = null;
+      if (!lifecyclePatch && !additivePatch && !catalogPatch && !capturePatch && !manualUnlinkPatch) {
+        const stored = latestEvent?.action === 'Editar detalhe'
+          ? (await local.storedPendingSaves!()).find(value => 'format' in value && value.format === 'entry-patch-v1'
+            && value.operationId === operationId && value.baseRevision === baseRevision)
+          : undefined;
+        if (stored && 'format' in stored && stored.format === 'entry-patch-v1') {
+          if (canonical(stored.patch.event) !== canonical(latestEvent))
+            throw new MeasurementCommitRejectedError('O lote não corresponde à tentativa preservada.');
+          patch = stored.patch;
+        } else if (confirmed?.revision === baseRevision) patch = measurementEntryPatch(confirmed, next);
       }
       const deletionPatch = manualUnlinkPatch ?? (!lifecyclePatch && !additivePatch && !catalogPatch && !capturePatch && !patch
         && confirmed?.revision === baseRevision ? measurementDeletionPatch(confirmed, next) : null);
@@ -701,14 +705,14 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         throw new Error(`${error.message}. A resposta da nuvem é incerta; confira esta operação antes de sair.`);
       }
       const compactPatch = additivePatch?.payload ?? patch ?? (deletionPatch || capturePatch || catalogPatch ? encodeMeasurementWorkspace(deletionPatch ?? capturePatch ?? catalogPatch) : null);
-      if (patch && (data as { reconciled?: boolean } | null)?.reconciled) {
-        const receipt = data as { projectId: string; revision: number; patch: unknown };
-        if (receipt.projectId !== scope.projectId || !Number.isSafeInteger(receipt.revision)
-          || receipt.revision < next.revision || canonical(receipt.patch) !== canonical(patch)) {
+      if (patch && (data as { replayed?: unknown } | null)?.replayed !== true) {
+        const receipt = data as { projectId?: string; revision?: number; patch?: unknown } | null;
+        if (receipt?.projectId !== scope.projectId || !Number.isSafeInteger(receipt.revision)
+          || receipt.revision! < next.revision || canonical(receipt.patch) !== canonical(patch)) {
           uncertainEntries.add(operationId);
           throw new Error(ENTRY_RECOVERY_WAITING);
         }
-        return acceptEntryReceipt(next, operationId, receipt.revision, patch);
+        return acceptEntryReceipt(next, operationId, receipt.revision!, patch);
       }
       if ((lifecyclePatch || compactPatch) && (data as { replayed?: unknown } | null)?.replayed === true) {
         // An idempotent receipt proves the original operation, but its revision
@@ -747,7 +751,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const applied = applyMeasurementPlanCatalogReceipt(confirmed!, next, catalogPatch, data);
         if (!applied) throw new Error('A nuvem não confirmou o cadastro da planta. Mantenha esta página aberta.');
         saved = applied;
-      } else if (patch || deletionPatch || capturePatch || additivePatch) {
+      } else if (deletionPatch || capturePatch || additivePatch) {
         const receipt = data as { projectId?: string; revision?: number; firstNumber?: number; patch?: unknown } | null;
         if (receipt?.projectId !== scope.projectId || receipt.revision !== next.revision || JSON.stringify(receipt.patch) !== JSON.stringify(compactPatch)) {
           // JSONB key order is not significant; compare the canonical payload.
@@ -765,7 +769,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       loadedOffline = false;
       state = { source: 'cloud', checking: !!loading };
       uncertainEntries.delete(operationId);
-      discardConfirmedPending(operationId, saved, patch ?? undefined);
+      discardConfirmedPending(operationId, saved);
       return saved;
     },
   };

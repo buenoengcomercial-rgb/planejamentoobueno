@@ -78,6 +78,7 @@ export interface MeasurementRepository {
   /** One-time cleanup of a specifically authorized legacy task, after a cloud read. */
   discardLegacyTask?(workspace: MeasurementWorkspace, item: string): Promise<{ removed: number; remaining: string[] }>;
   writeDraft(draft: WorkspaceDraft): Promise<void>;
+  clearDraftField?(measurementId: string, serviceId: string, rowId: string, field: string, value: number): Promise<void>;
   clearDraft(measurementId: string, serviceId: string, rowId?: string): Promise<void>;
   backup(): Promise<IncorporationBackup | null>;
 }
@@ -247,6 +248,15 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
         return [...(rows ?? []).filter(r => r !== existing), { ...draft, changes: { ...existing?.changes, ...draft.changes } }];
       });
     },
+    clearDraftField: (mid, sid, rid, field, value) => update<WorkspaceDraft[]>('drafts', rows => (rows ?? []).flatMap(row => {
+      const savedValue = row.changes[field];
+      if (row.measurementId !== mid || row.serviceId !== sid || row.rowId !== rid
+        || (typeof savedValue !== 'number' && typeof savedValue !== 'string')
+        || String(savedValue).trim() === '' || Number(String(savedValue).replace(',', '.')) !== value) return [row];
+      const changes = { ...row.changes };
+      delete changes[field];
+      return Object.keys(changes).some(key => key !== 'createdRowId') ? [{ ...row, changes }] : [];
+    })),
     clearDraft: (mid, sid, rid) => update<WorkspaceDraft[]>('drafts', rows => (rows ?? []).filter(r => !(r.measurementId === mid && r.serviceId === sid && (!rid || r.rowId === rid)))),
     initialize: async backup => {
       await verifyIncorporationBackup(backup);

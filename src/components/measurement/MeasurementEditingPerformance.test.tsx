@@ -512,3 +512,70 @@ it('agrupa cinco serviços na nuvem e mantém a edição seguinte durante o envi
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   } finally { vi.useRealTimers(); }
 });
+
+it('preserva o 11 confirmado por outro operador após a rejeição de um lote anterior', async () => {
+  const { repository, saved } = setup(2);
+  repository.savedLabel = 'Salvo na nuvem';
+  repository.concurrentEntries = true;
+  const initial = saved();
+  const remote = { ...initial, revision: 2, entries: [...initial.entries,
+    { projectId: initial.projectId, measurementId: 'm', serviceId: 's1',
+      rows: [{ ...newMeasuredRow('remote'), origin: { kind: 'manual' as const }, multiplier: 11 }] }] };
+  let rejectFirst!: (cause: Error) => void;
+  let cloudQuantity = 11;
+  vi.mocked(repository.load).mockResolvedValueOnce(initial).mockResolvedValue(remote);
+  vi.mocked(repository.commit).mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }))
+    .mockImplementation(async candidate => {
+      const event = candidate.audit.at(-1)!;
+      const before = event.before.find(row => row.serviceId === 's1')?.rows[0]?.multiplier ?? 0;
+      if (before !== cloudQuantity) throw new Error('Conflito no campo');
+      cloudQuantity = event.after.find(row => row.serviceId === 's1')?.rows[0].multiplier ?? cloudQuantity;
+      return candidate;
+    });
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  vi.useFakeTimers();
+  try {
+    const edit = (index: number, value: string) => {
+      const field = screen.getByLabelText(`Quantidade de Serviço ${index}`);
+      fireEvent.change(field, { target: { value } }); fireEvent.blur(field);
+    };
+    edit(0, '5');
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+    edit(1, '7');
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    await act(async () => rejectFirst(new Error('Conflito no campo')));
+    expect(repository.commit).toHaveBeenCalledTimes(2);
+    expect(cloudQuantity).toBe(11);
+    expect(screen.getByText('Unidades · local 7 · nuvem 11')).toBeVisible();
+  } finally { vi.useRealTimers(); }
+});
+
+it('edita a proposta em conflito e só grava o campo ao confirmar explicitamente', async () => {
+  const { repository, saved } = setup(2);
+  repository.savedLabel = 'Salvo na nuvem';
+  repository.concurrentEntries = true;
+  const initial = saved();
+  const remote = { ...initial, revision: 1, entries: initial.entries.map(entry => ({ ...entry,
+    rows: entry.rows.map(row => ({ ...row, multiplier: 11, origin: { kind: 'manual' as const } })) })) };
+  vi.mocked(repository.load).mockResolvedValueOnce(initial).mockResolvedValue(remote);
+  vi.mocked(repository.commit).mockRejectedValueOnce(new Error('Conflito no campo'));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  const edit = (field: HTMLElement, value: string) => {
+    fireEvent.change(field, { target: { value } }); fireEvent.blur(field);
+  };
+  edit(await screen.findByLabelText('Quantidade de Serviço 0'), '5');
+  expect(await screen.findByText('Unidades · local 5 · nuvem 11')).toBeVisible();
+  edit(screen.getByLabelText('Quantidade de Serviço 0'), '7');
+  expect(screen.getByText('Unidades · local 7 · nuvem 11')).toBeVisible();
+  expect(repository.commit).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Aplicar proposta local' }));
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2));
+  const first = vi.mocked(repository.commit).mock.calls[0][0].audit.at(-1)!;
+  const applied = vi.mocked(repository.commit).mock.calls[1][0].audit.at(-1)!;
+  expect(applied.id).not.toBe(first.id);
+  expect(applied.before[0].rows[0].multiplier).toBe(11);
+  expect(applied.after[0].rows[0]).toEqual({ ...applied.before[0].rows[0], multiplier: 7 });
+  await waitFor(() => expect(screen.queryByText('Unidades · local 7 · nuvem 11')).not.toBeInTheDocument());
+});
