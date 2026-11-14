@@ -691,7 +691,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (buffered.timer) clearTimeout(buffered.timer);
     buffered.timer = setTimeout(() => {
       if (bufferedDetail.current === buffered) flushBufferedDetail();
-    }, repository.savedLabel === 'Salvo na nuvem' ? 600 : 2000);
+    }, repository.savedLabel === 'Salvo na nuvem' ? 1500 : 2000);
   };
   const resumeFailedTaskEdit = (serviceId: string): boolean => {
     if (!current.current) return false;
@@ -711,7 +711,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   };
   const bufferDetail = (serviceId: string, edit: DetailEdit, after?: () => void, rowId?: string): boolean => {
     if (!current.current || !resumeFailedTaskEdit(serviceId)) return false;
-    if (bufferedDetail.current && (bufferedDetail.current.serviceId !== serviceId || bufferedDetail.current.measurementId !== active)
+    // Batching: edits of several tasks in the same measurement join one buffer
+    // and leave as a single operation after the pause; only a period change flushes.
+    if (bufferedDetail.current && bufferedDetail.current.measurementId !== active
       && !flushBufferedDetail()) return false;
     const prior = bufferedDetail.current;
     const original = repository.concurrentEntries && [...draftBases.current].find(([key]) => {
