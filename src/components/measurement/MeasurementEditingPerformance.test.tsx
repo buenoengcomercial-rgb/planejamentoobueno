@@ -19,6 +19,59 @@ function setup(size = 402) {
   return { repository, saved: () => w, drafts: () => drafts };
 }
 
+it('cloud saves a paused detail without switching tasks and preserves drafts until acknowledgement', async () => {
+  const { repository, drafts } = setup(1);
+  repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  let acknowledge: (() => void) | undefined;
+  vi.mocked(repository.commit).mockImplementation(candidate => new Promise(resolve => {
+    acknowledge = () => resolve(candidate);
+  }));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  const units = screen.getByLabelText('Unidades da linha 1');
+  const measure = screen.getByLabelText('Medida da linha 1');
+  fireEvent.change(units, { target: { value: '3' } }); fireEvent.blur(units);
+  fireEvent.change(measure, { target: { value: '4' } }); fireEvent.blur(measure);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1), { timeout: 1500 });
+  const [candidate, revision] = vi.mocked(repository.commit).mock.calls[0];
+  expect(revision).toBe(0);
+  expect(candidate.revision).toBe(1);
+  expect(candidate.audit).toHaveLength(1);
+  expect(candidate.audit[0].affected).toEqual([{ measurementId: 'm', serviceId: 's0' }]);
+  expect(candidate.entries[0].rows[0]).toMatchObject({ multiplier: 3, measuredQuantity: 4 });
+  expect(drafts()[0].changes).toMatchObject({ multiplier: '3', measuredQuantity: '4' });
+  expect(repository.clearDraft).not.toHaveBeenCalled();
+  await act(async () => { acknowledge?.(); });
+  await waitFor(() => expect(drafts()).toHaveLength(0));
+});
+
+it.each([false, true])('cloud queues a newer edit during acknowledgement against its own confirmed value (flushed=%s)', async flushed => {
+  const { repository, drafts } = setup(1);
+  repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  let acknowledge: (() => void) | undefined;
+  vi.mocked(repository.commit).mockImplementationOnce(candidate => new Promise(resolve => {
+    acknowledge = () => resolve(candidate);
+  }));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  const units = screen.getByLabelText('Unidades da linha 1');
+  fireEvent.change(units, { target: { value: '3' } }); fireEvent.blur(units);
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(1), { timeout: 1500 });
+  fireEvent.change(units, { target: { value: '7' } }); fireEvent.blur(units);
+  if (flushed) await act(async () => { await new Promise(resolve => setTimeout(resolve, 750)); });
+  await act(async () => { acknowledge?.(); });
+  if (!flushed) expect(drafts()[0]?.changes.multiplier).toBe('7');
+  await waitFor(() => expect(repository.commit).toHaveBeenCalledTimes(2), { timeout: 1500 });
+  const [candidate, revision] = vi.mocked(repository.commit).mock.calls[1];
+  expect(revision).toBe(1);
+  expect(candidate.revision).toBe(2);
+  expect(candidate.audit.at(-1)?.before[0].rows[0].multiplier).toBe(3);
+  expect(candidate.entries[0].rows[0].multiplier).toBe(7);
+  await waitFor(() => expect(drafts()).toHaveLength(0));
+});
+
 it('não cria rascunhos persistentes no modo nuvem e avisa antes de fechar com gravação pendente', async () => {
   const { repository } = setup(3);
   repository.savedLabel = 'Salvo na nuvem';

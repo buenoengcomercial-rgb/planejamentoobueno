@@ -1,5 +1,8 @@
 # Proteção dos dados e desempenho
 
+- [x] Corrigir envio automático dos detalhes da Medição após pausa de 600 ms, sem exigir troca de tarefa; agrupar campos da mesma tarefa e avançar valores esperados apenas após confirmação exata do próprio envio. 162 testes focados, ESLint e regressão completa passaram (1745 testes e 15 verificações servidor).
+- [ ] Validar gravação autenticada com dados reversíveis, sem publicar. Bloqueio externo à fila corrigida: a consulta Cloud `load_measurement_workspace` da obra retorna `canceling statement due to statement timeout`, reproduzido no preview autenticado; revisão/base 645, sem eventos para replay. Nenhum dado operacional foi alterado.
+
 - [x] Estabilizar o contexto de autenticação contra divergência durante atualização de módulos; testes de sessão e regressão passaram, Medição autenticada abriu sem o erro e sem editar dados.
 
 - [x] Separar os botões PDF do dia e PDF da medição do aviso de salvamento; ambos acessíveis no Diário autenticado.

@@ -516,6 +516,44 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           const saved = candidate === confirmed ? confirmed : await repository.commit(candidate, repository.concurrentEntries ? candidate.revision - 1 : confirmed.revision);
           if (!await confirmedCommitResponse(repository, candidate, saved)) throw new Error('Resposta de salvamento inválida.');
           current.current = saved; detailQueue.current.shift();
+          // Only our acknowledged values may advance the baseline of a newer
+          // edit. A remotely changed value must retain its original expectation.
+          if (repository.concurrentEntries && candidate !== confirmed) {
+            const event = candidate.audit.at(-1);
+            for (const affected of event?.affected ?? []) {
+              const before = event?.before.find(entry => entry.measurementId === affected.measurementId && entry.serviceId === affected.serviceId);
+              const after = event?.after.find(entry => entry.measurementId === affected.measurementId && entry.serviceId === affected.serviceId);
+              const actual = entryFor(saved, affected.measurementId, affected.serviceId);
+              if (!before || !after || JSON.stringify(actual) !== JSON.stringify(after)) continue;
+              const advance = (base: Workspace) => JSON.stringify(entryFor(base, affected.measurementId, affected.serviceId)) === JSON.stringify(before)
+                ? { ...base, revision: saved.revision, audit: saved.audit,
+                  entries: [...base.entries.filter(entry => entry.measurementId !== affected.measurementId || entry.serviceId !== affected.serviceId), actual] }
+                : base;
+              for (const [key, base] of draftBases.current) {
+                const [mid, sid] = JSON.parse(key);
+                if (mid === affected.measurementId && sid === affected.serviceId) draftBases.current.set(key, advance(base));
+              }
+              for (const queued of detailQueue.current) {
+                if (!queued.base) continue;
+                const base = advance(queued.base);
+                if (base === queued.base) continue;
+                queued.base = base;
+                queued.candidate = queued.edit(base);
+                const candidate = queued.candidate;
+                const priorDurable = queued.durable;
+                queued.durable = Promise.resolve(priorDurable).then(() => repository.stage?.(candidate, base));
+                void queued.durable.catch(() => undefined);
+              }
+              const buffered = bufferedDetail.current;
+              if (buffered?.measurementId === affected.measurementId && buffered.serviceId === affected.serviceId) {
+                const base = advance(buffered.base);
+                if (base !== buffered.base) {
+                  buffered.base = base;
+                  stageBufferedDetail(buffered);
+                }
+              }
+            }
+          }
           for (const affected of candidate.audit.at(-1)?.affected ?? [])
             failedTaskEdits.current.delete(`${affected.measurementId}:${affected.serviceId}`);
           let next = saved;
@@ -650,11 +688,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   };
   flushBufferedDetailRef.current = flushBufferedDetail;
   const scheduleBufferedDetail = (buffered: BufferedDetail) => {
-    if (repository.savedLabel === 'Salvo na nuvem') return;
     if (buffered.timer) clearTimeout(buffered.timer);
     buffered.timer = setTimeout(() => {
       if (bufferedDetail.current === buffered) flushBufferedDetail();
-    }, 2000);
+    }, repository.savedLabel === 'Salvo na nuvem' ? 600 : 2000);
   };
   const resumeFailedTaskEdit = (serviceId: string): boolean => {
     if (!current.current) return false;
