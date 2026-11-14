@@ -93,7 +93,8 @@ function sameCommittedCore(left: Workspace, right: Workspace): boolean {
 type DetailEdit = (workspace: Workspace) => Workspace;
 interface BufferedDetail {
   measurementId: string;
-  serviceId: string;
+  serviceIds: Set<string>;
+  startedAt: number;
   base: Workspace;
   preview: Workspace;
   edits: DetailEdit[];
@@ -104,6 +105,26 @@ interface BufferedDetail {
   durable?: Promise<void>;
   timer?: ReturnType<typeof setTimeout>;
 }
+function isEntryConfirmationNotice(message: string): boolean {
+  return message === 'Banco demorou a responder. Gravação ainda não confirmada.'
+    || message === 'Gravação confirmada na nuvem. Conferindo os dados mais recentes.';
+}
+
+const CLOUD_DETAIL_IDLE_MS = 600;
+const CLOUD_DETAIL_MAX_WAIT_MS = 1000;
+
+function overlayDetailEntries(base: Workspace, source: Workspace, measurementId: string, serviceIds: ReadonlySet<string>): Workspace {
+  const matches = (entry: Workspace['entries'][number]) => entry.measurementId === measurementId && serviceIds.has(entry.serviceId);
+  const replacements = new Map(source.entries.filter(matches).map(entry => [entry.serviceId, entry]));
+  const entries = base.entries.flatMap(entry => {
+    if (!matches(entry)) return [entry];
+    const replacement = replacements.get(entry.serviceId);
+    replacements.delete(entry.serviceId);
+    return replacement ? [replacement] : [];
+  });
+  return { ...base, entries: [...entries, ...replacements.values()] };
+}
+
 interface DetailOperation {
   edit: DetailEdit;
   after?: () => void;
@@ -267,6 +288,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         && !document.activeElement?.closest('.measurement-workspace input, .measurement-workspace textarea, .measurement-workspace select')),
     onRefresh: next => {
       adopt(next);
+      for (const draft of drafts) {
+        if (!draftChanges.current.has(draftKey(draft.measurementId, draft.serviceId, draft.rowId))
+          && !bufferedDetail.current?.serviceIds.has(draft.serviceId)
+          && confirmedRowDraft(next, draft)) clearDraft(draft.measurementId, draft.serviceId, draft.rowId);
+      }
       setActive(previous => {
         if (bufferedDetail.current) return previous;
         if (next.periods.some(p => p.id === previous)) return previous;
@@ -519,11 +545,21 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           for (const affected of candidate.audit.at(-1)?.affected ?? [])
             failedTaskEdits.current.delete(`${affected.measurementId}:${affected.serviceId}`);
           let next = saved;
-          for (const queued of detailQueue.current) next = queued.candidate ?? queued.edit(next);
+          for (const queued of detailQueue.current) {
+            const candidate = queued.candidate;
+            const event = candidate?.audit.at(-1);
+            if (repository.concurrentEntries && candidate && event?.action === 'Editar detalhe' && !event.afterPlans) {
+              for (const measurementId of new Set(event.affected.map(item => item.measurementId))) {
+                next = overlayDetailEntries(next, candidate, measurementId, new Set(event.affected
+                  .filter(item => item.measurementId === measurementId).map(item => item.serviceId)));
+              }
+            } else next = candidate ?? queued.edit(next);
+          }
           detailPreview.current = detailQueue.current.length ? next : null; setWorkspace(displayWithFailedTasks(rebaseBufferedDetailRef.current(next)));
           operation.after?.();
         } catch (cause) {
           const affected = operation.candidate?.audit.at(-1)?.affected;
+          if (cause instanceof Error && isEntryConfirmationNotice(cause.message)) throw cause;
           if (repository.savedLabel !== 'Salvo na nuvem' || !affected?.length) throw cause;
           detailQueue.current.shift();
           // A later edit of the same task depends on this failed edit. Hold it
@@ -558,13 +594,17 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         }
       }
       setRecovery(false);
-      setStatus(failedTaskEdits.current.size ? 'Falha no salvamento' : 'Confirmado');
+      automaticRecoveryAttempted.current = false;
+      setStatus(failedTaskEdits.current.size ? 'Falha no salvamento' : bufferedDetail.current ? 'Aguardando nuvem' : 'Confirmado');
       if (repository.savedLabel === 'Salvo na nuvem') setConfirmedAt(new Date().toISOString());
       return failedTaskEdits.current.size === 0;
     } catch (cause) {
       // Keep the optimistic edit visible in memory. A cloud error never claims
       // the edit was saved, and retry uses the same audit ID.
-      setError(cause instanceof Error ? cause.message : String(cause)); setStatus('Precisa resolver conflito'); setRecovery(true);
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setError(message);
+      setStatus(isEntryConfirmationNotice(message) ? 'Aguardando nuvem' : 'Precisa resolver conflito');
+      setRecovery(true);
       await Promise.allSettled(draftWrites.current.values());
       try { setDrafts(await repository.drafts()); } catch { setError(previous => `${previous} · Não foi possível ler os rascunhos locais.`); }
       return false;
@@ -650,11 +690,12 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   };
   flushBufferedDetailRef.current = flushBufferedDetail;
   const scheduleBufferedDetail = (buffered: BufferedDetail) => {
-    if (repository.savedLabel === 'Salvo na nuvem') return;
     if (buffered.timer) clearTimeout(buffered.timer);
     buffered.timer = setTimeout(() => {
       if (bufferedDetail.current === buffered) flushBufferedDetail();
-    }, 2000);
+    }, repository.concurrentEntries
+      ? Math.min(CLOUD_DETAIL_IDLE_MS, Math.max(0, CLOUD_DETAIL_MAX_WAIT_MS - (Date.now() - buffered.startedAt)))
+      : 2000);
   };
   const resumeFailedTaskEdit = (serviceId: string): boolean => {
     if (!current.current) return false;
@@ -674,18 +715,36 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   };
   const bufferDetail = (serviceId: string, edit: DetailEdit, after?: () => void, rowId?: string): boolean => {
     if (!current.current || !resumeFailedTaskEdit(serviceId)) return false;
-    if (bufferedDetail.current && (bufferedDetail.current.serviceId !== serviceId || bufferedDetail.current.measurementId !== active)
+    if (bufferedDetail.current && (bufferedDetail.current.measurementId !== active
+      || !repository.concurrentEntries && !bufferedDetail.current.serviceIds.has(serviceId))
       && !flushBufferedDetail()) return false;
     const prior = bufferedDetail.current;
     const original = repository.concurrentEntries && [...draftBases.current].find(([key]) => {
       const [mid, sid, rid] = JSON.parse(key); return mid === active && sid === serviceId && (rowId === undefined || rid === rowId);
     })?.[1];
-    const base = prior?.base ?? (original || null) ?? detailPreview.current ?? current.current;
+    const pendingSameService = detailQueue.current.some(operation => operation.candidate?.audit.at(-1)?.affected
+      .some(item => item.measurementId === active && item.serviceId === serviceId));
+    let base = prior?.base ?? detailPreview.current ?? current.current;
+    let previous = prior?.preview ?? base;
+    if (original && !prior?.serviceIds.has(serviceId) && !pendingSameService && original.revision < base.revision) {
+      const serviceIds = new Set([serviceId]);
+      base = { ...overlayDetailEntries(base, original, active, serviceIds), revision: original.revision };
+      previous = overlayDetailEntries(previous, original, active, serviceIds);
+    }
     try {
-      const updated = edit(prior?.preview ?? base);
-      if (updated === (prior?.preview ?? base)) { after?.(); return true; }
+      const updated = edit(previous);
+      if (updated === previous) { after?.(); return true; }
+      const event = updated.audit.at(-1);
+      if (repository.concurrentEntries && event && (event.action !== 'Editar detalhe'
+        || event.beforePlans || event.afterPlans
+        || event.affected.some(item => item.measurementId !== active || item.serviceId !== serviceId))) {
+        return flushBufferedDetail() && applyDetail(edit, after);
+      }
       const preview = { ...updated, revision: base.revision, audit: base.audit };
-      const buffered: BufferedDetail = prior ?? { measurementId: active, serviceId, base, preview, edits: [], after: [], operationId: crypto.randomUUID(), createdAt: new Date().toISOString() };
+      const buffered: BufferedDetail = prior ?? { measurementId: active, serviceIds: new Set(), startedAt: Date.now(),
+        base, preview, edits: [], after: [], operationId: crypto.randomUUID(), createdAt: new Date().toISOString() };
+      buffered.base = base;
+      buffered.serviceIds.add(serviceId);
       buffered.edits.push(edit);
       if (after) buffered.after.push(after);
       buffered.preview = preview;
@@ -713,17 +772,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         setRecovery(true); return buffered.preview;
       }
     }
-    // Keep the original expected values until blur. Rebasing the write itself
-    // here would authorize an overwrite of a field another person just saved.
-    const matches = (entry: Workspace['entries'][number]) => entry.measurementId === buffered.measurementId && entry.serviceId === buffered.serviceId;
-    const pending = buffered.preview.entries.filter(matches);
-    const preview = { ...base, entries: [...base.entries.filter(entry => !matches(entry)), ...pending] };
-    buffered.preview = preview;
+    // Overlay every touched entry for display, leaving the write's expectations intact.
+    const preview = overlayDetailEntries(base, buffered.preview, buffered.measurementId, buffered.serviceIds);
     detailPreview.current = preview;
     return preview;
   };
   const selectDetailAfterLocalSave = (selection: MeasurementDetailSelection | null) => {
-    if (bufferedDetail.current && (selection?.taskId !== bufferedDetail.current.serviceId || selection.mode !== 'quantity')
+    if (!repository.concurrentEntries && bufferedDetail.current
+      && (!selection || !bufferedDetail.current.serviceIds.has(selection.taskId) || selection.mode !== 'quantity')
       && !flushBufferedDetail()) return;
     const request = ++selectionRequest.current;
     if (repository.savedLabel === 'Salvo na nuvem' || !localStagePending.current && !localStageFailed.current) { setExpanded(selection); return; }
@@ -874,7 +930,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     const wasEmpty = draftChanges.current.size === 0;
     const merged = { ...draftChanges.current.get(key), ...changes }; draftChanges.current.set(key, merged); d.changes = merged;
     if (wasEmpty) markDraftChange(value => value + 1);
-    if (bufferedDetail.current?.measurementId === mid && bufferedDetail.current.serviceId === sid)
+    if (bufferedDetail.current?.measurementId === mid && bufferedDetail.current.serviceIds.has(sid))
       scheduleBufferedDetail(bufferedDetail.current);
     draftVersions.current.set(key, (draftVersions.current.get(key) ?? 0) + 1);
     if (repository.savedLabel === 'Salvo na nuvem' && !repository.stage) return;
@@ -988,12 +1044,19 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     recoveryAction.current = true;
     let latest: Workspace | null = null;
     try {
+      if (repository.concurrentEntries && detailQueue.current[0]?.candidate?.audit.at(-1)?.action === 'Editar detalhe') {
+        // The repository confirms/retries the frozen operation without fetching the sheet.
+        detailDrain.current = drainDetailQueue();
+        pendingOperation.current = detailDrain.current;
+        return await detailDrain.current;
+      }
       const previousRevision = current.current.revision;
-      latest = await repository.load();
+      latest = await (repository.loadForRetry?.() ?? repository.load());
       if (!latest) throw new Error('Não foi possível conferir a medição salva na nuvem.');
       if (repository.loadedOffline?.()) {
         setError(repository.savedLabel === 'Salvo na nuvem'
-          ? 'Sem conexão com a nuvem. A alteração não confirmada está somente nesta página; não feche nem recarregue.'
+          ? navigator.onLine ? 'Banco demorou a responder. Gravação ainda não confirmada.'
+            : 'Sem conexão com a nuvem. A alteração não confirmada está somente nesta página; não feche nem recarregue.'
           : 'Sem conexão com a nuvem. Os lançamentos locais permanecem guardados e serão enviados ao reconectar.');
         setStatus('Aguardando nuvem');
         return false;
@@ -1299,6 +1362,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const cachedBase = readState?.source === 'cache' || !readState && !!repository.loadedOffline?.();
   const readFailed = realtime.failed || !!readState?.error;
   const cloudStatus: SaveStatus = !online ? 'offline'
+    : recovery && isEntryConfirmationNotice(error) ? 'pending'
     : recovery || status === 'Precisa resolver conflito' ? 'conflict'
       : status === 'Falha no salvamento' ? 'error'
       : localPending && !saving ? 'pending'
@@ -1412,7 +1476,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         </div>
       </DialogContent>}
     </Dialog>
-    {error && <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
+    {error && (isEntryConfirmationNotice(error)
+      ? <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">{error}</div>
+      : <div role="alert" className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>)}
     {additiveExcesses.length > 0 && <div role="alert" className="rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950">
       <strong>Revisão fiscal: {additiveExcesses.length} item(ns) medido(s) acima do quantitativo final do Aditivo.</strong>
       <ul className="mt-1 list-disc pl-5">{additiveExcesses.map(line => <li key={line.service.id}>Item {line.service.item}: {line.accumulated} {line.service.unit} medidos; {line.service.contracted} {line.service.unit} contratados após o Aditivo.</li>)}</ul>
@@ -1435,7 +1501,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
           {periodNumber ? `${periodNumber}ª medição · ` : ''}{service ? `${service.item} · ${service.description}` : draft.serviceId === bulletinDraftKey ? `Boletim · ${draft.rowId}` : 'Registro local'}
           <div className="font-normal">Linha {draft.rowId.startsWith('__') ? 'de lançamento' : draft.rowId} · {Object.entries(draft.changes).filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value)).map(([field, value]) => {
             const saved = draft.serviceId === bulletinDraftKey ? undefined
-              : entryFor(workspace, draft.measurementId, draft.serviceId).rows.find(row => row.id === draft.rowId || draft.rowId === '__manual__')?.[field as keyof ReturnType<typeof entryFor>['rows'][number]];
+              : entryFor(current.current ?? workspace, draft.measurementId, draft.serviceId).rows.find(row => row.id === draft.rowId || draft.rowId === '__manual__')?.[field as keyof ReturnType<typeof entryFor>['rows'][number]];
             return <span key={field} className="mr-3">{field}: local {String(value)}{saved !== undefined ? ` · nuvem ${String(saved)}` : ''}</span>;
           })}</div>
           {repository.concurrentEntries && <div className="mt-1 flex gap-3">

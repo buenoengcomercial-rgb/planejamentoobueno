@@ -825,6 +825,35 @@ describe('transação da Medição na nuvem',()=>{
   expect((await db.query<{value:{checkpointed:boolean}}>(
     'SELECT checkpoint_measurement_workspace($1,$2,$3) value',[projectId,current.revision,hash])).rows[0].value.checkpointed).toBe(false);
  });
+ it('mede o checkpoint protegido com 542 serviços e 14 deltas sem modificar a Medição',async()=>{
+  const services=[...base.services,...Array.from({length:542-base.services.length},(_,index)=>({
+   ...base.services[0],id:`checkpoint-service-${index}`,item:String(index+1000),description:`Serviço ${index}`,
+  }))];
+  const expanded={...base,services};
+  const initial=editMeasuredRow(expanded,actor,'m1','signs',{...newMeasuredRow('large-checkpoint-row'),multiplier:1});
+  // Simulate a legacy audit payload of the size reported in production.
+  const large={...initial,audit:initial.audit.map((event,index)=>index===0
+   ? {...event,actor:{...event.actor,name:'a'.repeat(13_000_000)}} : event)};
+  await seed(large);
+  let current=large;
+  for(let index=0;index<14;index++){
+   const next=editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('large-checkpoint-row'),multiplier:index+2});
+   await fieldCommit(current,next);
+   current=next;
+  }
+  const measure=async()=>{
+   const started=performance.now();
+   const hash=await currentDataHash();
+   return {hash,elapsed:performance.now()-started};
+  };
+  const before=await measure();
+  const result=(await db.query<{value:{checkpointed:boolean;eventsPreserved:number;revision:number}}>(
+   'SELECT checkpoint_measurement_workspace($1,$2,$3) value',[projectId,current.revision,before.hash])).rows[0].value;
+  expect(result).toMatchObject({checkpointed:true,eventsPreserved:14,revision:current.revision});
+  const after=await measure();
+  expect(after.hash).toBe(before.hash);
+  console.info(`measurement checkpoint (542 services, 14 deltas, 13 MB synthetic audit): ${before.elapsed.toFixed(1)} ms before, ${after.elapsed.toFixed(1)} ms after (PGlite)`);
+ });
  it('publica somente a revisão confirmada na mesma transação, respeitando RLS e rollback',async()=>{
   await seed();
   const before=(await db.query<{data:unknown}>('SELECT data FROM measurement_workspaces WHERE project_id=$1',[projectId])).rows[0].data;

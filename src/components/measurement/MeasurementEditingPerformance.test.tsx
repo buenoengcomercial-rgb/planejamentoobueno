@@ -475,3 +475,40 @@ it('recupera comentário e quantidade da mesma nova linha após falha, sem dupli
   expect(saved().entries[0].rows).toHaveLength(1);
   expect(saved().entries[0].rows[0]).toMatchObject({ id: originalId, comment: 'Térreo', multiplier: 3 });
 });
+
+it('agrupa cinco serviços na nuvem e mantém a edição seguinte durante o envio', async () => {
+  const { repository } = setup(6);
+  repository.savedLabel = 'Salvo na nuvem';
+  repository.concurrentEntries = true;
+  let release!: (candidate: Workspace) => void;
+  vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  vi.useFakeTimers();
+  try {
+    for (let index = 0; index < 5; index++) {
+      const input = screen.getByLabelText(`Quantidade de Serviço ${index}`);
+      fireEvent.click(input);
+      const detail = screen.getByLabelText('Unidades da linha 1');
+      fireEvent.change(detail, { target: { value: String(index + 2) } });
+      fireEvent.blur(detail);
+      expect(input).toHaveValue(index + 2);
+      if (index !== 4) await act(async () => vi.advanceTimersByTimeAsync(150));
+    }
+    expect(repository.commit).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    const first = vi.mocked(repository.commit).mock.calls[0][0];
+    expect(first.audit.at(-1)?.affected.map(item => item.serviceId)).toEqual(['s0', 's1', 's2', 's3', 's4']);
+    fireEvent.click(screen.getByLabelText('Quantidade de Serviço 5'));
+    const next = screen.getByLabelText('Unidades da linha 1');
+    fireEvent.change(next, { target: { value: '9' } });
+    fireEvent.blur(next);
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    await act(async () => release(first));
+    expect(repository.commit).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText('Quantidade de Serviço 5')).toHaveValue(9);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
