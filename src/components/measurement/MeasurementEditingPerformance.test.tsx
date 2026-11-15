@@ -287,6 +287,70 @@ it('aceita a revisão materializada mais recente após recibo e continua salvand
   await waitFor(() => expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(3));
 });
 
+it.each([false, true])('mantém a linha criada quando A confirma entre digitar e sair de B (conflito remoto: %s)', async remoteConflict => {
+  const { repository, drafts, saved } = setup(1);
+  repository.savedLabel = 'Salvo na nuvem';
+  repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  repository.confirmedOperation = vi.fn(async () => true);
+  let cloud = saved();
+  cloud.entries[0].rows[0].multiplier = 2;
+  let confirmCreation!: (result: Workspace) => void;
+  vi.mocked(repository.load).mockImplementation(async () => cloud);
+  vi.mocked(repository.commit).mockImplementationOnce(() => new Promise(resolve => { confirmCreation = resolve; }))
+    .mockImplementation(async candidate => {
+      const event = candidate.audit.at(-1)!;
+      const expected = event.before[0].rows[1];
+      if (expected.measuredQuantity !== cloud.entries[0].rows[1].measuredQuantity) throw new Error('Conflito no campo medida');
+      cloud = { ...candidate, revision: cloud.revision + 1, audit: [] };
+      return cloud;
+    });
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  vi.useFakeTimers();
+  try {
+    const edit = (label: string, value: string, blur = true) => {
+      const input = screen.getByLabelText(label);
+      act(() => input.focus());
+      fireEvent.change(input, { target: { value } });
+      if (blur) fireEvent.blur(input);
+      return input;
+    };
+    edit('Unidades da linha 2', '4');
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    const created = vi.mocked(repository.commit).mock.calls[0][0];
+    const newId = created.entries[0].rows[1].id;
+    const b = edit('Medida da linha 2', '3', false);
+    cloud = { ...created, audit: [] };
+    if (remoteConflict) cloud = { ...cloud, revision: cloud.revision + 1,
+      entries: [{ ...cloud.entries[0], rows: [cloud.entries[0].rows[0], { ...cloud.entries[0].rows[1], measuredQuantity: 11 }] }] };
+    await act(async () => confirmCreation(cloud));
+    expect(b).toHaveValue(3);
+    fireEvent.blur(b);
+    edit('Largura da linha 2', '2');
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+
+    expect(screen.queryByText('Linha não encontrada.')).not.toBeInTheDocument();
+    expect(repository.commit).toHaveBeenCalledTimes(2);
+    const sent = vi.mocked(repository.commit).mock.calls[1][0].audit.at(-1)!;
+    expect(sent.before[0].rows[1]).toMatchObject({ id: newId, multiplier: 4, measuredQuantity: 0, dimensionC: 0 });
+    expect(sent.after[0].rows[1]).toMatchObject({ id: newId, multiplier: 4, measuredQuantity: 3, dimensionC: 2 });
+    expect(cloud.entries[0].rows).toHaveLength(2);
+    expect(cloud.entries[0].rows[0]).toEqual(saved().entries[0].rows[0]);
+    if (remoteConflict) {
+      expect(cloud.entries[0].rows[1]).toMatchObject({ id: newId, measuredQuantity: 11, dimensionC: 0 });
+      expect(screen.getByText(/local 3 · nuvem 11/)).toBeVisible();
+      expect(drafts()).toEqual(expect.arrayContaining([expect.objectContaining({ rowId: newId })]));
+    } else {
+      expect(cloud.entries[0].rows[1]).toMatchObject({ id: newId, multiplier: 4, measuredQuantity: 3, dimensionC: 2 });
+      expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(26);
+      expect(screen.getByRole('status')).toHaveTextContent('Salvo e conferido na nuvem');
+      expect(drafts()).toEqual([]);
+    }
+  } finally { vi.useRealTimers(); }
+});
+
 it('confirma criação de medição com resposta perdida e rebate a célula seguinte na versão salva', async () => {
   const { repository } = setup(1);
   let remote = (await repository.load())!;
