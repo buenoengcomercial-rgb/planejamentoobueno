@@ -67,6 +67,44 @@ it('usa apenas a fila de salvamento para células confirmadas no modo operaciona
   expect(repository.commit).toHaveBeenCalledTimes(1);
 });
 
+it.each(['Medida da linha 1', 'Quantidade de Serviço 0'])(
+  'exibe o valor remoto ao sair de %s sem digitar e não cria gravação',
+  async label => {
+    const { repository, saved } = setup(2);
+    saved().operational = { version: 2, cutoffRevision: 0, fiscal: {} };
+    Object.assign(saved().entries[0].rows[0], { multiplier: 1, measuredQuantity: 1 });
+    let confirmed = saved();
+    let notifyRevision!: (revision: number) => void;
+    repository.savedLabel = 'Salvo na nuvem';
+    repository.concurrentEntries = true;
+    repository.watch = vi.fn(notice => { notifyRevision = notice; return vi.fn(); });
+    repository.remoteRevision = vi.fn(async () => confirmed.revision);
+    repository.stage = vi.fn(async () => undefined);
+    vi.mocked(repository.load).mockImplementation(async () => confirmed);
+
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+    const cell = screen.getByLabelText(label);
+    act(() => cell.focus());
+    expect(cell).toHaveValue(1);
+
+    confirmed = structuredClone(confirmed);
+    confirmed.revision++;
+    confirmed.entries[0].rows[0].measuredQuantity = 5;
+    act(() => notifyRevision(confirmed.revision));
+    await screen.findByText('Total registrado no período: 5 UN');
+    expect(cell).toHaveFocus();
+
+    act(() => cell.blur());
+    expect(cell).toHaveValue(5);
+    fireEvent.click(screen.getByLabelText('Quantidade de Serviço 1'));
+    expect(screen.getByLabelText('Quantidade de Serviço 1')).toHaveAttribute('aria-expanded', 'true');
+    expect(repository.writeDraft).not.toHaveBeenCalled();
+    expect(repository.stage).not.toHaveBeenCalled();
+    expect(repository.commit).not.toHaveBeenCalled();
+  },
+);
+
 it('preserva um rascunho antigo divergente ao confirmar outra célula da linha', async () => {
   const { repository, saved, drafts } = setup(1);
   saved().operational = { version: 2, cutoffRevision: 0, fiscal: {} };
