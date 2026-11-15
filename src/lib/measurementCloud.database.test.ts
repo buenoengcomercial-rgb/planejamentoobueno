@@ -144,7 +144,9 @@ describe('documento operacional v2 sem histórico acumulado',()=>{
   await expect(db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',cut)).rejects.toThrow('incompleto');
   const copy=async(kind:string,cursor='')=>(await db.query<{value:{copied:number;afterKey:string}}>('SELECT copy_measurement_operational_backup_page($1,$2,$3,$4,$5,1) value',[...cut,kind,cursor])).rows[0].value;
   const first=await copy('events');expect(first.copied).toBe(1);expect(await copy('events')).toEqual(first);
-  expect((await db.query('SELECT begin_measurement_operational_backup($1,$2) value',args)).rows[0].value).toEqual((await db.query('SELECT begin_measurement_operational_backup($1,$2) value',args)).rows[0].value);
+  const resumed=(await db.query<{value:{checksum:string}}>('SELECT begin_measurement_operational_backup($1,$2) value',args)).rows[0].value;
+  expect(resumed).toEqual(prepared);
+  expect((await db.query('SELECT 1 FROM app_private.measurement_operational_backup_rows')).rows).toHaveLength(1);
   let cursor=first.afterKey;for(let i=0;i<2;i++)cursor=(await copy('events',cursor)).afterKey;
   expect((await copy('events',cursor)).copied).toBe(0);await copy('receipts');
   const ready=(await db.query<{value:{events:{count:number}}}>('SELECT finish_measurement_operational_backup($1,$2,$3) value',cut)).rows[0].value;
