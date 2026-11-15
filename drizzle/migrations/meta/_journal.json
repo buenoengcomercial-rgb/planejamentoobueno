@@ -57,6 +57,13 @@
       "when": 1793875438991,
       "tag": "0007_measurement_checkpoint_multi_period",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794765600000,
+      "tag": "0008_measurement_operational_v2",
+      "breakpoints": true
     }
   ]
 }

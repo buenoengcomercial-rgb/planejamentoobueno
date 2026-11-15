@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from 'vitest';
 import { measurementRepository, type PendingMeasurementEntrySave, type PendingMeasurementSave } from './measurementWorkspaceStore';
+import type { MeasurementWorkspace } from './measurementWorkspace';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -20,10 +21,10 @@ it('migra o IndexedDB v1 e grava pendência compacta sem regravar um pending leg
         objectStoreNames: { contains: (name: string) => names.has(name) },
         createObjectStore: (name: string) => { names.add(name); stores.set(name, new Map()); },
         close: () => undefined,
-        transaction: (name: string) => {
+        transaction: (_names: string | string[]) => {
           const tx = {} as IDBTransaction;
           let pending = 0, completed = false;
-          const operation = (kind: 'get' | 'put', itemKey: string, value?: unknown) => {
+          const operation = (name: string, kind: 'get' | 'put', itemKey: string, value?: unknown) => {
             pending++;
             const rowRequest = {} as IDBRequest;
             queueMicrotask(() => {
@@ -35,7 +36,7 @@ it('migra o IndexedDB v1 e grava pendência compacta sem regravar um pending leg
             });
             return rowRequest;
           };
-          Object.defineProperty(tx, 'objectStore', { value: () => ({ get: (itemKey: string) => operation('get', itemKey), put: (value: unknown, itemKey: string) => operation('put', itemKey, value) }) });
+          Object.defineProperty(tx, 'objectStore', { value: (name: string) => ({ get: (itemKey: string) => operation(name, 'get', itemKey), put: (value: unknown, itemKey: string) => operation(name, 'put', itemKey, value) }) });
           return tx;
         },
       } as unknown as IDBDatabase;
@@ -62,5 +63,16 @@ it('migra o IndexedDB v1 e grava pendência compacta sem regravar um pending leg
   await repo.preserveEntryPending!({ ...compact, operationId: 'old-operation', patch: { ...compact.patch, event: { ...compact.patch.event, id: 'old-operation' } } });
   await repo.preserveEntryPending!(compact);
   await repo.removePending!('old-operation');
+  expect(await repo.storedPendingSaves!()).toEqual([compact]);
+  const workspace: MeasurementWorkspace={schema:1,projectId:scope.projectId,projectName:'Teste',revision:5,
+    backupId:'backup',services:[],entries:[],plans:[],periods:[],importedKeys:[],audit:[],
+    operational:{version:2,cutoffRevision:4,fiscal:{}}};
+  const draft={projectId:scope.projectId,measurementId:'period',serviceId:'service',rowId:'row',changes:{multiplier:7}};
+  await repo.writeDraft(draft);
+  await repo.cacheSnapshot!(workspace);
+  expect(stores.get('workspaces')!.get(key)).toMatchObject({schema:2,operational:{version:2}});
+  expect(stores.get('workspaces')!.get(key)).not.toHaveProperty('audit');
+  expect(await repo.load()).toEqual(workspace);
+  expect(await repo.drafts()).toEqual([draft]);
   expect(await repo.storedPendingSaves!()).toEqual([compact]);
 });

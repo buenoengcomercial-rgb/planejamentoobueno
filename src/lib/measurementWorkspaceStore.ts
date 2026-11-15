@@ -2,6 +2,10 @@ import type { MeasuredEntry, MeasurementAudit, MeasurementWorkspace } from './me
 import type { MeasurementCapturePatch } from './measurementCapturePatch';
 import { prepareIncorporation, verifyIncorporationBackup, type IncorporationBackup } from './measurementIncorporation';
 import { measurementCatalogPlans } from './measurementCloudCodec';
+import { fromOperationalWorkspace, toOperationalWorkspace, type MeasurementOperationalWorkspace } from './measurementOperational';
+
+const cachedWorkspace = (value: MeasurementWorkspace | MeasurementOperationalWorkspace | null | undefined) =>
+  value?.schema === 2 ? fromOperationalWorkspace(value) : value;
 
 export interface WorkspaceDraft { projectId: string; measurementId: string; serviceId: string; rowId: string; changes: Record<string, unknown>; baseRevision?: number; expectedEntry?: MeasuredEntry }
 export interface PendingMeasurementSave { baseRevision: number; candidate: MeasurementWorkspace; archivedAt?: string; compact?: PendingMeasurementDeltaSave }
@@ -141,9 +145,10 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
         const deltas = tx.objectStore('confirmed_entry_patches');
         const currentRequest = snapshots.get(key);
         currentRequest.onsuccess = () => {
-          const current = currentRequest.result as MeasurementWorkspace | undefined;
+          const current = cachedWorkspace(currentRequest.result as MeasurementWorkspace | MeasurementOperationalWorkspace | undefined);
           if (current && current.revision > workspace.revision) return;
-          snapshots.put(retainCachedPlanFiles(workspace, current ?? null), key);
+          const merged = retainCachedPlanFiles(workspace, current ?? null);
+          snapshots.put(merged.operational ? toOperationalWorkspace(merged) : merged, key);
           const deltaRequest = deltas.get(key);
           deltaRequest.onsuccess = () => deltas.put({ baseRevision: workspace.revision,
             patches: ((deltaRequest.result as ConfirmedMeasurementEntryLog | undefined)?.patches ?? [])
@@ -176,7 +181,8 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
     },
     cachePlanFile: (planId, storagePath, file) => {
       if (!(file instanceof Blob) || file.size === 0) return Promise.reject(new Error('Arquivo vazio não pode substituir uma planta confirmada.'));
-      return update<MeasurementWorkspace>('workspaces', current => {
+      return update<MeasurementWorkspace | MeasurementOperationalWorkspace>('workspaces', raw => {
+        const current = cachedWorkspace(raw);
         if (!current || current.projectId !== scope.projectId) throw new Error('A base local da Medição ainda não foi confirmada.');
         const matching = measurementCatalogPlans(current).filter(plan => plan.id === planId && plan.storagePath === storagePath);
         if (!matching.length) throw new Error('Arquivo não corresponde à versão da planta no catálogo local.');
@@ -184,7 +190,7 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
         for (const plan of measurementCatalogPlans(cached)) {
           if (plan.id === planId && plan.storagePath === storagePath) plan.file = file;
         }
-        return cached;
+        return cached.operational ? toOperationalWorkspace(cached) : cached;
       });
     },
     removeEntryPending: operationId => update<PendingMeasurementDeltaSave[]>('pending_entry_patches', rows => (rows ?? []).filter(p => p.operationId !== operationId)),
@@ -207,7 +213,7 @@ export function measurementRepository(scope: { environment: 'isolated'; userId: 
         tx.oncomplete = () => {
           db.close();
           try {
-            let value = (baseRequest.result ?? null) as MeasurementWorkspace | null;
+            let value = cachedWorkspace(baseRequest.result ?? null) as MeasurementWorkspace | null;
             const log = deltaRequest.result as ConfirmedMeasurementEntryLog | undefined;
             const deltas = log?.patches ?? [];
             if (value && (value.schema !== 1 || value.projectId !== scope.projectId || !Array.isArray(value.entries) || !Array.isArray(value.periods) || !Array.isArray(value.plans))) throw new Error('Base incompleta ou incompatível. Edição bloqueada.');

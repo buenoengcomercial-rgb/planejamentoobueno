@@ -11,6 +11,7 @@ import { applyMeasurementLifecycleReceipt, measurementLifecyclePatch } from './m
 import { applyMeasurementPlanCatalogReceipt, measurementPlanCatalogPatch } from './measurementPlanCatalogPatch';
 import type { MeasurementWorkspace } from './measurementWorkspace';
 import { measurementConcurrentCommand, measurementCommandKey, type MeasurementConcurrentCommand } from './measurementConcurrentCommand';
+import { applyMeasurementOperationReceipt, measurementCanonical, measurementOperation, measurementOperationMatchesCandidate, type MeasurementOperation, type MeasurementOperationReceipt } from './measurementOperational';
 
 const ENTRY_RECOVERY_WAITING = 'Banco demorou a responder. Gravação ainda não confirmada.';
 const ENTRY_RECOVERY_CONFIRMED = 'Gravação confirmada na nuvem. Conferindo os dados mais recentes.';
@@ -245,7 +246,106 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     // reconstruct the same operation while offline.
     void checkpoint(workspace, operationId, entryPatch).then(() => {
       localStorage.removeItem(measurementCommandKey(scope.userId, scope.projectId, operationId));
+      localStorage.removeItem(operationalKey(operationId));
+      localStorage.removeItem(`${operationalKey(operationId)}:uncertain`);
+      localStorage.removeItem(`${operationalKey(operationId)}:attempted`);
     }).catch(() => undefined);
+  };
+  const operationalKey = (id: string) => `${measurementCommandKey(scope.userId, scope.projectId, id)}:v2`;
+  const operationalInFlight = new Map<string, Promise<MeasurementWorkspace>>();
+  const commitOperational = (candidate: MeasurementWorkspace, baseRevision: number): Promise<MeasurementWorkspace> => {
+    const id = candidate.audit.at(-1)!.id;
+    const running = operationalInFlight.get(id);
+    if (running) return running;
+    const run = (async () => {
+      const key = operationalKey(id), uncertainKey = `${key}:uncertain`, attemptedKey = `${key}:attempted`;
+      let command: MeasurementOperation;
+      const stored = localStorage.getItem(key);
+      if (stored) command = JSON.parse(stored) as MeasurementOperation;
+      else {
+        if (!confirmed?.operational || confirmed.revision !== baseRevision)
+          throw new MeasurementCommitRejectedError('Confira a revisão atual. A tentativa anterior foi preservada para revisão.');
+        command = measurementOperation(confirmed, candidate);
+        localStorage.setItem(key, JSON.stringify(command));
+      }
+      // A rejected predecessor can leave an UNSENT command one revision ahead.
+      // Adjust only its CAS number; never replace the captured field expectations.
+      if (command.baseRevision !== baseRevision && !localStorage.getItem(attemptedKey)) {
+        command = { ...command, baseRevision };
+        localStorage.setItem(key, JSON.stringify(command));
+      }
+      if (command.baseRevision !== baseRevision || command.projectId !== scope.projectId || command.event.id !== id)
+        throw new MeasurementCommitRejectedError('Comando diferente da tentativa preservada.');
+      // Resolve uploaded paths only before the first attempt, then freeze bytes.
+      if (!localStorage.getItem(attemptedKey)) {
+        for (const delta of command.changes.plans ?? []) if (delta.after && 'id' in delta.after && !('storagePath' in delta.after)) {
+          const path = candidate.plans.find(plan => plan.id === (delta.after as { id: string }).id)?.storagePath;
+          if (path) Object.assign(delta.after, { storagePath: path });
+        }
+        localStorage.setItem(key, JSON.stringify(command));
+      }
+      if (!measurementOperationMatchesCandidate(command,candidate))
+        throw new MeasurementCommitRejectedError('Os valores diferem da tentativa preservada. Crie uma nova proposta para alterar um envio já preparado.');
+      const lookup = async (): Promise<MeasurementOperationReceipt | null> => {
+        const { data, error } = await withReadDeadline(supabase.rpc('read_measurement_operation_receipts' as never,
+          { p_project_id: scope.projectId, p_operation_id: id } as never));
+        if (error) throw new Error(ENTRY_RECOVERY_WAITING);
+        return data as MeasurementOperationReceipt | null;
+      };
+      const accept = async (receipt: MeasurementOperationReceipt): Promise<MeasurementWorkspace> => {
+        if (receipt?.format !== 2 || receipt.projectId !== scope.projectId || receipt.operationId !== id
+          || receipt.actorId !== scope.userId || !Number.isSafeInteger(receipt.revision) || receipt.revision < baseRevision + 1
+          || !receipt.changes || receipt.operational?.version !== 2) throw new Error(ENTRY_RECOVERY_WAITING);
+        let saved = confirmed;
+        if (saved?.revision === receipt.baseRevision) saved = applyMeasurementOperationReceipt(saved, receipt);
+        else if (saved && saved.revision < receipt.revision && receipt.revision - saved.revision <= ENTRY_TAIL_LIMIT) {
+          const tail = await withReadDeadline(supabase.rpc('read_measurement_operation_receipts' as never,
+            { p_project_id: scope.projectId, p_after_revision: saved.revision, p_through_revision: receipt.revision } as never));
+          if (!tail.error && Array.isArray(tail.data)) {
+            try { for (const row of tail.data as MeasurementOperationReceipt[]) saved = applyMeasurementOperationReceipt(saved!, row); }
+            catch { saved = confirmed; }
+          }
+        }
+        if (!saved || saved.revision < receipt.revision) {
+          saved = await loadRemote();
+          if (loadedOffline) throw new Error(ENTRY_RECOVERY_CONFIRMED);
+        }
+        if (!saved?.operational || saved.revision < receipt.revision) throw new Error(ENTRY_RECOVERY_CONFIRMED);
+        confirmed = saved; loadedOffline = false; state = { source: 'cloud', checking: false };
+        await checkpoint(saved, id);
+        localStorage.removeItem(key); localStorage.removeItem(uncertainKey); localStorage.removeItem(attemptedKey);
+        return saved;
+      };
+      if (localStorage.getItem(uncertainKey)) {
+        const receipt = await lookup();
+        if (receipt) return accept(receipt);
+      }
+      // An absent transport reply must survive reload and trigger receipt-first recovery.
+      localStorage.setItem(uncertainKey, '1');
+      localStorage.setItem(attemptedKey, '1');
+      let response: { data: unknown; error: { code?: string; message: string } | null };
+      try {
+        response = await withWriteResponseDeadline(supabase.rpc('commit_measurement_operation_v2' as never,
+          { p_project_id: scope.projectId, p_operation: command } as never));
+      } catch {
+        const receipt = await lookup();
+        if (receipt) return accept(receipt);
+        throw new Error(ENTRY_RECOVERY_WAITING);
+      }
+      if (response.error) {
+        if (['P0001','P0002','42501','22023','23502','23503','23505','23514'].includes(String(response.error.code))) {
+          localStorage.removeItem(uncertainKey);
+          throw new MeasurementCommitRejectedError(response.error.message);
+        }
+        const receipt = await lookup();
+        if (receipt) return accept(receipt);
+        throw new Error(ENTRY_RECOVERY_WAITING);
+      }
+      return accept(response.data as MeasurementOperationReceipt);
+    })();
+    operationalInFlight.set(id, run);
+    void run.finally(() => operationalInFlight.delete(id)).catch(() => undefined);
+    return run;
   };
   const compactedReceiptRevision = async (operationId: string): Promise<number | null> => {
     // Older operation payloads may have been compacted after a verified
@@ -326,7 +426,10 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const inAudit = remote.audit.some(event => event.id === operationId);
         const receiptRevision = inAudit ? null : await compactedReceiptRevision(operationId);
         const applied = inAudit || receiptRevision !== null && receiptRevision >= stored.baseRevision + 1 && receiptRevision <= remote.revision;
+        if (!applied && remote.operational && stored.baseRevision <= remote.operational.cutoffRevision)
+          throw new Error('Há uma tentativa anterior à conversão. Seus valores foram preservados para conferência na página atualizada.');
         if (!applied && (('format' in stored && stored.format === 'entry-patch-v1')
+          || localStorage.getItem(operationalKey(operationId))
           || localStorage.getItem(measurementCommandKey(scope.userId, scope.projectId, operationId)))) {
           pending.push(await restorePending(stored));
           continue;
@@ -340,8 +443,8 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       if ('candidate' in stored) {
         candidate = stored.candidate;
         if (candidate.projectId !== scope.projectId || candidate.revision !== preview.revision + 1
-          || candidate.audit.length !== preview.audit.length + 1
-          || preview.audit.some((event, index) => event.id !== candidate.audit[index]?.id))
+          || !candidate.operational && (candidate.audit.length !== preview.audit.length + 1
+          || preview.audit.some((event, index) => event.id !== candidate.audit[index]?.id)))
           throw new Error('Lançamento local incompatível com a base confirmada.');
       } else {
         const patch = stored.patch;
@@ -385,6 +488,19 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
     loadState: () => ({ ...state, error: state.error ? { ...state.error } : undefined }),
     resolvePlanFile,
     stage: async (candidate, base) => {
+      if (base.operational) {
+        const command = measurementOperation(base, candidate), key = operationalKey(command.event.id);
+        const existing = localStorage.getItem(key);
+        if (existing) {
+          const original = JSON.parse(existing) as MeasurementOperation;
+          const comparable = localStorage.getItem(`${key}:attempted`) ? original : { ...original, baseRevision: command.baseRevision };
+          if (measurementCanonical(comparable) !== measurementCanonical(command))
+            throw new MeasurementCommitRejectedError('A tentativa já foi preparada com outros valores.');
+        }
+        localStorage.setItem(key, JSON.stringify(command));
+        await local.stage!(candidate, base);
+        return;
+      }
       const patch = measurementEntryPatch(base, candidate);
       if (patch) await local.preserveEntryPending!({ format: 'entry-patch-v1', projectId: scope.projectId,
         baseRevision: base.revision, operationId: patch.event.id, patch });
@@ -534,12 +650,12 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         ? measurementLifecyclePatch(confirmed, next) : null;
       const additivePatch = confirmed?.revision === baseRevision
         ? measurementAdditiveCatalogPatch(confirmed, next) : null;
-      if (latestEvent?.action.startsWith('Incorporar aditivo ') && !additivePatch) {
+      if (!next.operational && latestEvent?.action.startsWith('Incorporar aditivo ') && !additivePatch) {
         throw new MeasurementCommitRejectedError('Confira a revisão atual antes de incorporar o aditivo.');
       }
       const isLifecycleCommand = !!latestEvent && (['Criar medição', 'Enviar para fiscalização', 'Aprovado pela fiscalização'].includes(latestEvent.action)
         || latestEvent.lifecycle?.kind === 'delete' || latestEvent.lifecycle?.kind === 'restore');
-      if (isLifecycleCommand && !lifecyclePatch && !command) throw new MeasurementCommitRejectedError('O ciclo da medição contém outras alterações ou uma revisão desatualizada. Confira a medição antes de repetir.');
+      if (!next.operational && isLifecycleCommand && !lifecyclePatch && !command) throw new MeasurementCommitRejectedError('O ciclo da medição contém outras alterações ou uma revisão desatualizada. Confira a medição antes de repetir.');
       for (const plan of next.plans) {
         if (!plan.storagePath) {
           if (!(plan.file instanceof Blob) || !plan.file.size) throw new MeasurementCommitRejectedError('Arquivo da planta indisponível para envio.');
@@ -562,6 +678,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const paths = new Map(next.plans.map(p => [p.id, p.storagePath]));
         for (const event of next.audit) for (const plans of [event.beforePlans, event.afterPlans]) for (const p of plans ?? []) p.storagePath ??= paths.get(p.id);
       }
+      if (next.operational) return commitOperational(next, baseRevision);
       if (command) {
         // Uploaded objects use the operation's immutable path. Persist that
         // path before sending so a transport retry repeats the exact command.

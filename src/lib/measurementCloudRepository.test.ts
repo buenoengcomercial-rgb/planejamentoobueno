@@ -12,6 +12,7 @@ import { encodeMeasurementWorkspace, decodeMeasurementWorkspace } from './measur
 import { cloudMeasurementRepository } from './measurementCloudRepository';
 import { MeasurementCommitRejectedError } from './measurementWorkspaceStore';
 import type { PendingMeasurementSave, StoredMeasurementPending, WorkspaceDraft } from './measurementWorkspaceStore';
+import { measurementOperation, toOperationalWorkspace, type MeasurementOperationReceipt } from './measurementOperational';
 
 const mocks = vi.hoisted(() => ({
   rpc: vi.fn(), from: vi.fn(), download: vi.fn(), upload: vi.fn(),
@@ -86,6 +87,103 @@ beforeEach(() => {
   }) }) }));
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+describe('Medição operacional v2', () => {
+  async function operationalFixture() {
+    const legacy = await fixture();
+    return { ...legacy, revision: legacy.revision + 1, audit: [], operational: { version: 2 as const, cutoffRevision: legacy.revision,
+      fiscal: Object.fromEntries(legacy.periods.map(p => [p.id, { changedSinceSubmission: false }])) } };
+  }
+  const receiptFor = (base: MeasurementWorkspace, next: MeasurementWorkspace): MeasurementOperationReceipt => ({
+    format: 2, projectId: base.projectId, operationId: next.audit.at(-1)!.id, actorId: actor.id,
+    baseRevision: base.revision, revision: next.revision, operational: base.operational!, changes: measurementOperation(base,next).changes,
+  });
+  it('confirma o delta e atualiza a tela sem recarregar a planilha ou acumular auditoria', async () => {
+    const base = await operationalFixture();
+    mocks.rpc.mockResolvedValueOnce({ data: toOperationalWorkspace(base), error: null });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    const loaded = (await repo.load())!;
+    const next = editMeasuredRow(loaded,actor,'m1','signs',{...newMeasuredRow('operational-a'),multiplier:2});
+    await repo.stage!(next,loaded);
+    mocks.rpc.mockResolvedValueOnce({ data: receiptFor(loaded,next), error: null });
+    const saved = await repo.commit(next,loaded.revision);
+    expect(saved.entries).toEqual(next.entries);
+    expect(saved.audit).toEqual([]);
+    expect(mocks.rpc.mock.calls.map(([name])=>name)).toEqual(['load_measurement_workspace','commit_measurement_operation_v2']);
+    expect(mocks.stored).toEqual([]);
+    expect(mocks.cached?.audit).toEqual([]);
+  });
+  it('resposta incompleta consulta recibo antes de repetir RPC e conserva a tentativa', async () => {
+    const base = await operationalFixture();
+    mocks.rpc.mockResolvedValueOnce({ data: toOperationalWorkspace(base) });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    await repo.load();
+    const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('v2-incomplete'),multiplier:2});
+    await repo.stage!(next,base);
+    mocks.rpc.mockResolvedValueOnce({ data: {revision:next.revision}, error:null });
+    await expect(repo.commit(next,base.revision)).rejects.toThrow('não confirmada');
+    expect(mocks.stored).toHaveLength(1);
+    mocks.rpc.mockResolvedValueOnce({data:receiptFor(base,next),error:null});
+    expect((await repo.commit(next,base.revision)).revision).toBe(next.revision);
+    expect(mocks.rpc.mock.calls.filter(([name])=>name==='commit_measurement_operation_v2')).toHaveLength(1);
+    expect(mocks.stored).toHaveLength(0);
+  });
+  it('recibo completo destrava a confirmação após uma abertura por cache offline', async () => {
+    const base=await operationalFixture();mocks.cached=base;
+    mocks.rpc.mockResolvedValueOnce({data:null,error:{message:'statement timeout'}});
+    const repo=cloudMeasurementRepository({userId:actor.id,projectId:base.projectId});
+    expect(await repo.load()).toEqual(base);
+    const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('recovered-cache'),multiplier:2});
+    await repo.stage!(next,base);
+    mocks.rpc.mockResolvedValueOnce({data:receiptFor(base,next),error:null});
+    expect((await repo.commit(next,base.revision)).entries).toEqual(next.entries);
+    expect(mocks.stored).toHaveLength(0);
+    expect(mocks.rpc.mock.calls.map(([name])=>name)).toEqual(['load_measurement_workspace','commit_measurement_operation_v2']);
+  });
+  it('falha de consulta após timeout mantém operação e não permite repetir sem conferir', async () => {
+    const base=await operationalFixture(); mocks.rpc.mockResolvedValueOnce({data:toOperationalWorkspace(base)});
+    const repo=cloudMeasurementRepository({userId:actor.id,projectId:base.projectId}); await repo.load();
+    const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('v2-timeout'),multiplier:2});
+    await repo.stage!(next,base);
+    mocks.rpc.mockResolvedValueOnce({error:{code:'57014',message:'statement timeout'}});
+    mocks.rpc.mockResolvedValue({data:null,error:{message:'timeout'}});
+    await expect(repo.commit(next,base.revision)).rejects.toThrow('não confirmada');
+    await expect(repo.commit(next,base.revision)).rejects.toThrow('não confirmada');
+    expect(mocks.rpc.mock.calls.filter(([name])=>name==='commit_measurement_operation_v2')).toHaveLength(1); expect(mocks.stored).toHaveLength(1);
+  });
+  it('cliques repetidos compartilham a mesma operação em trânsito',async()=>{
+    const base=await operationalFixture(); mocks.rpc.mockResolvedValueOnce({data:toOperationalWorkspace(base)});
+    const repo=cloudMeasurementRepository({userId:actor.id,projectId:base.projectId}); await repo.load();
+    const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('v2-flight'),multiplier:2}); await repo.stage!(next,base);
+    let finish!:(v:unknown)=>void; mocks.rpc.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+    const first=repo.commit(next,base.revision),second=repo.commit(next,base.revision);
+    finish({data:receiptFor(base,next),error:null});
+    expect(await first).toEqual(await second); expect(mocks.rpc).toHaveBeenCalledTimes(2);
+  });
+  it('comando ainda não enviado ajusta só a revisão após rejeição do predecessor',async()=>{
+    const base=await operationalFixture();mocks.rpc.mockResolvedValueOnce({data:toOperationalWorkspace(base)});
+    const repo=cloudMeasurementRepository({userId:actor.id,projectId:base.projectId});await repo.load();
+    const earlier=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('earlier'),multiplier:1});
+    const later=editMeasuredRow(earlier,actor,'m1','repeaters',{...newMeasuredRow('later'),multiplier:2});
+    await repo.stage!(later,earlier);
+    const original=measurementOperation(earlier,later);
+    const retargeted={...later,revision:base.revision+1};
+    const receipt={...receiptFor(earlier,later),baseRevision:base.revision,revision:retargeted.revision};
+    mocks.rpc.mockResolvedValueOnce({data:receipt,error:null});
+    await repo.commit(retargeted,base.revision);
+    const payload=mocks.rpc.mock.calls.at(-1)![1].p_operation;
+    expect(payload).toEqual({...original,baseRevision:base.revision});
+  });
+  it('não confirma valores diferentes com o identificador de um comando preparado',async()=>{
+    const base=await operationalFixture();mocks.rpc.mockResolvedValueOnce({data:toOperationalWorkspace(base)});
+    const repo=cloudMeasurementRepository({userId:actor.id,projectId:base.projectId});await repo.load();
+    const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('immutable'),multiplier:2});
+    await repo.stage!(next,base);
+    const tampered=structuredClone(next);tampered.entries.find(e=>e.serviceId==='signs'&&e.measurementId==='m1')!.rows.at(-1)!.multiplier=9;
+    await expect(repo.commit(tampered,base.revision)).rejects.toThrow('diferem');
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);expect(mocks.stored).toHaveLength(1);
+  });
+});
 
 describe('Abertura da Medição com plantas sob demanda', () => {
   it('libera uma gravação sem resposta para conferência e reenvio sem perder a operação', async () => {

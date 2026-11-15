@@ -5,6 +5,7 @@ import { detailTotal, withDetailValue, type DetailField } from './productionQuan
 import { calculateMeasurementLine } from './measurementCalculations';
 import { calculateLineTotal, money2, sumMoney } from './financialEngine';
 import { nextMeasurementPeriod } from './measurementPeriodSequence';
+import type { MeasurementOperationalMetadata } from './measurementOperational';
 
 /** This aggregate is deliberately outside Project and its global autosave/undo. */
 export interface MeasuredService {
@@ -45,6 +46,7 @@ export interface MeasurementAudit {
   bulletinChange?: { measurementId: string; before: { number: number; bulletin: MeasuredBulletin }; after: { number: number; bulletin: MeasuredBulletin } };
 }
 export interface MeasurementWorkspace {
+  operational?: MeasurementOperationalMetadata;
   schema: 1; projectId: string; projectName: string; revision: number;
   contract?: ContractInfo; services: MeasuredService[]; periods: MeasuredPeriod[];
   entries: MeasuredEntry[]; plans: TakeoffCatalogPlan[]; audit: MeasurementAudit[];
@@ -131,6 +133,11 @@ export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): bo
       && (event.additiveFirstNumber == null || event.additiveFirstNumber <= period.number))
     || event.periodDelta?.periodId === id
     || (!!event.beforePeriods && !sameData(event.beforePeriods.find(p => p.id === id), event.afterPeriods?.find(p => p.id === id)));
+  if (w.operational) {
+    const fiscal = w.operational.fiscal[id];
+    return !!fiscal?.submittedVersion && !fiscal.changedSinceSubmission && !w.audit.some(changedAfter)
+      && sameData(period.frozen, monthlyLines(w, id));
+  }
   let index = -1;
   for (let i = w.audit.length - 1; i >= 0; i--) {
     const event = w.audit[i];
