@@ -82,6 +82,8 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../drizzle/migrations/0008_measurement_operational_v2.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261115190000_measurement_backup_streaming.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../drizzle/migrations/0009_measurement_backup_streaming.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261115200000_measurement_backup_pages.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../drizzle/migrations/0010_measurement_backup_pages.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -130,6 +132,35 @@ describe('documento operacional v2 sem histórico acumulado',()=>{
   expect((await db.query('SELECT * FROM export_measurement_operational_backup_rows($1,$2,$3,$4,$5)',[projectId,prepared.checksum,'events','',1])).rows).toEqual(page);
   await db.exec("SET test.role='viewer'");
   await expect(db.query('SELECT * FROM export_measurement_operational_backup_rows($1,$2,$3)',[projectId,prepared.checksum,'events'])).rejects.toThrow('Sem acesso');
+ });
+ it('prepara páginas limitadas, retoma sem duplicar e impede converter backup incompleto',async()=>{
+  await seed();let value=base;
+  for(let i=0;i<3;i++){value=editMeasuredRow(value,actor,'m1','signs',{...newMeasuredRow(`page-${i}`),multiplier:i+1});await commit(value);}
+  const args=[projectId,value.revision];
+  const prepared=(await db.query<{value:{checksum:string}}>('SELECT begin_measurement_operational_backup($1,$2) value',args)).rows[0].value;
+  const cut=[...args,prepared.checksum];
+  expect((await db.query('SELECT 1 FROM app_private.measurement_operational_backup_rows')).rows).toHaveLength(0);
+  await expect(db.query('SELECT finish_measurement_operational_backup($1,$2,$3)',cut)).rejects.toThrow('incompleto');
+  await expect(db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',cut)).rejects.toThrow('incompleto');
+  const copy=async(kind:string,cursor='')=>(await db.query<{value:{copied:number;afterKey:string}}>('SELECT copy_measurement_operational_backup_page($1,$2,$3,$4,$5,1) value',[...cut,kind,cursor])).rows[0].value;
+  const first=await copy('events');expect(first.copied).toBe(1);expect(await copy('events')).toEqual(first);
+  const resumed=(await db.query<{value:{checksum:string}}>('SELECT begin_measurement_operational_backup($1,$2) value',args)).rows[0].value;
+  expect(resumed).toEqual(prepared);
+  expect((await db.query('SELECT 1 FROM app_private.measurement_operational_backup_rows')).rows).toHaveLength(1);
+  let cursor=first.afterKey;for(let i=0;i<2;i++)cursor=(await copy('events',cursor)).afterKey;
+  expect((await copy('events',cursor)).copied).toBe(0);await copy('receipts');
+  const ready=(await db.query<{value:{events:{count:number}}}>('SELECT finish_measurement_operational_backup($1,$2,$3) value',cut)).rows[0].value;
+  expect(ready.events.count).toBe(3);await db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',cut);
+  expect((await loadOperational()).entries).toEqual(value.entries);
+ });
+ it('recusa continuação de backup quando a revisão avança e exige proprietário',async()=>{
+  await seed();const prepared=(await db.query<{value:{checksum:string}}>('SELECT begin_measurement_operational_backup($1,$2) value',[projectId,base.revision])).rows[0].value;
+  const cut=[projectId,base.revision,prepared.checksum];
+  await commit(editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('during-backup'),multiplier:2}));
+  await expect(db.query("SELECT copy_measurement_operational_backup_page($1,$2,$3,'events')",cut)).rejects.toThrow('divergente');
+  await expect(db.query('SELECT finish_measurement_operational_backup($1,$2,$3)',cut)).rejects.toThrow('divergente');
+  await db.exec("SET test.role='viewer'");
+  await expect(db.query('SELECT begin_measurement_operational_backup($1,$2)',[projectId,base.revision+1])).rejects.toThrow('Sem acesso');
  });
  it('mescla campos diferentes e recusa disputa real sem recriar auditoria',async()=>{
   const initial=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('v2-field'),multiplier:1});
