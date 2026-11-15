@@ -86,8 +86,31 @@ async function storedProjectFieldOperations(actorId: string, projectId: string) 
     largeIds: new Set((large as PendingProjectFieldOperation[]).map(row => row.operationId)) };
 }
 
+function isEmptyMetadataOperation({ request, conflict }: PendingProjectFieldOperation): boolean {
+  const isEmptyObject = (value: unknown) => value != null && typeof value === 'object'
+    && !Array.isArray(value) && Object.keys(value).length === 0;
+  return !conflict && request.domain === 'metadata' && !request.operations && !request.origin && !request.capture
+    && Array.isArray(request.changes) && request.changes.length === 0
+    && Array.isArray(request.audits) && request.audits.length === 0
+    && isEmptyObject(request.metadata?.expected) && isEmptyObject(request.metadata?.next);
+}
+
+async function removeStoredProjectFieldOperation(key: string, inIndexedDb: boolean) {
+  if (inIndexedDb) await removeLargeProjectOperation(key);
+  localStorage.removeItem(key);
+}
+
 export async function pendingProjectFieldOperations(actorId: string, projectId: string) {
-  return (await storedProjectFieldOperations(actorId, projectId)).rows;
+  const { rows, largeIds } = await storedProjectFieldOperations(actorId, projectId);
+  const pending: PendingProjectFieldOperation[] = [];
+  for (const row of rows) {
+    if (isEmptyMetadataOperation(row)) {
+      await removeStoredProjectFieldOperation(`${storageKey(actorId, projectId)}:${row.operationId}`, largeIds.has(row.operationId));
+    } else {
+      pending.push(row);
+    }
+  }
+  return pending;
 }
 
 /** Removes only the named local attempt after the operator exports its backup. */
@@ -95,8 +118,7 @@ export async function archiveProjectFieldOperation(actorId: string, projectId: s
   const { rows, largeIds } = await storedProjectFieldOperations(actorId, projectId);
   if (!rows.some(row => row.operationId === operationId)) return;
   const key = `${storageKey(actorId, projectId)}:${operationId}`;
-  if (largeIds.has(operationId)) await removeLargeProjectOperation(key);
-  localStorage.removeItem(key);
+  await removeStoredProjectFieldOperation(key, largeIds.has(operationId));
   window.dispatchEvent(new Event('obraplanner:operation-conflicts'));
 }
 
@@ -184,10 +206,8 @@ export async function commitProjectFields(projectId: string, organizationId: str
   if (additiveSchedule) recordSyncDiagnostic({ area: 'additiveSchedule', operation: 'receipt', outcome: 'confirmed',
     durationMs: performance.now() - receiptStartedAt });
   // Removal follows receipt validation, never an HTTP success alone.
-  if (largeIds.has(pending.operationId) || !localStorage.getItem(`${key}:${pending.operationId}`)) {
-    await removeLargeProjectOperation(`${key}:${pending.operationId}`);
-  }
-  localStorage.removeItem(`${key}:${pending.operationId}`);
+  const pendingKey = `${key}:${pending.operationId}`;
+  await removeStoredProjectFieldOperation(pendingKey, largeIds.has(pending.operationId) || !localStorage.getItem(pendingKey));
   window.dispatchEvent(new Event('obraplanner:operation-conflicts'));
   return receipt;
 }

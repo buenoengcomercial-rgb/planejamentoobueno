@@ -101,9 +101,51 @@ it('arquiva apenas a tentativa local escolhida sem reenviar uma operação recus
   expect(await pendingProjectFieldOperations('a', 'p')).toEqual([]);
   expect(rpc).toHaveBeenCalledTimes(1);
 });
+it('descarta tentativas antigas de metadados vazios nas duas filas sem apagar mudanças reais', async () => {
+  const prefix = 'obraplanner:field-operations:a:p:';
+  const empty = { ...request, metadata: { expected: {}, next: {} } };
+  const deletion = { ...request, metadata: { expected: { notes: 'Remover' }, next: {} } };
+  localStorage.setItem(prefix + 'empty', JSON.stringify({ operationId: 'empty', request: empty }));
+  largeOperations.set(prefix + 'indexed', JSON.stringify({ operationId: 'indexed', request: empty }));
+  localStorage.setItem(prefix + 'delete', JSON.stringify({ operationId: 'delete', request: deletion }));
+  localStorage.setItem(prefix + 'conflict', JSON.stringify({ operationId: 'conflict', request: empty,
+    conflict: { message: 'Preservar edição posterior', laterEdits: [{ path: 'name', after: 'Novo' }] } }));
+
+  expect((await pendingProjectFieldOperations('a', 'p')).map(operation => operation.operationId).sort()).toEqual(['conflict', 'delete']);
+  expect(localStorage.getItem(prefix + 'empty')).toBeNull();
+  expect(largeOperations.has(prefix + 'indexed')).toBe(false);
+  expect(rpc).not.toHaveBeenCalled();
+});
 const project = { id: 'p', name: 'Obra', phases: [{ id: 'c', name: 'Capítulo', tasks: [
   { id: 't', name: 'Tarefa', duration: 2, dailyLogs: [] }, { id: 'other', name: 'Outra', dailyLogs: [] },
 ] }] } as unknown as Project;
+it('reutiliza a versão confirmada sem criar tentativa, recibo ou RPC quando o projeto não mudou', async () => {
+  setCloudSnapshot('p', project);
+  const onConfirmed = vi.fn(), onReceipt = vi.fn();
+
+  await expect(syncProjectMetadataAtomically(structuredClone(project), 'org',
+    { actorId: 'a', onConfirmed, onReceipt, expectedUpdatedAt: 'v1' })).resolves.toBe('v1');
+
+  expect(rpc).not.toHaveBeenCalled();
+  expect(onConfirmed).not.toHaveBeenCalled();
+  expect(onReceipt).not.toHaveBeenCalled();
+  expect(await pendingProjectFieldOperations('a', 'p')).toEqual([]);
+});
+it('continua gravando uma alteração real de metadados com seu recibo', async () => {
+  setCloudSnapshot('p', project);
+  const onConfirmed = vi.fn();
+  const renamed = { ...project, name: 'Novo nome' };
+  rpc.mockImplementationOnce(async (_name, args) => ({
+    data: { operationId: args.p_operation_id, updatedAt: 'v2', metadata: stripNormalizedCollections(renamed), changes: [], replayed: false },
+  }));
+
+  await expect(syncProjectMetadataAtomically(renamed, 'org',
+    { actorId: 'a', onConfirmed, expectedUpdatedAt: 'v1' })).resolves.toBe('v2');
+
+  expect(rpc).toHaveBeenCalledTimes(1);
+  expect(rpc.mock.calls[0][1].p_request.metadata).toEqual({ expected: { name: 'Obra' }, next: { name: 'Novo nome' } });
+  expect(onConfirmed.mock.calls[0][0].name).toBe('Novo nome');
+});
 it('Produção envia valores anteriores e aceita campos reconciliados sem regravar outras áreas', async () => {
   setCloudSnapshot('p', project);
   const candidate = { ...project, phases: [{ ...project.phases[0], tasks: [
@@ -139,5 +181,22 @@ it('alterações de Produção e Custos mantêm seus registros na mesma operaç�
     expect(args.p_request.operations[0].changes[0].upserts[0].expected.data.name).toBe('Tarefa');
     return {data:{operationId:args.p_operation_id,updatedAt:'v2',metadata:stripNormalizedCollections(candidate),changes:[],replayed:false}};
   });
-  await syncProjectMetadataAtomically(candidate,'org',{actorId:'actor',onConfirmed:vi.fn()});
+  await syncProjectMetadataAtomically(candidate,'org',{actorId:'actor',onConfirmed:vi.fn(),expectedUpdatedAt:'v1'});
+});
+it('grava Produção e Materiais numa operação composta sem um filho de metadados vazio', async () => {
+  const base = { ...project, budgetItems: [] };
+  setCloudSnapshot('p', base);
+  const candidate = { ...base, phases: [{ ...base.phases[0], tasks: [
+    { ...base.phases[0].tasks[0], name: 'Local' }, base.phases[0].tasks[1],
+  ] }], budgetItems: [{ id: 'material', item: '1.1', code: '001', bank: 'SINAPI', description: 'Suporte',
+    unit: 'UN', quantity: 2, unitPriceNoBDI: 3, unitPriceWithBDI: 4, totalNoBDI: 6, totalWithBDI: 8, source: 'sintetica' }] } as Project;
+  rpc.mockImplementationOnce(async (_name, args) => ({
+    data: { operationId: args.p_operation_id, updatedAt: 'v2', metadata: stripNormalizedCollections(candidate), changes: [], replayed: false },
+  }));
+
+  await syncProjectMetadataAtomically(candidate, 'org', { actorId: 'a', onConfirmed: vi.fn(), expectedUpdatedAt: 'v1' });
+
+  const sent = rpc.mock.calls[0][1].p_request as ProjectFieldRequest;
+  expect(sent.domain).toBe('combined');
+  expect(sent.operations?.map(op => op.domain)).toEqual(['production', 'materials']);
 });
