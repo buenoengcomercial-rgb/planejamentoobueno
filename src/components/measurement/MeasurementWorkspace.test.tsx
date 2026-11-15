@@ -1491,12 +1491,12 @@ it('does not reuse a recovered new-row draft baseline when editing a confirmed r
   expect(screen.queryByText('Linha não encontrada.')).not.toBeInTheDocument();
 });
 
-it.each([false, true])('reconciles acknowledged row drafts only after a cloud read (offline=%s)', async offline => {
+it.each([false, true])('reconciles acknowledged row drafts with omitted optional fields only after a cloud read (offline=%s)', async offline => {
   const { w, repository } = fixture(); repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
   repository.stage = vi.fn(async () => undefined); repository.loadedOffline = () => offline;
   w.entries = [{ projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [{ ...newMeasuredRow('confirmed-row'), comment: 'Confirmed' }] }];
   vi.mocked(repository.drafts).mockResolvedValue([{ projectId: 'p', measurementId: 'm1', serviceId: 's', rowId: '__new__',
-    changes: { comment: 'Confirmed', createdRowId: 'confirmed-row' }, baseRevision: 0,
+    changes: { comment: 'Confirmed', createdRowId: 'confirmed-row', multiplierSource: undefined }, baseRevision: 0,
     expectedEntry: { projectId: 'p', measurementId: 'm1', serviceId: 's', rows: [] } }]);
   render(<MeasurementWorkspace repository={repository} actor={actor}/>);
   await screen.findByRole('spinbutton', { name: 'Quantidade de Placas' });

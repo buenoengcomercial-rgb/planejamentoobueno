@@ -35,6 +35,17 @@ import SaveStatusIndicator, { type SaveStatus } from '@/components/SaveStatusInd
 import { withReadDeadline } from '@/lib/readDeadline';
 const button = 'inline-flex h-8 items-center gap-1.5 rounded border border-slate-200 bg-white px-2.5 text-xs hover:bg-slate-50 disabled:opacity-40';
 
+const numericDraftFields = new Set(['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD']);
+
+function matchesRowDraftValue(field: string, saved: unknown, value: unknown): boolean {
+  if (numericDraftFields.has(field) && typeof value === 'string' && value.trim() !== '') {
+    const number = Number(value.replace(',', '.'));
+    return Number.isFinite(number) && saved === number;
+  }
+  // Optional fields written as undefined in IndexedDB are omitted by JSON.
+  return JSON.stringify(saved) === JSON.stringify(value);
+}
+
 /** A response can be lost after the row is committed but before its draft is cleared. */
 function confirmedRowDraft(workspace: Workspace, draft: WorkspaceDraft): boolean {
   if (draft.projectId !== workspace.projectId) return false;
@@ -58,16 +69,8 @@ function confirmedRowDraft(workspace: Workspace, draft: WorkspaceDraft): boolean
   if (typeof rowId !== 'string' || rowId.startsWith('__')) return false;
   const row = workspace.entries.find(entry => entry.measurementId === draft.measurementId && entry.serviceId === draft.serviceId)?.rows.find(item => item.id === rowId);
   const changes = Object.entries(draft.changes).filter(([key]) => key !== 'createdRowId');
-  const numericFields = new Set(['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD']);
-  return !!row && changes.length > 0 && changes.every(([key, value]) => {
-    if (!Object.prototype.hasOwnProperty.call(row, key)) return false;
-    const saved = row[key as keyof typeof row];
-    if (numericFields.has(key) && typeof value === 'string' && value.trim() !== '') {
-      const number = Number(value.replace(',', '.'));
-      return Number.isFinite(number) && saved === number;
-    }
-    return JSON.stringify(saved) === JSON.stringify(value);
-  });
+  return !!row && changes.length > 0
+    && changes.every(([key, value]) => matchesRowDraftValue(key, row[key as keyof typeof row], value));
 }
 
 /** Real workspace UI, with an explicitly injected persistence boundary. No Project setter. */
@@ -642,7 +645,22 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
             });
           }
           if (requiresReview) {
-            for (const item of held) {
+            let inputsRetained = true;
+            // Once a real conflict is found, retain its input before archiving
+            // the attempted command. Ordinary edits need only the queue.
+            if (confirmed.operational) {
+              const writes = [...draftChanges.current].flatMap(([key, changes]) => {
+                const [measurementId, serviceId, rowId] = JSON.parse(key) as string[];
+                if (!blocked.has(`${measurementId}:${serviceId}`)) return [];
+                const base = draftBases.current.get(key);
+                return [writeInputDraft(key, {
+                  projectId: confirmed.projectId, measurementId, serviceId, rowId, changes,
+                  baseRevision: base?.revision, expectedEntry: base && entryFor(base, measurementId, serviceId),
+                })];
+              });
+              inputsRetained = (await Promise.allSettled(writes)).every(write => write.status === 'fulfilled');
+            }
+            for (const item of inputsRetained ? held : []) {
               const id = item.candidate?.audit.at(-1)?.id;
               if (!id) continue;
               try { await item.durable; await repository.archivePending(id); }
@@ -952,9 +970,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       const now = entryFor(remote, draft.measurementId, draft.serviceId);
       if (JSON.stringify(before) !== JSON.stringify(now)) throw new Error('Este item mudou na nuvem. Reabra a Medição e confira os valores antes de decidir.');
       if (choice === 'local') {
-        const numeric = new Set(['multiplier', 'measuredQuantity', 'dimensionC', 'dimensionD']);
         const fields = Object.entries(draft.changes).filter(([field]) => field !== 'createdRowId');
-        if (!fields.length || fields.some(([field]) => !numeric.has(field))) throw new Error('Este rascunho exige conferência manual no detalhe do item.');
+        if (!fields.length || fields.some(([field]) => !numericDraftFields.has(field))) throw new Error('Este rascunho exige conferência manual no detalhe do item.');
         const changes = Object.fromEntries(fields.map(([field, value]) => {
           const parsed = typeof value === 'number' ? value : Number(String(value).replace(',', '.'));
           if (!Number.isFinite(parsed) || parsed < 0) throw new Error('O valor local não é um quantitativo válido.');
@@ -1001,11 +1018,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   };
   const hasPendingFiscalDraft = (measurementId: string) => drafts.some(d => d.measurementId === measurementId && !(d.serviceId === bulletinDraftKey && d.rowId === 'number'))
     || [...draftChanges.current.keys()].some(key => key.startsWith(`[${JSON.stringify(measurementId)},`));
-  const clearDraft = (mid: string, sid: string, rid?: string, expectedVersion?: number) => {
+  const operationalCloud = repository.savedLabel === 'Salvo na nuvem' && !!current.current?.operational;
+  const clearDraft = (mid: string, sid: string, rid?: string, expectedVersion?: number, inputOnly = false) => {
     const key = draftKey(mid, sid, rid ?? ''), version = expectedVersion ?? draftVersions.current.get(key) ?? 0;
-    if (repository.savedLabel === 'Salvo na nuvem' && !repository.stage) {
+    if (inputOnly || repository.savedLabel === 'Salvo na nuvem' && !repository.stage) {
       if ((draftVersions.current.get(key) ?? 0) === version) {
         draftChanges.current.delete(key);
+        draftBases.current.delete(key);
         markDraftChange(value => value + 1);
       }
       return;
@@ -1021,12 +1040,35 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   };
   const clearCommittedDraft = (mid: string, sid: string, rid: string) => {
     const version = draftVersions.current.get(draftKey(mid, sid, rid)) ?? 0;
-    return () => clearDraft(mid, sid, rid, version);
+    return () => clearDraft(mid, sid, rid, version, operationalCloud);
+  };
+  const writeInputDraft = (key: string, draft: WorkspaceDraft) => {
+    writingDrafts.current++;
+    const write = (draftWrites.current.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+      await repository.writeDraft(draft);
+      failedDraftWrites.current.delete(key);
+    }).catch(e => { failedDraftWrites.current.add(key); setError(`Falha ao preservar rascunho: ${e.message}`); throw e; }).finally(() => { writingDrafts.current--; });
+    draftWrites.current.set(key, write);
+    return write;
   };
   const saveDraft = (mid: string, sid: string, rid: string, changes: Record<string, unknown>) => {
     if (!current.current) return;
     const d: WorkspaceDraft = { projectId: current.current.projectId, measurementId: mid, serviceId: sid, rowId: rid, changes };
     const key = draftKey(mid, sid, rid);
+    const merged = { ...draftChanges.current.get(key), ...changes };
+    if (operationalCloud && !('createdRowId' in changes)) {
+      const rows = entryFor(detailPreview.current ?? current.current, mid, sid).rows;
+      const row = rid === '__new__' ? newMeasuredRow(rid)
+        : rid === '__manual__' ? rows[0] ?? newMeasuredRow(rid) : rows.find(item => item.id === rid);
+      // A field restored to the displayed value has no edit to send.
+      for (const [field, value] of Object.entries(changes)) {
+        if (row && matchesRowDraftValue(field, row[field as keyof typeof row], value)) delete merged[field];
+      }
+      if (!Object.keys(merged).length) {
+        if (draftChanges.current.has(key)) clearDraft(mid, sid, rid, undefined, true);
+        return;
+      }
+    }
     if (!draftBases.current.has(key)) {
       let base = current.current;
       const preview = detailPreview.current;
@@ -1047,19 +1089,15 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     d.baseRevision = base.revision;
     d.expectedEntry = entryFor(base, mid, sid);
     const wasEmpty = draftChanges.current.size === 0;
-    const merged = { ...draftChanges.current.get(key), ...changes }; draftChanges.current.set(key, merged); d.changes = merged;
+    draftChanges.current.set(key, merged); d.changes = merged;
     if (wasEmpty) markDraftChange(value => value + 1);
     if (bufferedDetail.current?.measurementId === mid && bufferedDetail.current.serviceIds.has(sid))
       scheduleBufferedDetail(bufferedDetail.current);
     draftVersions.current.set(key, (draftVersions.current.get(key) ?? 0) + 1);
-    if (repository.savedLabel === 'Salvo na nuvem' && !repository.stage) return;
-    writingDrafts.current++;
-    const write = (draftWrites.current.get(key) ?? Promise.resolve()).catch(() => undefined).then(async () => {
-      await repository.writeDraft(d);
-      failedDraftWrites.current.delete(key);
-    }).catch(e => { failedDraftWrites.current.add(key); setError(`Falha ao preservar rascunho: ${e.message}`); throw e; }).finally(() => { writingDrafts.current--; });
-    draftWrites.current.set(key, write);
-    void write.catch(() => undefined);
+    // The operational queue already persists completed cell edits via stage.
+    // Keep keystrokes in memory instead of duplicating that queue in drafts.
+    if (operationalCloud || repository.savedLabel === 'Salvo na nuvem' && !repository.stage) return;
+    void writeInputDraft(key, d).catch(() => undefined);
   };
   const captureDraftFor = (target: Destination) => drafts.find(d => d.measurementId === target.measurementId && d.serviceId === target.serviceId &&
     (d.rowId === `__capture__${target.rowId}:${target.field}` || d.rowId === `__capture__${target.rowId}` && d.changes.field === target.field))?.changes.takeoffDraft as TakeoffDraft | undefined;
@@ -1762,7 +1800,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         return <AnalyticView compact composition={composition} bdi={service.bdi}/>;
       }}
        renderQuantity={row => { const l = lineByTaskId.get(row.taskId)!; const s = l.service, e = entryByTaskId.get(s.id) ?? entryFor(workspace, active, s.id); return <input key={`${active}-${s.id}`} ref={input => { if (input && document.activeElement !== input && input.value !== String(l.qty)) input.value = String(l.qty); }} aria-label={`Quantidade de ${s.description}`} className="no-spinner h-6 w-full min-w-0 rounded border border-transparent bg-transparent px-1 text-right text-[11px] tabular-nums hover:border-primary/30 focus:border-primary disabled:bg-transparent" type="number" inputMode="decimal" min="0" step="any" title={`Clique para abrir o detalhe da ${period!.number}ª medição`} aria-expanded={expanded?.taskId === s.id && expanded.mode === 'quantity'} onClick={() => selectDetailAfterLocalSave({ taskId: s.id, mode: 'quantity' })} readOnly={quantityLocked || e.rows.length > 1 || e.rows.some(r => r.origin?.kind !== 'manual' || sourceFields.some(f => r[f]) || r.sharedRecordId || r.measuredQuantity || r.dimensionC || r.dimensionD)} defaultValue={l.qty} onChange={event => saveDraft(active, s.id, '__manual__', { multiplier: event.target.value })} onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) event.preventDefault(); if (event.key === 'Enter') event.currentTarget.blur(); }} onWheel={event => event.currentTarget.blur()} onBlur={event => {
-            const value = Number(event.currentTarget.value.replace(',', '.')); if (value === l.qty) { if (!busy.current && !recovery && !detailQueue.current.length) clearDraft(active, s.id, '__manual__'); return; }
+            const value = Number(event.currentTarget.value.replace(',', '.')); if (value === l.qty) { if (!busy.current && !recovery && !detailQueue.current.length) clearDraft(active, s.id, '__manual__', undefined, operationalCloud); return; }
             if (!Number.isFinite(value) || value < 0) { event.currentTarget.value = String(l.qty); return; }
             const newRow = newMeasuredRow(); if (!bufferDetail(s.id, w => { const row = entryFor(w, active, s.id).rows[0] ?? newRow; return editMeasuredRow(w, actor, active, s.id, { ...newMeasuredRow(row.id), comment: row.comment || 'Quantidade informada', origin: row.origin ?? { kind: 'manual' }, multiplier: value }); }, clearCommittedDraft(active, s.id, '__manual__'), '__manual__')) event.currentTarget.value = String(l.qty);
           }}/>; }}

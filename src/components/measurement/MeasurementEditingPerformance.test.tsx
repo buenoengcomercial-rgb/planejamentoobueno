@@ -40,6 +40,54 @@ it('não cria rascunhos persistentes no modo nuvem e avisa antes de fechar com g
   expect(leave.defaultPrevented).toBe(true);
 });
 
+it('usa apenas a fila de salvamento para células confirmadas no modo operacional', async () => {
+  const { repository, saved, drafts } = setup(1);
+  saved().operational = { version: 2, cutoffRevision: 0, fiscal: {} };
+  repository.savedLabel = 'Salvo na nuvem';
+  repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  const units = screen.getByLabelText('Unidades da linha 1');
+  fireEvent.focus(units);
+  fireEvent.change(units, { target: { value: '3' } });
+  expect(screen.getByRole('status')).toHaveTextContent('Aguardando envio à nuvem');
+  fireEvent.keyDown(units, { key: 'Escape' });
+  fireEvent.blur(units);
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo e conferido na nuvem'));
+  expect(repository.stage).not.toHaveBeenCalled();
+
+  fireEvent.focus(units);
+  fireEvent.change(units, { target: { value: '4' } }); fireEvent.blur(units);
+  await waitFor(() => expect(repository.stage).toHaveBeenCalledTimes(1));
+  expect(repository.writeDraft).not.toHaveBeenCalled();
+  expect(drafts()).toEqual([]);
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Salvo e conferido na nuvem'));
+  expect(saved().entries[0].rows[0].multiplier).toBe(4);
+  expect(repository.commit).toHaveBeenCalledTimes(1);
+});
+
+it('preserva um rascunho antigo divergente ao confirmar outra célula da linha', async () => {
+  const { repository, saved, drafts } = setup(1);
+  saved().operational = { version: 2, cutoffRevision: 0, fiscal: {} };
+  repository.savedLabel = 'Salvo na nuvem';
+  repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  const olderDraft = { projectId: 'performance', measurementId: 'm', serviceId: 's0', rowId: 'r', changes: { comment: 'Observação pendente' } };
+  await repository.writeDraft(olderDraft);
+  vi.mocked(repository.writeDraft).mockClear();
+
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  const units = screen.getByLabelText('Unidades da linha 1');
+  fireEvent.change(units, { target: { value: '4' } }); fireEvent.blur(units);
+  await waitFor(() => expect(saved().entries[0].rows[0].multiplier).toBe(4));
+  await waitFor(() => expect(screen.getByText(/1 rascunho\(s\) local\(is\)/)).toBeVisible());
+  expect(repository.writeDraft).not.toHaveBeenCalled();
+  expect(repository.clearDraft).not.toHaveBeenCalled();
+  expect(drafts()).toEqual([olderDraft]);
+});
+
 it('retoma após recarga a tarefa em edição antes dos dois segundos de espera', async () => {
   const { repository } = setup(1);
   let confirmed = (await repository.load())!;
@@ -294,6 +342,7 @@ it.each([false, true])('mantém a linha criada quando A confirma entre digitar e
   repository.stage = vi.fn(async () => undefined);
   repository.confirmedOperation = vi.fn(async () => true);
   let cloud = saved();
+  cloud.operational = { version: 2, cutoffRevision: 0, fiscal: {} };
   cloud.entries[0].rows[0].multiplier = 2;
   let confirmCreation!: (result: Workspace) => void;
   vi.mocked(repository.load).mockImplementation(async () => cloud);
@@ -322,6 +371,7 @@ it.each([false, true])('mantém a linha criada quando A confirma entre digitar e
     const created = vi.mocked(repository.commit).mock.calls[0][0];
     const newId = created.entries[0].rows[1].id;
     const b = edit('Medida da linha 2', '3', false);
+    expect(repository.writeDraft).not.toHaveBeenCalled();
     cloud = { ...created, audit: [] };
     if (remoteConflict) cloud = { ...cloud, revision: cloud.revision + 1,
       entries: [{ ...cloud.entries[0], rows: [cloud.entries[0].rows[0], { ...cloud.entries[0].rows[1], measuredQuantity: 11 }] }] };
@@ -342,6 +392,7 @@ it.each([false, true])('mantém a linha criada quando A confirma entre digitar e
       expect(cloud.entries[0].rows[1]).toMatchObject({ id: newId, measuredQuantity: 11, dimensionC: 0 });
       expect(screen.getByText(/local 3 · nuvem 11/)).toBeVisible();
       expect(drafts()).toEqual(expect.arrayContaining([expect.objectContaining({ rowId: newId })]));
+      expect(vi.mocked(repository.writeDraft).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(repository.archivePending).mock.invocationCallOrder[0]);
     } else {
       expect(cloud.entries[0].rows[1]).toMatchObject({ id: newId, multiplier: 4, measuredQuantity: 3, dimensionC: 2 });
       expect(screen.getByLabelText('Quantidade de Serviço 0')).toHaveValue(26);
