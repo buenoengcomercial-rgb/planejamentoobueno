@@ -183,6 +183,42 @@ describe('Medição operacional v2', () => {
     await expect(repo.commit(tampered,base.revision)).rejects.toThrow('diferem');
     expect(mocks.rpc).toHaveBeenCalledTimes(1);expect(mocks.stored).toHaveLength(1);
   });
+  it('agrupa duas células antes do envio sem rejeitar o segundo estágio do mesmo lote',async()=>{
+    const base=await operationalFixture();mocks.rpc.mockResolvedValueOnce({data:toOperationalWorkspace(base)});
+    const repo=cloudMeasurementRepository({userId:actor.id,projectId:base.projectId});await repo.load();
+    const first=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('batch-sign'),multiplier:2});
+    await repo.stage!(first,base);
+    const edited=editMeasuredRow(first,actor,'m1','repeaters',{...newMeasuredRow('batch-repeat'),multiplier:3});
+    const combined={...edited,revision:first.revision,audit:first.audit};
+    await repo.stage!(combined,base);
+    mocks.rpc.mockResolvedValueOnce({data:receiptFor(base,combined)});
+    expect((await repo.commit(combined,base.revision)).entries).toEqual(combined.entries);
+    expect(mocks.rpc.mock.calls.filter(([name])=>name==='commit_measurement_operation_v2')).toHaveLength(1);
+    expect(mocks.rpc.mock.calls.at(-1)![1].p_operation.changes.entries).toHaveLength(2);
+  });
+  it('não troca o valor esperado de uma célula ao reagrupar um lote ainda não enviado',async()=>{
+    const base=await operationalFixture();mocks.rpc.mockResolvedValueOnce({data:toOperationalWorkspace(base)});
+    const repo=cloudMeasurementRepository({userId:actor.id,projectId:base.projectId});await repo.load();
+    const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('original-expected'),multiplier:2});
+    await repo.stage!(next,base);
+    const changedBase={...next,revision:base.revision,audit:base.audit};
+    const later=editMeasuredRow(changedBase,actor,'m1','signs',{...newMeasuredRow('original-expected'),multiplier:7});
+    later.audit=next.audit;
+    await expect(repo.stage!(later,changedBase)).rejects.toThrow('preparada');
+    expect(mocks.rpc).toHaveBeenCalledTimes(1);
+  });
+  it('congela o lote após envio mesmo se a resposta estiver incerta',async()=>{
+    const base=await operationalFixture();mocks.rpc.mockResolvedValueOnce({data:toOperationalWorkspace(base)});
+    const repo=cloudMeasurementRepository({userId:actor.id,projectId:base.projectId});await repo.load();
+    const next=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('sent-batch'),multiplier:2});
+    await repo.stage!(next,base);mocks.rpc.mockResolvedValueOnce({data:{revision:next.revision}});
+    await expect(repo.commit(next,base.revision)).rejects.toThrow('não confirmada');
+    const changed=structuredClone(next);changed.entries.find(e=>e.measurementId==='m1'&&e.serviceId==='signs')!.rows.at(-1)!.multiplier=8;
+    await expect(repo.stage!(changed,base)).rejects.toThrow('preparada');
+    mocks.rpc.mockResolvedValueOnce({data:receiptFor(base,next)});
+    expect((await repo.commit(next,base.revision)).entries).toEqual(next.entries);
+    expect(mocks.rpc.mock.calls.filter(([name])=>name==='commit_measurement_operation_v2')).toHaveLength(1);
+  });
 });
 
 describe('Abertura da Medição com plantas sob demanda', () => {

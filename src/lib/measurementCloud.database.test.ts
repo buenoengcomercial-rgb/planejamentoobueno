@@ -84,6 +84,8 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../drizzle/migrations/0009_measurement_backup_streaming.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261115200000_measurement_backup_pages.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../drizzle/migrations/0010_measurement_backup_pages.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261115210000_measurement_backup_digests.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../drizzle/migrations/0011_measurement_backup_digests.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -161,6 +163,19 @@ describe('documento operacional v2 sem histórico acumulado',()=>{
   await expect(db.query('SELECT finish_measurement_operational_backup($1,$2,$3)',cut)).rejects.toThrow('divergente');
   await db.exec("SET test.role='viewer'");
   await expect(db.query('SELECT begin_measurement_operational_backup($1,$2)',[projectId,base.revision+1])).rejects.toThrow('Sem acesso');
+ });
+ it('completa checksums de backups anteriores por página e impede conversão sem conferência',async()=>{
+  await seed();const saved=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('digest-page'),multiplier:1});await commit(saved);
+  const prepared=(await db.query<{value:{checksum:string}}>('SELECT prepare_measurement_operational_migration($1,$2) value',[projectId,saved.revision])).rows[0].value;
+  // Reproduce rows created by the prior migration, before digest columns existed.
+  await db.exec('ALTER TABLE app_private.measurement_operational_backup_rows DISABLE TRIGGER measurement_backup_digest; UPDATE app_private.measurement_operational_backup_rows SET payload_hash=NULL,payload_bytes=NULL; ALTER TABLE app_private.measurement_operational_backup_rows ENABLE TRIGGER measurement_backup_digest');
+  const args=[projectId,saved.revision,prepared.checksum];
+  await expect(db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',args)).rejects.toThrow('Checksums pendentes');
+  const page=(await db.query<{value:{digested:number}}>('SELECT digest_measurement_operational_backup_page($1,$2,1) value',[projectId,prepared.checksum])).rows[0].value;
+  expect(page.digested).toBe(1);
+  expect((await db.query<{value:{digested:number}}>('SELECT digest_measurement_operational_backup_page($1,$2,1) value',[projectId,prepared.checksum])).rows[0].value.digested).toBe(0);
+  await db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',args);
+  expect((await loadOperational()).entries).toEqual(saved.entries);
  });
  it('mescla campos diferentes e recusa disputa real sem recriar auditoria',async()=>{
   const initial=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('v2-field'),multiplier:1});
