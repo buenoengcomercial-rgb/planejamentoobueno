@@ -80,6 +80,8 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../supabase/migrations/20261115180000_measurement_operational_v2.sql',import.meta.url),'utf8'));
   // Lovable and Supabase can observe the same deployment; install exactly once.
   await db.exec(await readFile(new URL('../../drizzle/migrations/0008_measurement_operational_v2.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261115190000_measurement_backup_streaming.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../drizzle/migrations/0009_measurement_backup_streaming.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -112,6 +114,22 @@ describe('documento operacional v2 sem histórico acumulado',()=>{
   await db.query('SELECT prepare_measurement_operational_migration($1,$2)',[projectId,base.revision]);
   await expect(db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',[projectId,base.revision,'invalido'])).rejects.toThrow('divergente');
   expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data.schema).toBe(1);
+ });
+ it('exporta backup por páginas verificáveis sem agregar os eventos no documento de backup',async()=>{
+  await seed();const saved=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('backup-page'),multiplier:1});await commit(saved);
+  const prepared=(await db.query<{value:{checksum:string;events:{count:number;storage:string}}}>('SELECT prepare_measurement_operational_migration($1,$2) value',[projectId,saved.revision])).rows[0].value;
+  expect(prepared.events).toMatchObject({storage:'rows-v1',count:1});
+  const page=(await db.query<{record_key:string;payload:string;checksum:string}>('SELECT * FROM export_measurement_operational_backup_rows($1,$2,$3,$4,$5)',[projectId,prepared.checksum,'events','',1])).rows;
+  expect(page).toHaveLength(1);expect(JSON.parse(page[0].payload).operation_id).toBe(saved.audit.at(-1)!.id);
+  expect((await db.query('SELECT * FROM export_measurement_operational_backup_rows($1,$2,$3,$4,$5)',[projectId,prepared.checksum,'events',page[0].record_key,1])).rows).toHaveLength(0);
+  await db.query("UPDATE app_private.measurement_operational_backup_rows SET payload=payload||'{\"tampered\":true}'::jsonb WHERE project_id=$1",[projectId]);
+  await expect(db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',[projectId,saved.revision,prepared.checksum])).rejects.toThrow('Backup histórico incompleto');
+  expect((await db.query('SELECT 1 FROM measurement_workspace_events')).rows).toHaveLength(1);
+  await db.query('SELECT prepare_measurement_operational_migration($1,$2)',[projectId,saved.revision]);
+  await db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',[projectId,saved.revision,prepared.checksum]);
+  expect((await db.query('SELECT * FROM export_measurement_operational_backup_rows($1,$2,$3,$4,$5)',[projectId,prepared.checksum,'events','',1])).rows).toEqual(page);
+  await db.exec("SET test.role='viewer'");
+  await expect(db.query('SELECT * FROM export_measurement_operational_backup_rows($1,$2,$3)',[projectId,prepared.checksum,'events'])).rejects.toThrow('Sem acesso');
  });
  it('mescla campos diferentes e recusa disputa real sem recriar auditoria',async()=>{
   const initial=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('v2-field'),multiplier:1});

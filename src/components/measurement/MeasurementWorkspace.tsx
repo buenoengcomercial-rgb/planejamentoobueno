@@ -921,6 +921,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const draftKey = (mid: string, sid: string, rid: string) => JSON.stringify([mid, sid, rid]);
   const resolveLocalDraft = async (draft: WorkspaceDraft, choice: 'cloud' | 'local') => {
     const key = draftKey(draft.measurementId, draft.serviceId, draft.rowId);
+    const version = draftVersions.current.get(key) ?? 0;
     const latest = current.current;
     if (!latest || resolvingDraft || !repository.concurrentEntries) return;
     if (busy.current || detailQueue.current.length || bufferedDetail.current || draftChanges.current.size) {
@@ -987,6 +988,13 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         setConfirmedAt(new Date().toISOString());
       } else adopt(remote);
       await repository.clearDraft(draft.measurementId, draft.serviceId, draft.rowId);
+      // This proposal has been explicitly resolved. A future edit must capture
+      // the newly confirmed base, including after an operational format cutover.
+      // Do not reset the baseline of a newer edit made while resolution awaited.
+      if ((draftVersions.current.get(key) ?? 0) === version) {
+        draftBases.current.delete(key);
+        failedDraftWrites.current.delete(key);
+      }
       setDrafts(await repository.drafts());
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setResolvingDraft(null); }

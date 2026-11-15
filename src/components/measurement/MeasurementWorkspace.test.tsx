@@ -23,6 +23,25 @@ function fixture() {
   return { w, repository };
 }
 describe('Tela própria de Medição', () => {
+  it('manter nuvem após conversão abandona a base antiga somente do rascunho resolvido', async () => {
+    const {w,repository}=fixture();w.revision=5;
+    w.operational={version:2,cutoffRevision:2,fiscal:Object.fromEntries(w.periods.map(p=>[p.id,{changedSinceSubmission:false}]))};
+    w.entries=[{projectId:'p',measurementId:'m1',serviceId:'s',rows:[{...newMeasuredRow('r'),origin:{kind:'manual'},multiplier:2}]}];
+    const drafts=[{projectId:'p',measurementId:'m1',serviceId:'s',rowId:'__manual__',baseRevision:2,expectedEntry:structuredClone(w.entries[0]),changes:{multiplier:'9'}}];
+    repository.savedLabel='Salvo na nuvem';repository.concurrentEntries=true;
+    repository.stage=vi.fn(async()=>undefined);repository.drafts=vi.fn(async()=>[...drafts]);
+    repository.clearDraft=vi.fn(async()=>{drafts.splice(0,1);});
+    vi.spyOn(window,'confirm').mockReturnValue(true);
+    render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+    fireEvent.click(await screen.findByRole('button',{name:'Manter valor da nuvem'}));
+    await waitFor(()=>expect(repository.clearDraft).toHaveBeenCalled());
+    await waitFor(()=>expect(screen.queryByRole('button',{name:'Manter valor da nuvem'})).not.toBeInTheDocument());
+    const quantity=screen.getByRole('spinbutton',{name:'Quantidade de Placas'});
+    fireEvent.change(quantity,{target:{value:'4'}});fireEvent.blur(quantity);
+    await waitFor(()=>expect(repository.commit).toHaveBeenCalled());
+    expect(vi.mocked(repository.commit).mock.calls[0][1]).toBe(5);
+    expect(vi.mocked(repository.commit).mock.calls[0][0].entries[0].rows[0].multiplier).toBe(4);
+  });
   it('mostra serviços já incorporados dentro do capítulo original e preserva o catálogo', async () => {
     const { w, repository } = fixture();
     Object.assign(w.services[0], { chapter: 'Incêndio - Palácio Central', path: 'Incêndio - Palácio Central › Hidrantes', item: '2.1.7' });
