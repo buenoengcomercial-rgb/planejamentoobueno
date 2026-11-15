@@ -155,9 +155,17 @@ function detailTaskKeys(operation: DetailOperation): string[] {
 function quantityProposals(failed: FailedTaskEdit): QuantityProposal[] {
   const event = failed.operation.candidate?.audit.at(-1);
   const before = event?.before.find(entry => entry.measurementId === failed.measurementId && entry.serviceId === failed.serviceId);
+  const wasChanged = (rowId: string, field: QuantityField) => [failed.operation, ...failed.deferred].some(operation => {
+    const audit = operation.candidate?.audit.at(-1);
+    const matchingRow = (entries: Workspace['entries']) => entries
+      .find(entry => entry.measurementId === failed.measurementId && entry.serviceId === failed.serviceId)
+      ?.rows.find(row => row.id === rowId);
+    return !!audit && (matchingRow(audit.before)?.[field] ?? 0) !== (matchingRow(audit.after)?.[field] ?? 0);
+  });
   return (failed.previewEntry?.rows ?? []).flatMap(row => {
     const original = before?.rows.find(value => value.id === row.id);
-    return quantityFields.flatMap(field => typeof row[field] === 'number' && row[field] !== (original?.[field] ?? 0)
+    return quantityFields.flatMap(field => typeof row[field] === 'number'
+      && (row[field] !== (original?.[field] ?? 0) || wasChanged(row.id, field))
       ? [{ rowId: row.id, field, value: row[field], manual: row.origin?.kind === 'manual' && failed.previewEntry?.rows.length === 1 }]
       : []);
   }).filter(item => !failed.resolved?.has(`${item.rowId}:${item.field}`));

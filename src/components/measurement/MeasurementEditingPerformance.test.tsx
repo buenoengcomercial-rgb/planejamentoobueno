@@ -567,6 +567,9 @@ it('edita a proposta em conflito e só grava o campo ao confirmar explicitamente
   };
   edit(await screen.findByLabelText('Quantidade de Serviço 0'), '5');
   expect(await screen.findByText('Unidades · local 5 · nuvem 11')).toBeVisible();
+  edit(screen.getByLabelText('Quantidade de Serviço 0'), '0');
+  expect(screen.getByText('Unidades · local 0 · nuvem 11')).toBeVisible();
+  expect(repository.commit).toHaveBeenCalledTimes(1);
   edit(screen.getByLabelText('Quantidade de Serviço 0'), '7');
   expect(screen.getByText('Unidades · local 7 · nuvem 11')).toBeVisible();
   expect(repository.commit).toHaveBeenCalledTimes(1);
