@@ -64,6 +64,13 @@
       "when": 1794765600000,
       "tag": "0008_measurement_operational_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794769200000,
+      "tag": "0009_measurement_backup_streaming",
+      "breakpoints": true
     }
   ]
 }
