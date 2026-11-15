@@ -13,6 +13,7 @@ import { measurementCapturePatch } from './measurementCapturePatch';
 import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { measurementConcurrentCommand } from './measurementConcurrentCommand';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
+import { fromOperationalWorkspace, measurementOperation, type MeasurementOperationalWorkspace } from './measurementOperational';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
 type DeltaAudit = MeasurementWorkspace['audit'][number] & {periodDelta?: {kind:string;periodId:string;afterPeriod?:MeasuredPeriod}};
 const actor={id:userId,name:'Teste',canEdit:true,canReview:true};
@@ -76,10 +77,168 @@ beforeAll(async()=>{
  await db.exec(await readFile(new URL('../../supabase/migrations/20261105090000_measurement_nondestructive_checkpoint.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261105120000_measurement_additive_quantity_adjustments.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261113160000_measurement_additive_catalog_commit.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261115180000_measurement_operational_v2.sql',import.meta.url),'utf8'));
+  // Lovable and Supabase can observe the same deployment; install exactly once.
+  await db.exec(await readFile(new URL('../../drizzle/migrations/0008_measurement_operational_v2.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
 afterAll(async()=>{await db.close();});
+describe('documento operacional v2 sem histórico acumulado',()=>{
+ const loadOperational=async()=>fromOperationalWorkspace((await db.query<{value:MeasurementOperationalWorkspace}>(
+  'SELECT load_measurement_workspace($1) value',[projectId])).rows[0].value);
+ const convert=async(w=base)=>{
+  await seed(w);
+  const inventory=(await db.query<{value:{checksum:string;bytes:number}}>(
+   'SELECT prepare_measurement_operational_migration($1,$2) value',[projectId,w.revision])).rows[0].value;
+  await db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',[projectId,w.revision,inventory.checksum]);
+  return loadOperational();
+ };
+ const send=async(before:MeasurementWorkspace,after:MeasurementWorkspace)=>(await db.query<{value:unknown}>(
+  'SELECT commit_measurement_operation_v2($1,$2) value',[projectId,JSON.stringify(measurementOperation(before,after))])).rows[0].value;
+ it('converte com backup e mantém todos os períodos, lançamentos, totais e arquivos',async()=>{
+  const current=await convert();
+  expect(current.audit).toEqual([]);
+  for(const key of ['services','periods','entries','plans','importedKeys'] as const) expect(current[key]).toEqual(JSON.parse(wire(base))[key]);
+  for(const period of base.periods) expect(monthlyLines(current,period.id)).toEqual(monthlyLines(base,period.id));
+  expect(current.revision).toBe(base.revision+1);
+  const raw=(await db.query<{data:Record<string,unknown>}>('SELECT data FROM measurement_workspaces')).rows[0].data;
+  expect(raw.schema).toBe(2); expect(raw).not.toHaveProperty('audit');
+  expect((await db.query('SELECT 1 FROM app_private.measurement_operational_backups WHERE converted')).rows).toHaveLength(1);
+  expect((await db.query('SELECT 1 FROM measurement_workspace_events')).rows).toHaveLength(0);
+ });
+ it('cancela a conversão se a revisão/checksum divergir',async()=>{
+  await seed();
+  await db.query('SELECT prepare_measurement_operational_migration($1,$2)',[projectId,base.revision]);
+  await expect(db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',[projectId,base.revision,'invalido'])).rejects.toThrow('divergente');
+  expect((await db.query<{data:MeasurementWorkspace}>('SELECT data FROM measurement_workspaces')).rows[0].data.schema).toBe(1);
+ });
+ it('mescla campos diferentes e recusa disputa real sem recriar auditoria',async()=>{
+  const initial=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('v2-field'),multiplier:1});
+  const current=await convert(initial), row=entryFor(current,'m1','signs').rows.find(r=>r.id==='v2-field')!;
+  const a=editMeasuredRow(current,actor,'m1','signs',{...row,multiplier:2});
+  const b=editMeasuredRow(current,actor,'m1','signs',{...row,comment:'Outro campo'});
+  await send(current,a); await send(current,b);
+  const saved=await loadOperational();
+  expect(entryFor(saved,'m1','signs').rows.find(r=>r.id==='v2-field')).toMatchObject({multiplier:2,comment:'Outro campo'});
+  await expect(send(current,editMeasuredRow(current,actor,'m1','signs',{...row,multiplier:3}))).rejects.toThrow('Conflito');
+  expect(saved.audit).toEqual([]);
+  expect((await db.query('SELECT 1 FROM measurement_workspace_events')).rows).toHaveLength(0);
+ });
+ it('retorna o mesmo recibo após resposta perdida e protege clientes antigos',async()=>{
+  const current=await convert();
+  const next=editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('v2-receipt'),multiplier:2});
+  const receipt=await send(current,next);
+  expect(await send(current,next)).toEqual(receipt);
+  expect((await loadOperational()).revision).toBe(next.revision);
+  const oldClient=editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('v1-client'),multiplier:1});
+  await expect(commit(oldClient,current.revision)).rejects.toThrow();
+  expect((await loadOperational()).revision).toBe(next.revision);
+  expect((await db.query('SELECT 1 FROM measurement_operational_receipts')).rows).toHaveLength(1);
+ });
+ it('duas sessões incluem linhas diferentes no mesmo serviço inicialmente vazio',async()=>{
+  const current=await convert();
+  expect(entryFor(current,'m1','signs').rows).toHaveLength(0);
+  await send(current,editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('operator-a'),multiplier:1}));
+  await send(current,editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('operator-b'),multiplier:2}));
+  expect(entryFor(await loadOperational(),'m1','signs').rows.map(r=>r.id)).toEqual(['operator-a','operator-b']);
+ });
+ it('mantém envio e aprovação fiscais sem depender dos eventos eliminados',async()=>{
+  const current=await convert();
+  const submitted=freezeMeasuredPeriod(current,actor,'m1');
+  await send(current,submitted);
+  const loaded=await loadOperational();
+  expect(fiscalSubmissionCurrent(loaded,'m1')).toBe(true);
+  await send(loaded,approveMeasuredPeriod(loaded,actor,'m1'));
+  const approved=await loadOperational();
+  expect(approved.periods.find(p=>p.id==='m1')?.status).toBe('approved');
+  expect(approved.audit).toEqual([]);
+  expect((await db.query('SELECT 1 FROM app_private.measurement_fiscal_versions')).rows.length).toBeGreaterThan(0);
+  const receiptStorage=JSON.stringify((await db.query('SELECT result FROM measurement_operational_receipts')).rows);
+  expect(receiptStorage).not.toContain('"frozen":');
+  expect(receiptStorage).toContain('frozenRef');
+ });
+ it('conversão preserva pendência fiscal de um período quando outro foi enviado depois',async()=>{
+  const sent=freezeMeasuredPeriod(base,actor,'m1');
+  const dirty=editMeasuredRow(sent,actor,'m1','signs',{...newMeasuredRow('fiscal-pending'),multiplier:1});
+  const other=freezeMeasuredPeriod(dirty,actor,'m2');
+  expect(fiscalSubmissionCurrent(other,'m1')).toBe(false);
+  const converted=await convert(other);
+  expect(fiscalSubmissionCurrent(converted,'m1')).toBe(false);
+  expect(fiscalSubmissionCurrent(converted,'m2')).toBe(true);
+ });
+ it('mantém a proposta fiscal importada mesmo quando seus preços históricos diferem do catálogo atual',async()=>{
+  const imported=structuredClone(base), period=imported.periods.find(p=>p.id==='m1')!;
+  period.status='in_review';period.originalSnapshot!.status='in_review';
+  period.frozen=monthlyLines(imported,'m1');period.frozen[0].service.priceWithBDI+=1;
+  imported.audit=[];
+  expect(fiscalSubmissionCurrent(imported,'m1')).toBe(true);
+  const converted=await convert(imported);
+  expect(fiscalSubmissionCurrent(converted,'m1')).toBe(true);
+  expect(converted.periods).toEqual(imported.periods);
+ });
+ it('cria e exclui período novo sem recuperar eventos eliminados',async()=>{
+  const current=await convert();
+  const added=addMeasuredPeriod(current,actor); await send(current,added);
+  const saved=await loadOperational(); const last=saved.periods.at(-1)!;
+  await send(saved,deleteMeasuredPeriod(saved,actor,last.id,'Teste reversível'));
+  expect((await loadOperational()).periods).toEqual(current.periods);
+ });
+ it('protege geometria, fiscais anteriores, autorização e contexto privado',async()=>{
+  const current=await convert();
+  await db.exec("SET test.role='viewer'; SET ROLE authenticated");
+  const next=editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('unauthorized'),multiplier:2});
+  await expect(send(current,next)).rejects.toThrow('permissão');
+  await expect(db.exec(`INSERT INTO app_private.measurement_operational_context VALUES('${projectId}',txid_current())`)).rejects.toThrow('permission');
+  await db.exec("RESET ROLE; SET test.role='owner'");
+  const invalid=editMeasuredRow(current,actor,'m1','signs',{...newMeasuredRow('geometry'),multiplier:2});
+  invalid.entries.find(e=>e.measurementId==='m1'&&e.serviceId==='signs')!.rows.at(-1)!.multiplierSource={
+    planId,measureId:'missing',kind:'count',page:1,points:[{x:1,y:1}],unit:'un'} as never;
+  await expect(send(current,invalid)).rejects.toThrow('divergentes');
+  expect((await loadOperational()).entries).toEqual(current.entries);
+ });
+ it('preserva recibos compactados anteriores ao corte e rejeita alteração retroativa',async()=>{
+  const old=editMeasuredRow(base,actor,'m1','signs',{...newMeasuredRow('before-cut'),multiplier:1});
+  await seed(); await commit(old);
+  const oldOp=old.audit.at(-1)!.id;
+  const inventory=(await db.query<{value:{checksum:string}}>('SELECT prepare_measurement_operational_migration($1,$2) value',[projectId,old.revision])).rows[0].value;
+  await db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',[projectId,old.revision,inventory.checksum]);
+  expect((await db.query('SELECT 1 FROM measurement_workspace_compacted_receipts WHERE operation_id=$1',[oldOp])).rows).toHaveLength(1);
+  let current=await loadOperational(); await send(current,freezeMeasuredPeriod(current,actor,'m2'));
+  current=await loadOperational(); await send(current,approveMeasuredPeriod(current,actor,'m2'));
+  current=await loadOperational();
+  const invalid=structuredClone(current);invalid.revision++;
+  const row=entryFor(invalid,'m1','signs').rows.find(r=>r.id==='before-cut')!;row.multiplier=2;
+  invalid.audit.push({...old.audit.at(-1)!,id:crypto.randomUUID()});
+  await expect(send(current,invalid)).rejects.toThrow('acumulado');
+  expect((await loadOperational()).entries).toEqual(current.entries);
+ });
+ it('542 serviços e histórico de 13 MB: reduz leitura e não volta a crescer em 20 gravações',async()=>{
+  const large=structuredClone(base);
+  large.services.push(...Array.from({length:542-large.services.length},(_,i)=>({...base.services[0],id:`large-${i}`,item:`9.${i+1}`})));
+  large.audit.push({id:'old-snapshots',at:'2026-11-15T10:00:00Z',actor,action:'Histórico legado',before:[],after:[],affected:[],
+    beforeServices:Array.from({length:30},()=>large.services).flat().map(s=>({...s,description:'X'.repeat(600)}))});
+  const beforeBytes=Buffer.byteLength(wire(large));
+  const started=performance.now(); let current=await convert(large);
+  const convertedMs=performance.now()-started;
+  const bytes=()=>Buffer.byteLength(JSON.stringify({...current,audit:undefined})); const afterBytes=bytes();
+  expect(afterBytes).toBeLessThan(beforeBytes*0.1);
+  const initialPeriods=structuredClone(current.periods), initialLines=base.periods.map(p=>monthlyLines(current,p.id));
+  const elapsed:number[]=[]; let lastPayload=0;
+  for(let i=0;i<20;i++){
+    const row=entryFor(current,'m1','signs').rows.find(r=>r.id==='stable-row')??newMeasuredRow('stable-row');
+    const next=editMeasuredRow(current,actor,'m1','signs',{...row,comment:`Teste ${i}`});
+    lastPayload=Buffer.byteLength(JSON.stringify(measurementOperation(current,next)));
+    const start=performance.now(); await send(current,next); elapsed.push(performance.now()-start);
+    current=await loadOperational(); expect(current.audit).toEqual([]);
+  }
+  expect(bytes()).toBeLessThan(afterBytes+2000);
+  expect(current.periods).toEqual(initialPeriods);
+  expect(base.periods.map(p=>monthlyLines(current,p.id))).toEqual(initialLines);
+  expect((await db.query('SELECT 1 FROM measurement_workspace_events')).rows).toHaveLength(0);
+  console.info('operational-v2 synthetic benchmark',JSON.stringify({beforeBytes,afterBytes,convertedMs,lastPayload,commitMs:elapsed}));
+ },20000);
+});
 describe('transação da Medição na nuvem',()=>{
   const commandCommit=async(previous:MeasurementWorkspace,next:MeasurementWorkspace)=>(await db.query<{value:{revision:number;replayed?:boolean}}>(
     'SELECT commit_measurement_command_v2($1,$2,$3) value',[projectId,previous.revision,JSON.stringify(measurementConcurrentCommand(previous,next))])).rows[0].value;

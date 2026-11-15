@@ -1,5 +1,6 @@
 import type { MeasurementWorkspace } from './measurementWorkspace';
 import type { TakeoffCatalogPlan, TakeoffPlan } from './planTakeoff';
+import { fromOperationalWorkspace, type MeasurementOperationalWorkspace } from './measurementOperational';
 
 export type CloudPlan = Omit<TakeoffPlan, 'file'> & { fileBytes: number; fileType: string };
 /** Blobs never enter JSON. The immutable private Storage object is the source. */
@@ -30,7 +31,8 @@ export function measurementCatalogPlans(workspace: MeasurementWorkspace): Takeof
 export async function decodeMeasurementWorkspace(
   value: unknown, projectId: string, download?: (path: string) => Promise<Blob>,
 ): Promise<MeasurementWorkspace> {
-  const w = value as MeasurementWorkspace;
+  const w = (value as { schema?: number })?.schema === 2
+    ? fromOperationalWorkspace(value as MeasurementOperationalWorkspace) : value as MeasurementWorkspace;
   if (!w || w.schema !== 1 || w.projectId !== projectId || !Number.isSafeInteger(w.revision) || w.revision < 0
     || !['services', 'periods', 'entries', 'plans', 'audit', 'importedKeys'].every(key => Array.isArray(w[key as keyof MeasurementWorkspace]))) {
     throw new Error('A nuvem devolveu uma base incompleta. Nenhum dado local foi substituído.');
