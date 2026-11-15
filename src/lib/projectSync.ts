@@ -1197,6 +1197,7 @@ function changedMetadataFields(before: Project | null, next: Project) {
   const proposed = next as unknown as Record<string, unknown>;
   const keys = [...new Set([...Object.keys(previous), ...Object.keys(proposed)])]
     .filter(key => !shallowEqualJSON(previous[key], proposed[key]));
+  if (!keys.length) return undefined;
   return { expected: Object.fromEntries(keys.filter(key => key in previous).map(key => [key, previous[key]])),
     next: Object.fromEntries(keys.filter(key => key in proposed).map(key => [key, proposed[key]])) };
 }
@@ -1472,7 +1473,8 @@ async function saveConcurrentProject(project: Project, organizationId: string, r
   return receipt.updatedAt;
 }
 
-export async function syncProjectMetadataAtomically(project: Project, organizationId: string, options: ConcurrentProjectSave): Promise<string> {
+export async function syncProjectMetadataAtomically(project: Project, organizationId: string,
+  options: ConcurrentProjectSave & { expectedUpdatedAt: string }): Promise<string> {
   const before = snapshots.get(project.id);
   if (!before?.projectData) throw new ProjectSnapshotUnavailableError();
   const after = buildSaveSnapshot(project, before);
@@ -1482,8 +1484,10 @@ export async function syncProjectMetadataAtomically(project: Project, organizati
     if (diff.upserts.length || diff.deletes.length) changed = true;
   }
   if (changed) return syncCombinedFields(project, organizationId, options, before, after);
-  return saveConcurrentProject(project, organizationId, { domain: 'metadata', changes: [], audits: [],
-    metadata: changedMetadataFields(before.projectData, stripNormalizedCollections(project)) }, options, before.loadedCollections);
+  const metadata = changedMetadataFields(before.projectData, stripNormalizedCollections(project));
+  if (!metadata) return options.expectedUpdatedAt;
+  return saveConcurrentProject(project, organizationId, { domain: 'metadata', changes: [], audits: [], metadata },
+    options, before.loadedCollections);
 }
 
 async function syncCombinedFields(project: Project, organizationId: string, options: ConcurrentProjectSave,
@@ -1529,7 +1533,8 @@ async function syncCombinedFields(project: Project, organizationId: string, opti
     operation(domain).audits.push({ id, data: row });
   }
   if (operations.has('measurement')) assertMeasurementIntent(before, changedRows(before.measurements, after.measurements), audits);
-  operation('metadata').metadata = changedMetadataFields(before.projectData, stripNormalizedCollections(project));
+  const metadata = changedMetadataFields(before.projectData, stripNormalizedCollections(project));
+  if (metadata) operation('metadata').metadata = metadata;
   const order = ['production','additive','materials','measurement','costs','metadata'];
   return saveConcurrentProject(project, organizationId, { domain: 'combined', changes: [], audits: [],
     operations: order.flatMap(domain => operations.has(domain) ? [operations.get(domain)!] : []) }, options, before.loadedCollections);

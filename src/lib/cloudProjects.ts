@@ -260,7 +260,7 @@ export async function upsertCloudProject(project: Project, organizationId: strin
       if (productionUpdatedAt) return productionUpdatedAt;
       const domainUpdatedAt = await syncNormalizedDomainAtomically(project, slim, organizationId, expectedUpdatedAt, concurrent);
       if (domainUpdatedAt) return domainUpdatedAt;
-      if (concurrent) return await syncProjectMetadataAtomically(project, organizationId, concurrent);
+      if (concurrent) return await syncProjectMetadataAtomically(project, organizationId, { ...concurrent, expectedUpdatedAt });
     } catch (error) {
       if (error instanceof ProjectFieldConflictError) throw error;
       if ((error as { code?: string })?.code === 'P0002') throw new CloudProjectConflictError();
