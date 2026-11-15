@@ -34,13 +34,23 @@ const formulaLabel: Record<DetailFormula, string> = { STANDARD: 'Padrão', 'A*B'
 const navColumn: Record<DetailField, number> = { multiplier: 2, measuredQuantity: 3, dimensionC: 4, dimensionD: 5 };
 const blankRow: ProductionQuantityDetail = { id: '__new__', location: '', comment: '', formula: 'STANDARD', multiplier: 0, measuredQuantity: 0, dimensionC: 0, dimensionD: 0 };
 
-/** Keep the native draft and focus intact when another cell is confirmed. */
-function DetailInput({ storedValue, ...props }: InputHTMLAttributes<HTMLInputElement> & { storedValue: string | number }) {
+/** Keep the native draft while focused. A remote update alone must never enqueue an edit. */
+export function QuantityEntryInput({ storedValue, onChange, onBlur, ...props }: InputHTMLAttributes<HTMLInputElement> & { storedValue: string | number }) {
   const input = useRef<HTMLInputElement>(null);
+  const edited = useRef(false);
   useLayoutEffect(() => {
     if (input.current && document.activeElement !== input.current) input.current.value = String(storedValue);
   }, [storedValue]);
-  return <input {...props} ref={input} defaultValue={storedValue}/>;
+  return <input {...props} ref={input} defaultValue={storedValue}
+    onChange={event => { edited.current = true; onChange?.(event); }}
+    onBlur={event => {
+      if (!edited.current) {
+        event.currentTarget.value = String(storedValue);
+        return;
+      }
+      edited.current = false;
+      onBlur?.(event);
+    }}/>;
 }
 
 function formulaMeaning(formula: DetailFormula, unit: string): string {
@@ -156,9 +166,13 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
   };
 
   const textField = (row: ProductionQuantityDetail, index: number) => (
-    <DetailInput aria-label={`Comentário da linha ${index + 1}`} {...navCell(index, 0)} storedValue={row.comment} onChange={event => onDraftChange?.(row.id, { comment: event.target.value })}
-      disabled={readOnly} onFocus={() => setSelectedRowId(row.id)} onBlur={event => { if (event.target.value !== row.comment && !saveRow(row, { comment: event.target.value })) event.target.value = row.comment; }}
-      onKeyDown={event => { if (navigateCell(event, index, 0)) return; if (event.key === 'Escape') { event.currentTarget.value = row.comment; onDraftChange?.(row.id, { comment: row.comment }); } if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur(); }}
+    <QuantityEntryInput aria-label={`Comentário da linha ${index + 1}`} {...navCell(index, 0)} storedValue={row.comment} onChange={event => onDraftChange?.(row.id, { comment: event.target.value })}
+      disabled={readOnly} onFocus={() => setSelectedRowId(row.id)} onBlur={event => {
+        const comment = event.currentTarget.value;
+        if (comment === row.comment) onDraftChange?.(row.id, { comment });
+        else if (!saveRow(row, { comment })) event.currentTarget.value = row.comment;
+      }}
+      onKeyDown={event => { if (navigateCell(event, index, 0)) return; if (event.key === 'Escape') event.currentTarget.value = row.comment; if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur(); }}
       className="h-5 w-full min-w-0 border border-slate-300 bg-white px-1 text-[11px] focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
   );
 
@@ -171,7 +185,7 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
     const drawingUnit = source?.resultUnit?.startsWith('u.d.') ? source.resultUnit : null;
     const shownValue = Number((row[key] ?? 0).toFixed(4));
     return <div className="flex items-center justify-end gap-0.5 whitespace-nowrap">
-      <DetailInput aria-label={`${label} da linha ${index + 1}`} {...navCell(index, navColumn[key])} type="number" inputMode="decimal" min="0" step="any" storedValue={shownValue} placeholder="0" onChange={event => { event.currentTarget.dataset.edited = 'true'; onDraftChange?.(row.id, { [key]: event.target.value }); }}
+      <QuantityEntryInput aria-label={`${label} da linha ${index + 1}`} {...navCell(index, navColumn[key])} type="number" inputMode="decimal" min="0" step="any" storedValue={shownValue} placeholder="0" onChange={event => onDraftChange?.(row.id, { [key]: event.target.value })}
         title={activeInFormula ? `Coluna ${column} participa de ${formulaLabel[detailFormula(row)]}` : `Coluna ${column} fora de ${formulaLabel[detailFormula(row)]}: o valor fica registrado, mas não altera o parcial`}
         disabled={readOnly} onFocus={event => { if (event.currentTarget.value === '0') event.currentTarget.value = ''; else event.currentTarget.select(); setSelectedRowId(row.id); setSelectedField(key); }} onBlur={event => {
           const value = Number(event.target.value.replace(',', '.'));
@@ -183,11 +197,10 @@ export default function ProductionQuantityDetails({ rows, unit, dailyQuantity, a
             if (!saveRow(row, changes)) event.target.value = String(shownValue);
           } else {
             if (event.target.value === '' || !Number.isFinite(value) || value < 0) event.target.value = String(shownValue);
-            if (event.currentTarget.dataset.edited) onDraftChange?.(row.id, { [key]: row[key] ?? 0 });
+            onDraftChange?.(row.id, { [key]: row[key] ?? 0 });
           }
-          delete event.currentTarget.dataset.edited;
         }}
-        onKeyDown={event => { if (navigateCell(event, index, navColumn[key])) return; if (event.key === 'ArrowUp' || event.key === 'ArrowDown') event.preventDefault(); else if (event.key === 'Escape') { event.currentTarget.value = String(shownValue); onDraftChange?.(row.id, { [key]: shownValue }); event.currentTarget.blur(); } else if (event.key === 'Enter') event.currentTarget.blur(); }}
+        onKeyDown={event => { if (navigateCell(event, index, navColumn[key])) return; if (event.key === 'ArrowUp' || event.key === 'ArrowDown') event.preventDefault(); else if (event.key === 'Escape') { event.currentTarget.value = String(shownValue); event.currentTarget.blur(); } else if (event.key === 'Enter') event.currentTarget.blur(); }}
         onWheel={event => event.currentTarget.blur()}
         className="no-spinner h-5 w-full min-w-0 border border-slate-300 bg-white px-1 text-right text-[11px] tabular-nums focus:border-sky-500 focus:outline-none disabled:bg-slate-50" />
       {drawingUnit && <span title="Valor em unidades do desenho; a planta não tem escala em metros definida" className="text-[9px] font-medium text-amber-800">{drawingUnit}</span>}
