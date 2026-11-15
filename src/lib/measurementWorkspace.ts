@@ -135,8 +135,7 @@ export function fiscalSubmissionCurrent(w: MeasurementWorkspace, id: string): bo
     || (!!event.beforePeriods && !sameData(event.beforePeriods.find(p => p.id === id), event.afterPeriods?.find(p => p.id === id)));
   if (w.operational) {
     const fiscal = w.operational.fiscal[id];
-    return !!fiscal?.submittedVersion && !fiscal.changedSinceSubmission && !w.audit.some(changedAfter)
-      && sameData(period.frozen, monthlyLines(w, id));
+    return !!fiscal?.submittedVersion && !fiscal.changedSinceSubmission && !w.audit.some(changedAfter);
   }
   let index = -1;
   for (let i = w.audit.length - 1; i >= 0; i--) {

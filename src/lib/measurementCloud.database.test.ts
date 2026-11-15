@@ -167,6 +167,16 @@ describe('documento operacional v2 sem histórico acumulado',()=>{
   expect(fiscalSubmissionCurrent(converted,'m1')).toBe(false);
   expect(fiscalSubmissionCurrent(converted,'m2')).toBe(true);
  });
+ it('mantém a proposta fiscal importada mesmo quando seus preços históricos diferem do catálogo atual',async()=>{
+  const imported=structuredClone(base), period=imported.periods.find(p=>p.id==='m1')!;
+  period.status='in_review';period.originalSnapshot!.status='in_review';
+  period.frozen=monthlyLines(imported,'m1');period.frozen[0].service.priceWithBDI+=1;
+  imported.audit=[];
+  expect(fiscalSubmissionCurrent(imported,'m1')).toBe(true);
+  const converted=await convert(imported);
+  expect(fiscalSubmissionCurrent(converted,'m1')).toBe(true);
+  expect(converted.periods).toEqual(imported.periods);
+ });
  it('cria e exclui período novo sem recuperar eventos eliminados',async()=>{
   const current=await convert();
   const added=addMeasuredPeriod(current,actor); await send(current,added);

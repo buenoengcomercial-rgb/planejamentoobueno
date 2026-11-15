@@ -369,6 +369,7 @@ BEGIN
       IF period->>'status'='approved' THEN meta:=meta||jsonb_build_object('approvedVersion',ref); END IF;
     ELSIF EXISTS(SELECT 1 FROM jsonb_array_elements(affected) a WHERE a->>'measurementId'=id)
       OR event->'bulletinChange'->>'measurementId'=id OR changes ? 'plans'
+      OR EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(changes->'periods','[]')) d WHERE d->>'key'=id)
       OR (changes ? 'services' AND (event->>'additiveFirstNumber' IS NULL OR (period->>'number')::int >= (event->>'additiveFirstNumber')::int)) THEN
       meta:=meta||jsonb_build_object('changedSinceSubmission',true);
     END IF;
