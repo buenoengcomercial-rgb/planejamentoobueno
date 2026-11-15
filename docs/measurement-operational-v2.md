@@ -67,6 +67,25 @@ Backup do Palácio Rio Madeira concluído e exportado: corte 690, checksum do do
 
 Simulação integral na obra real, dentro de transação encerrada com **ROLLBACK**: 52,158 s; documento operacional de 1.002.530 bytes (redução de 92,27%), 542 serviços e ausência de `audit`. A comparação estrutural de todos os dados operacionais retornou igualdade; períodos e lançamentos das medições 1, 2, 3 e 4 também foram idênticos individualmente. Depois do rollback, nova consulta confirmou revisão 690, schema 1, 552 eventos e `converted=false`. Não houve conversão permanente da obra real nesta conferência.
 
-Estado de liberação: cliente e banco preparados; testes publicados e backup aprovados; conversão permanente da obra real aguarda confirmação final de exclusão histórica. A proposta local 0 contra 11 no item 3.1.6 permanece fora da migração e dos testes: não escolher ou limpar automaticamente. A transação de conversão exige novamente revisão e checksum exatos; avanço da obra invalida este corte e exige novo backup.
+Estado antes da confirmação final: cliente e banco preparados; testes publicados e backup aprovados; conversão permanente da obra real aguardava confirmação final de exclusão histórica. A proposta local 0 contra 11 no item 3.1.6 permaneceu fora da migração e dos testes: não escolher ou limpar automaticamente. A transação de conversão exige novamente revisão e checksum exatos; avanço da obra invalida este corte e exige novo backup.
 
 Limpeza da homologação concluída: valores sintéticos restaurados para zero e conferidos nas duas sessões; abas temporárias fechadas; obra sintética `68be62d2-5473-4d3e-a6ed-35f01a20e801` e dependências removidas em transação restrita a esse ID/nome, com verificação do proprietário. Consulta posterior retornou zero obras para esse ID. Nenhuma obra operacional foi excluída.
+
+## Conversão efetivada — Palácio Rio Madeira, 15/11/2026
+
+Após confirmação explícita do proprietário, nova leitura confirmou revisão 690, schema 1 e backup com o checksum já exportado. A conversão protegida foi efetivada com `COMMIT`: revisão 691, schema 2, 542 serviços e ausência de `audit`. A transação durou 49,681 segundos, incluindo conferência integral do histórico/backup; esse é o tempo da migração única, não de uma gravação de célula.
+
+A transação comparou todas as coleções operacionais e cada período antes de confirmar. Depois do commit, consulta independente verificou `converted=true`, zero eventos históricos operacionais, cinco versões fiscais deduplicadas, backup preservado (552 eventos e 261 recibos) e zero recibos técnicos ausentes entre os eventos removidos.
+
+O documento operacional confirmado foi exportado novamente e comparado fora do banco com o backup verificado. Todas as propriedades operacionais, inclusive códigos, bancos, preços, fórmulas, referências e quantidades, permaneceram estruturalmente iguais. Documento: 12.964.132 → 1.002.530 bytes (−92,27%); MD5 operacional `ab8002017107dcccc33c256f6147d5bf`.
+
+| Medição | Conjuntos de lançamentos por serviço | Linhas | Período e lançamentos iguais |
+| --- | ---: | ---: | --- |
+| 1ª | 173 | 265 | Sim |
+| 2ª | 38 | 38 | Sim |
+| 3ª | 69 | 82 | Sim |
+| 4ª | 16 | 16 | Sim |
+
+A tela aberta da 3ª medição continuou mostrando 542 itens. Os dois rascunhos locais então visíveis (6.9.1 e 6.9.6) e o aviso fiscal foram preservados: não houve recarga forçada nem escolha entre valor local/nuvem. O indicador “Aguardando envio” desses rascunhos não representa falha da conversão já confirmada. A conferência não afirma que essas propostas locais foram gravadas.
+
+Evidências técnicas mantidas fora do repositório: backup `palacio-690`, resultado da conversão e exportação `palacio-691/operational.csv`, relatório independente `conversion-verification.json` e captura da tela. O backup não participa das consultas comuns da planilha.
