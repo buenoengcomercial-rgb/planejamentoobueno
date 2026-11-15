@@ -11,7 +11,7 @@ import { applyMeasurementLifecycleReceipt, measurementLifecyclePatch } from './m
 import { applyMeasurementPlanCatalogReceipt, measurementPlanCatalogPatch } from './measurementPlanCatalogPatch';
 import type { MeasurementWorkspace } from './measurementWorkspace';
 import { measurementConcurrentCommand, measurementCommandKey, type MeasurementConcurrentCommand } from './measurementConcurrentCommand';
-import { applyMeasurementOperationReceipt, measurementCanonical, measurementOperation, measurementOperationMatchesCandidate, type MeasurementOperation, type MeasurementOperationReceipt } from './measurementOperational';
+import { applyMeasurementOperationReceipt, measurementCanonical, measurementOperation, measurementOperationMatchesCandidate, operationalCollections, type MeasurementOperation, type MeasurementOperationReceipt } from './measurementOperational';
 
 const ENTRY_RECOVERY_WAITING = 'Banco demorou a responder. Gravação ainda não confirmada.';
 const ENTRY_RECOVERY_CONFIRMED = 'Gravação confirmada na nuvem. Conferindo os dados mais recentes.';
@@ -493,8 +493,18 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
         const existing = localStorage.getItem(key);
         if (existing) {
           const original = JSON.parse(existing) as MeasurementOperation;
-          const comparable = localStorage.getItem(`${key}:attempted`) ? original : { ...original, baseRevision: command.baseRevision };
-          if (measurementCanonical(comparable) !== measurementCanonical(command))
+          const attempted = !!localStorage.getItem(`${key}:attempted`);
+          // The typing buffer stages several versions before its first send.
+          // Preserve each existing record's original expectation while allowing
+          // another cell/value into that unsent batch. After send, freeze all.
+          const compatible = attempted ? measurementCanonical(original) === measurementCanonical(command)
+            : original.projectId === command.projectId && measurementCanonical(original.event) === measurementCanonical(command.event)
+              && operationalCollections.every(collection => (command.changes[collection] ?? []).every(delta => {
+                const previous = original.changes[collection]?.find(value => value.key === delta.key);
+                return !previous || measurementCanonical(previous.before) === measurementCanonical(delta.before);
+              })) && (!original.changes.importedKeys || !command.changes.importedKeys
+                || measurementCanonical(original.changes.importedKeys.before) === measurementCanonical(command.changes.importedKeys.before));
+          if (!compatible)
             throw new MeasurementCommitRejectedError('A tentativa já foi preparada com outros valores.');
         }
         localStorage.setItem(key, JSON.stringify(command));
