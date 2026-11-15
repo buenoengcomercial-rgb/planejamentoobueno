@@ -1027,7 +1027,22 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (!current.current) return;
     const d: WorkspaceDraft = { projectId: current.current.projectId, measurementId: mid, serviceId: sid, rowId: rid, changes };
     const key = draftKey(mid, sid, rid);
-    if (!draftBases.current.has(key)) draftBases.current.set(key, current.current);
+    if (!draftBases.current.has(key)) {
+      let base = current.current;
+      const preview = detailPreview.current;
+      if (repository.concurrentEntries && preview) {
+        const expected = entryFor(base, mid, sid);
+        const newRow = entryFor(preview, mid, sid).rows.find(row => row.id === rid);
+        if (newRow && !expected.rows.some(row => row.id === rid)) {
+          // The next cell can start while the creation is in flight and blur
+          // after it confirms. Keep the locally created row as its expectation
+          // so a rebase preserves the row and still detects a remote field edit.
+          const entries = base.entries.filter(entry => entry.measurementId !== mid || entry.serviceId !== sid);
+          base = { ...base, entries: [...entries, { ...expected, rows: [...expected.rows, newRow] }] };
+        }
+      }
+      draftBases.current.set(key, base);
+    }
     const base = draftBases.current.get(key)!;
     d.baseRevision = base.revision;
     d.expectedEntry = entryFor(base, mid, sid);
