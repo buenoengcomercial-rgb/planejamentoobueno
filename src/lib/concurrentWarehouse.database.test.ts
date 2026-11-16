@@ -78,7 +78,11 @@ it('mantém a projeção separada consistente após uma RPC de catálogo', async
 });
 
 it('confirma o catálogo isolado sem escrever na obra e preserva o catálogo após outro domínio salvar', async () => {
-  const fetchParent = async () => (await db.query('SELECT data_json, updated_at, warehouse_version FROM public.projects')).rows[0];
+  const fetchParent = async () => (await db.query<{
+    data_json: Record<string, unknown>;
+    updated_at: string;
+    warehouse_version: number;
+  }>('SELECT data_json, updated_at, warehouse_version FROM public.projects')).rows[0];
   const original = await fetchParent();
   await db.query('SELECT app_private.enable_independent_warehouse($1)', [project]);
   const applied = await commit('catalog', 'independent-catalog', catalog(item('a', 'A'), item('a', 'Novo')));
