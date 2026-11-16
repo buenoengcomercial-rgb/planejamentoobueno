@@ -9,8 +9,10 @@ type Row = Result['rows'][number];
 type Edit = { id: string; month: string; targetMonth: string; amount: string; mode: 'quantity' | 'percent'; original: string };
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format;
 const quantity = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 8 }).format;
-const percentage = (part: number, total: number) => total ? `${quantity(roundQuantity(100 * part / total))}%` : '—';
-const monthLabel = (month: string) => `${month.slice(5)}/${month.slice(0, 4)}`;
+const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format;
+const percentage = (part: number, total: number) => total ? percent(part / total) : '—';
+const monthFormatter = new Intl.DateTimeFormat('pt-BR', { month: 'long', timeZone: 'UTC' });
+const monthLabel = (month: string) => `${monthFormatter.format(new Date(`${month}-01T00:00:00Z`))}/${month.slice(0, 4)}`;
 
 interface Props {
   project: Project;

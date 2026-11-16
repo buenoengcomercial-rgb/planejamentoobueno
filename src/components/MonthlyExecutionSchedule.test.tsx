@@ -52,3 +52,30 @@ it('avisa quando só existe uma cópia local e permite confirmar novamente', asy
   expect(await screen.findByText('Nenhum serviço medido nos períodos disponíveis.')).toBeInTheDocument();
   expect(screen.queryByRole('alert')).toBeNull();
 });
+
+it('aguarda o aditivo antes de abrir diretamente o Gantt', async () => {
+  const { project } = measurementFixture();
+  let confirmAdditive: (value: unknown) => void = () => {};
+  cloud.load.mockResolvedValue(null);
+  cloud.record.mockReturnValue(new Promise(resolve => { confirmAdditive = resolve; }));
+  const renderGantt = vi.fn(() => <div>Gráfico da obra</div>);
+  render(<MonthlyExecutionSchedule project={project} userId="user" mode="gantt" independentMeasurementConfirmed={false} renderGantt={renderGantt} />);
+  expect(await screen.findByRole('status')).toHaveTextContent('Conferindo a Medição e o Aditivo');
+  expect(renderGantt).not.toHaveBeenCalled();
+  confirmAdditive({ project: { additives: [] } });
+  expect(await screen.findByText('Gráfico da obra')).toBeInTheDocument();
+});
+
+it('mostra mês por extenso na grade e na edição da parcela', async () => {
+  const { project } = measurementFixture();
+  project.endDate = '2027-01-31';
+  cloud.load.mockResolvedValue(null);
+  const saveMonthlyAllocation = vi.fn();
+  render(<MonthlyExecutionSchedule project={project} userId="user" mode="physicalFinancial" independentMeasurementConfirmed={false}
+    renderGantt={() => null} saveMonthlyAllocation={saveMonthlyAllocation} />);
+  expect(await screen.findByRole('columnheader', { name: 'novembro/2026' })).toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: /Editar/ }).filter(button => button.textContent?.includes('%')).every(button => /,\d{2}%/.test(button.textContent ?? ''))).toBe(true);
+  fireEvent.click(screen.getAllByRole('button', { name: /Editar.*novembro\/2026/ })[0]);
+  expect(screen.getByRole('option', { name: 'novembro/2026' })).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: 'janeiro/2027' })).toBeInTheDocument();
+});
