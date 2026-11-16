@@ -34,6 +34,11 @@ function inputForPdf() {
   return { project, monthlyRows: new Map(rows.map(row => [row.id, row])), measurementValues: { '2026-09': 500, '2026-10': 1000 } };
 }
 
+function pageContents(doc: Awaited<ReturnType<typeof buildSchedulePdfDocument>>) {
+  // jsPDF stores one array of PDF commands per page after the unused index zero.
+  return (doc.internal.pages as unknown as string[][]).slice(1).map(page => page.join('\n'));
+}
+
 describe('PDF do cronograma oficial', () => {
   it('consolida a EAP, preserva os meses vazios e não programa serviços integralmente executados', () => {
     const input = inputForPdf();
@@ -59,22 +64,22 @@ describe('PDF do cronograma oficial', () => {
     expect(doc.internal.pageSize.getWidth()).toBeCloseTo(297);
     expect(doc.internal.pageSize.getHeight()).toBeCloseTo(210);
     expect(doc.getNumberOfPages()).toBe(2);
-    for (const page of doc.internal.pages.slice(1)) {
-      const content = page.join('\n');
+    const pages = pageContents(doc);
+    for (const content of pages) {
       expect(content).toContain('Palácio Rio Madeira');
       expect(content).toContain('Contrato 123/2026');
       expect(content).toContain('2.1.1');
       expect(content).toContain('DESCRICAO-FINAL');
       expect(content).not.toMatch(/Predecessora|MARCO-INTERNO|Marco de liberação interno|Parcela histórica sintética/);
     }
-    expect(doc.internal.pages[1].join('\n')).toContain('500,00');
-    expect(doc.internal.pages[2].join('\n')).toContain('maio/2027');
-    expect(doc.internal.pages[2].join('\n')).not.toContain('Conjunto sem programação');
+    expect(pages[0]).toContain('500,00');
+    expect(pages[1]).toContain('maio/2027');
+    expect(pages[1]).not.toContain('Conjunto sem programação');
   });
 
   it('gera o cabeçalho com o nome da obra quando os dados contratuais não foram cadastrados', async () => {
     const doc = await buildSchedulePdfDocument({ ...inputForPdf(), project: { ...project, contractInfo: undefined } });
-    const firstPage = doc.internal.pages[1].join('\n');
+    const [firstPage] = pageContents(doc);
     expect(firstPage).toContain('Palácio Rio Madeira');
     expect(firstPage).not.toMatch(/Contratante:|Contratada:|undefined/);
   });
