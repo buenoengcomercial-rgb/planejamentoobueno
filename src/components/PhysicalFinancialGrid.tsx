@@ -16,7 +16,7 @@ interface Props {
   project: Project;
   measurement: MeasurementWorkspace | null;
   additives: readonly Additive[];
-  onSave?: (id: string, allocations: MonthlyAllocations) => void;
+  onSave?: (id: string, allocations: MonthlyAllocations | null) => void;
 }
 
 function totals(rows: Row[], months: string[]) {
@@ -124,6 +124,15 @@ export default function PhysicalFinancialGrid({ project, measurement, additives,
         <input autoFocus inputMode="decimal" className="rounded border bg-background p-2" value={edit.amount} onChange={event => setEdit({ ...edit, amount: event.target.value })} />
       </label>
       <Button type="submit">Salvar parcela</Button>
+      {selected.manual && onSave && <Button type="button" variant="outline" onClick={() => {
+        if (edit.original !== JSON.stringify(selected.allocations)) {
+          setError('A distribuição mudou. Abra a célula novamente para conferir o valor atual.');
+          return;
+        }
+        onSave(selected.id, null);
+        setEdit(null);
+        setError('');
+      }}>Voltar à sugestão do Gantt</Button>}
       <Button type="button" variant="outline" onClick={() => { setEdit(null); setError(''); }}>Cancelar</Button>
     </form>}
     <div className="max-h-[70vh] overflow-auto rounded-md border" tabIndex={0} role="region" aria-label="Grade de distribuição mensal">

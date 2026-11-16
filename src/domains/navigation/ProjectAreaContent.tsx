@@ -171,7 +171,10 @@ export default function ProjectAreaContent({
           if (JSON.stringify(current) !== JSON.stringify(observed)) {
             throw new Error('A distribuição deste serviço mudou. Confira a versão atual antes de salvar.');
           }
-          return { ...previous, monthlySchedule: { ...previous.monthlySchedule, [serviceId]: { allocations } } };
+          const monthlySchedule = { ...previous.monthlySchedule };
+          if (allocations) monthlySchedule[serviceId] = { allocations };
+          else delete monthlySchedule[serviceId];
+          return { ...previous, monthlySchedule: Object.keys(monthlySchedule).length ? monthlySchedule : undefined };
         }) : undefined}
         project={project}
         userId={userId}

@@ -15,7 +15,7 @@ interface Props {
   project: Project;
   mode?: 'gantt' | 'physicalFinancial';
   openPhysicalFinancial?: () => void;
-  saveMonthlyAllocation?: (serviceId: string, allocations: Record<string, number>) => void;
+  saveMonthlyAllocation?: (serviceId: string, allocations: Record<string, number> | null) => void;
   userId?: string;
   independentMeasurementConfirmed: boolean;
   openMeasurement?: () => void;
