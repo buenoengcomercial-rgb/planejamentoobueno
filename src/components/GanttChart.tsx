@@ -1,3 +1,5 @@
+import { releaseAxis } from '@/lib/scheduleReleaseMath';
+import { monthlyPercentage, monthlyPeriodLabel, type buildPhysicalFinancialSchedule } from '@/lib/physicalFinancialSchedule';
 import { dependencyLag, formatDependencyNumber, parseDependencyNumbers } from '@/lib/dependencyLag';
 import { Project, Task, ViewMode, DependencyType, TaskDependency } from '@/types/project';
 import type { AuditUserInfo } from '@/lib/audit';
@@ -57,6 +59,9 @@ interface GanttChartProps {
   suspensionMap?: Record<string, AdditiveScheduleSuspensionMeta>;
   onToggleSuspension?: (taskId: string, checked: boolean) => void;
   onEditSuspension?: (taskId: string) => void;
+  monthlyRows?: ReadonlyMap<string, ReturnType<typeof buildPhysicalFinancialSchedule>['rows'][number]>;
+  measurementValues?: Readonly<Record<string, number>>;
+  onEditMonthly?: (id: string) => void;
   financialForecastNode?: React.ReactNode | null;
   monthlyFinancialForecast?: Array<{
     key: string;
@@ -93,6 +98,7 @@ export default function GanttChart({
   onEditSuspension,
   financialForecastNode,
   monthlyFinancialForecast,
+  monthlyRows, measurementValues, onEditMonthly,
   lockedTaskLabels = {},
   displayOnlyTaskIds,
   contractedQuantityAdjustments,
@@ -407,21 +413,32 @@ export default function GanttChart({
   );
   const workStart = useMemo(() => parseISODateLocal(workStartDate), [workStartDate]);
   const projectStart = useMemo(
-    () => new Date(Math.min(scheduledProjectStart.getTime(), workStart.getTime())),
-    [scheduledProjectStart, workStart],
+    () => {
+      const fiscalMonths = monthlyRows ? [...monthlyRows.values()].flatMap(row => Object.keys(row.measured)).sort() : [];
+      const first = fiscalMonths[0] ? parseISODateLocal(`${fiscalMonths[0]}-01`).getTime() : Infinity;
+      const date = new Date(Math.min(scheduledProjectStart.getTime(), workStart.getTime(), first));
+      return viewMode === 'months' && monthlyRows ? new Date(date.getFullYear(), date.getMonth(), 1) : date;
+    },
+    [scheduledProjectStart, workStart, monthlyRows, viewMode],
   );
   const scheduledProjectEnd = useMemo(
     () => scheduledTasks.length
-      ? new Date(Math.max(...scheduledTasks.map(t => addDays(parseISODateLocal(t.startDate), Math.max(0, t.duration - 1)).getTime())))
+      ? new Date(Math.max(...scheduledTasks.map(t => parseISODateLocal(t.operationalReschedule?.monthlySegments?.at(-1)?.endDate ?? toISODateLocal(addDays(parseISODateLocal(t.startDate), Math.max(0, t.duration - 1)))).getTime())))
       : parseISODateLocal(project.endDate || project.startDate),
     [project.endDate, project.startDate, scheduledTasks],
   );
   const projectEnd = useMemo(
-    () => new Date(Math.max(scheduledProjectEnd.getTime(), workStart.getTime())),
-    [scheduledProjectEnd, workStart],
+    () => {
+      const lastFiscal = Object.keys(measurementValues ?? {}).sort().at(-1);
+      const fiscalEnd = lastFiscal ? parseISODateLocal(`${lastFiscal}-01`).getTime() : 0;
+      const date = new Date(Math.max(scheduledProjectEnd.getTime(), workStart.getTime(),
+        monthlyRows && project.endDate ? parseISODateLocal(project.endDate).getTime() : 0, fiscalEnd));
+      return viewMode === 'months' && monthlyRows ? new Date(date.getFullYear(), date.getMonth() + 1, 0) : date;
+    },
+    [scheduledProjectEnd, workStart, monthlyRows, project.endDate, measurementValues, viewMode],
   );
   const totalDays = useMemo(() => diffDays(projectStart, projectEnd) + 10, [projectStart, projectEnd]);
-  const dayWidth = DAY_WIDTH[viewMode];
+  const dayWidth = viewMode === 'months' && monthlyRows ? 5 : DAY_WIDTH[viewMode];
   const taskRowHeight = context === 'additive-preview'
     ? (density === 'compact' ? 34 : 40)
     : density === 'compact' ? 24 : ROW_HEIGHT;
@@ -474,7 +491,7 @@ export default function GanttChart({
     return getChapterTasks(project, phase.id).filter(task => visibleTaskIds.has(task.id) && !isStatusOnlyTask(task.id));
   }, [isStatusOnlyTask, project, visibleTaskIds]);
   const operationalTaskEnd = useCallback((task: Task) => parseISODateLocal(
-    operationalEndDate(task.startDate, task.duration, obraConfig),
+    task.operationalReschedule?.monthlySegments?.at(-1)?.endDate ?? operationalEndDate(task.startDate, task.duration, obraConfig),
   ), [obraConfig]);
 
   // Chapter business days
@@ -595,12 +612,14 @@ export default function GanttChart({
     return map;
   }, [displayPhases, collapsedPhases, getTaskRowHeight, getVisiblePhaseTasks, phaseHeaderHeight, taskSubHeaderHeight]);
   const violationMap = useMemo(() => {
+    const axis = monthlyRows && project.scheduleCalendar ? releaseAxis(project) : undefined;
+    const byId = new Map(tasks.map(task => [task.id, task]));
     const map = new Map<string, Set<string>>();
     tasks.forEach(task => {
       if (isStatusOnlyTask(task.id)) return;
       const details = task.dependencyDetails || [];
       details.forEach(dep => {
-        const pred = tasks.find(t => t.id === dep.taskId);
+        const pred = byId.get(dep.taskId);
         if (!pred || isStatusOnlyTask(pred.id)) return;
         const predStart = parseISODateLocal(pred.startDate);
         const predEnd = addDays(predStart, pred.duration);
@@ -613,14 +632,14 @@ export default function GanttChart({
           case 'TT': violated = taskEnd < predEnd; break;
           case 'IT': violated = taskEnd < predStart; break;
         }
-        if (violated) {
+        if (axis ? !axis.dependencySatisfied(pred, task, dep) : violated) {
           if (!map.has(task.id)) map.set(task.id, new Set());
           map.get(task.id)!.add(dep.taskId);
         }
       });
     });
     return map;
-  }, [isStatusOnlyTask, tasks]);
+  }, [isStatusOnlyTask, tasks, project, monthlyRows]);
 
   const weekDates = useMemo(() => {
     const dates: { day: number; month: number; year: number; offset: number; width: number }[] = [];
@@ -680,7 +699,8 @@ export default function GanttChart({
         const visibleDays = diffDays(current, visibleEnd) + 1;
         dates.push({
           key: `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`,
-          label: current.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
+          label: monthlyRows ? monthlyPeriodLabel(toISODateLocal(current).slice(0, 7))
+            : current.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }),
           offset: monthStart * dayWidth,
           width: visibleDays * dayWidth,
         });
@@ -688,11 +708,11 @@ export default function GanttChart({
       }
     }
     return dates;
-  }, [viewMode, totalDays, dayWidth]);
+  }, [viewMode, totalDays, dayWidth, projectStart, projectEnd, monthlyRows]);
 
   const getBarStyle = (task: Task) => {
     const start = diffDays(projectStart, parseISODateLocal(task.startDate));
-    const endISO = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig);
+    const endISO = task.operationalReschedule?.monthlySegments?.at(-1)?.endDate ?? getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig);
     const endOffset = diffDays(projectStart, parseISODateLocal(endISO));
     const width = task.scheduleDisplayKind === 'release' ? 10 : (endOffset - start + 1) * dayWidth;
     const isDelayed = addDays(parseISODateLocal(task.startDate), Math.max(0, task.duration - 1)) < today && task.percentComplete < 100;
@@ -1183,7 +1203,7 @@ export default function GanttChart({
   const showMonthlyFinancialHeader = financialByMonth.size > 0 && viewMode !== 'days';
   const headerHeightPx = viewMode === 'weeks'
     ? (showMonthlyFinancialHeader ? 68 : 52)
-    : viewMode === 'months' && showMonthlyFinancialHeader ? 54 : 32;
+    : viewMode === 'months' && (showMonthlyFinancialHeader || measurementValues) ? 54 : 32;
   const formatHeaderMoney = (value: number) => value.toLocaleString('pt-BR', {
     style: 'currency', currency: 'BRL', minimumFractionDigits: 2, maximumFractionDigits: 2,
   });
@@ -2117,7 +2137,7 @@ export default function GanttChart({
                           const suspension = suspensionMap[task.id];
                           const statusOnly = isStatusOnlyTask(task.id);
                           const editablePlanningDate = context === 'additive-preview' && allowSuspendedDateEditing && statusOnly && !readOnly;
-                          const endDate = getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig);
+                          const endDate = task.operationalReschedule?.monthlySegments?.at(-1)?.endDate ?? getWorkEndDate(task.startDate, task.duration, obraConfig.trabalhaSabado, obraConfig);
                           const taskNum = taskNumbering.get(task.id) || 0;
                           const violations = statusOnly ? [] : getViolations(task);
                           const hasViolation = violations.length > 0;
@@ -2290,7 +2310,13 @@ export default function GanttChart({
                                       Reprogramada: {task.operationalReschedule.startDate} → {task.operationalReschedule.endDate}
                                     </p>
                                   )}
-                                  {(canRequestReschedule || canApproveReschedule) && !scheduleLocked && (
+                                  {onEditMonthly && !readOnly && !statusOnly && (monthlyRows?.get(task.id)?.balance ?? 0) > 0 && (
+                                    <button type="button" className="absolute right-0 top-0 rounded p-0.5 text-blue-700 hover:bg-blue-100"
+                                      onClick={() => onEditMonthly(task.id)} aria-label={`Programar parcelas de ${task.name}`} title="Programar parcelas mensais">
+                                      <CalendarClock className="h-3 w-3" />
+                                    </button>
+                                  )}
+                                  {!onEditMonthly && (canRequestReschedule || canApproveReschedule) && !scheduleLocked && (
                                     <button
                                       type="button"
                                       className="absolute right-0 top-0 rounded p-0.5 text-violet-700 hover:bg-violet-100"
@@ -2599,6 +2625,9 @@ export default function GanttChart({
                         style={{ left: d.offset, width: d.width }}
                       >
                         <span>{d.label}</span>
+                        {d.key && measurementValues && <span className="mt-1 whitespace-nowrap font-semibold text-emerald-700" title="Valor da medição">
+                          {measurementValues[d.key] === undefined ? '—' : formatHeaderMoney(measurementValues[d.key])}
+                        </span>}
                         {d.key && financialByMonth.get(d.key) && (
                           <span className="mt-1 flex max-w-full flex-col items-center text-[8px] leading-tight tabular-nums">
                             <span className="max-w-full truncate text-emerald-700" title={`Contratados liberados: ${formatHeaderMoney(financialByMonth.get(d.key)!.contractedReleased)}`}>
@@ -2851,7 +2880,44 @@ export default function GanttChart({
                                 className={`border-b border-border relative ${idx % 2 === 0 ? 'bg-card' : 'bg-muted/10'}`}
                                 style={{ height: rowHeight }}
                               >
-                                {/* Barra planejada = task.startDate + task.duration (Manual ou RUP) */}
+                                {!statusOnly && monthlyRows?.get(task.id) && Object.entries(monthlyRows.get(task.id)!.measured).map(([month, cell]) => {
+                                  const row = monthlyRows.get(task.id)!;
+                                  const begin = parseISODateLocal(`${month}-01`);
+                                  const next = new Date(begin.getFullYear(), begin.getMonth() + 1, 1);
+                                  const left = Math.max(0, diffDays(projectStart, begin) * dayWidth);
+                                  const right = diffDays(projectStart, next) * dayWidth;
+                                  if (right <= left) return null;
+                                  const label = row.quantity ? monthlyPercentage(cell.quantity / row.quantity) : '—';
+                                  return <div key={month} data-testid={`gantt-measured-${task.id}-${month}`}
+                                    className="absolute top-0.5 z-10 flex h-3.5 items-center justify-center overflow-hidden rounded bg-emerald-200 text-[9px] font-semibold text-emerald-950"
+                                    style={{ left: left + 1, width: Math.max(1, right - left - 2) }}
+                                    title={`${monthlyPeriodLabel(month)} · ${label} medido · ${cell.evidence?.join(' / ') ?? ''}`}>{label}</div>;
+                                })}
+                                {!statusOnly && task.operationalReschedule?.monthlySegments?.length && (() => {
+                                  const segments = task.operationalReschedule.monthlySegments;
+                                  const row = monthlyRows?.get(task.id);
+                                  const portions = new Map<string, { start: Date; end: Date; quantity: number; dates: string[] }>();
+                                  for (const segment of segments) {
+                                    const key = viewMode === 'months' ? segment.startDate.slice(0, 7) : segment.startDate;
+                                    const start = parseISODateLocal(viewMode === 'months' ? `${key}-01` : segment.startDate);
+                                    const end = viewMode === 'months' ? new Date(start.getFullYear(), start.getMonth() + 1, 0) : parseISODateLocal(segment.endDate);
+                                    const portion = portions.get(key) ?? { start, end, quantity: 0, dates: [] };
+                                    portion.quantity += segment.quantity;
+                                    portion.dates.push(`${formatDateFull(segment.startDate)} a ${formatDateFull(segment.endDate)}`);
+                                    portions.set(key, portion);
+                                  }
+                                  return [...portions].map(([key, portion]) => {
+                                    const label = row?.quantity ? monthlyPercentage(portion.quantity / row.quantity) : '';
+                                    const left = diffDays(projectStart, portion.start) * dayWidth;
+                                    const width = (diffDays(portion.start, portion.end) + 1) * dayWidth;
+                                    return <button key={key} type="button" data-testid={`gantt-planned-${task.id}-${key}`}
+                                      disabled={readOnly || !onEditMonthly} onClick={() => onEditMonthly?.(task.id)}
+                                      className="absolute bottom-0.5 z-10 h-3.5 overflow-hidden rounded bg-blue-600 px-0.5 text-[9px] font-semibold text-white"
+                                      style={{ left: left + 1, width: Math.max(1, width - 2) }}
+                                      title={`${label} planejado · ${portion.dates.join(' / ')}`}>{label}</button>;
+                                  });
+                                })()}
+                                {/* Ordinary plan remains draggable outside monthly schedules. */}
                                 {statusOnly || proposedLabelOnly ? (
                                   <div
                                     data-testid={proposedLabelOnly
@@ -2873,7 +2939,7 @@ export default function GanttChart({
                                         ? 'Item suprimido'
                                         : 'Aguardando aditivo'}
                                   </div>
-                                ) : (() => {
+                                ) : task.operationalReschedule?.monthlySegments?.length || (monthlyRows?.get(task.id)?.balance === 0 && Object.keys(monthlyRows.get(task.id)!.measured).length) ? null : (() => {
                                   const barLeft = currentLeft;
                                   const barWidth = currentWidth;
                                   return (
@@ -2889,8 +2955,8 @@ export default function GanttChart({
                                   style={{
                                     left: barLeft,
                                     width: barWidth,
-                                    top: (rowHeight - (density === 'compact' ? 12 : 20)) / 2,
-                                    height: density === 'compact' ? 12 : 20,
+                                    top: monthlyRows?.get(task.id) && Object.keys(monthlyRows.get(task.id)!.measured).length ? rowHeight - 13 : (rowHeight - (density === 'compact' ? 12 : 20)) / 2,
+                                    height: monthlyRows?.get(task.id) && Object.keys(monthlyRows.get(task.id)!.measured).length ? 11 : density === 'compact' ? 12 : 20,
                                     borderRadius: task.scheduleDisplayKind === 'release' ? 0 : 6,
                                     transform: task.scheduleDisplayKind === 'release' ? 'rotate(45deg)' : undefined,
                                     background: (() => {

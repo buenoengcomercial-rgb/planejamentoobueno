@@ -54,7 +54,9 @@ export function calculateClosingCPM(project: Project): Project {
   const offsets = new Map<string, number>();
   let count = 0;
   const date = parseScheduleDate(first);
-  const last = [...active.map(t => operationalEndDate(t.startDate, t.duration, cal)), deadline].sort().at(-1)!;
+  const finishOf = (task: Task) => task.operationalReschedule?.monthlySegments?.at(-1)?.endDate
+    ?? operationalEndDate(task.startDate, task.duration, cal);
+  const last = [...active.map(finishOf), deadline].sort().at(-1)!;
   for (let n = 0; n < 10000 && scheduleDateISO(date) <= last; n++, date.setDate(date.getDate() + 1)) {
     offsets.set(scheduleDateISO(date), count);
     count += scheduleWorkdayWeight(date, cal);
@@ -63,7 +65,7 @@ export function calculateClosingCPM(project: Project): Project {
   const map = new Map(active.map(t => [t.id, t]));
   const span = (t: Task) => {
     if (t.duration === 0) return 0;
-    const finish = operationalEndDate(t.startDate, t.duration, cal);
+    const finish = finishOf(t);
     return offsets.get(finish)! + scheduleWorkdayWeight(parseScheduleDate(finish), cal) - offsets.get(t.startDate)!;
   };
   const successors = new Map<string, Array<{ id: string; offset: number }>>();

@@ -73,7 +73,7 @@ it('mostra mês por extenso na grade e na edição da parcela', async () => {
   const saveMonthlyAllocation = vi.fn();
   render(<MonthlyExecutionSchedule project={project} userId="user" mode="physicalFinancial" independentMeasurementConfirmed={false}
     renderGantt={() => null} saveMonthlyAllocation={saveMonthlyAllocation} />);
-  expect(await screen.findByRole('columnheader', { name: 'novembro/2026' })).toBeInTheDocument();
+  expect(await screen.findByRole('columnheader', { name: /novembro\/2026/ })).toBeInTheDocument();
   expect(screen.getAllByRole('button', { name: /Editar/ }).filter(button => button.textContent?.includes('%')).every(button => /,\d{2}%/.test(button.textContent ?? ''))).toBe(true);
   fireEvent.click(screen.getAllByRole('button', { name: /Editar.*novembro\/2026/ })[0]);
   expect(screen.getByRole('option', { name: 'novembro/2026' })).toBeInTheDocument();

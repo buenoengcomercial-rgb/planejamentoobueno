@@ -1,5 +1,8 @@
 import { render } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
+import { prepareIncorporation } from '@/lib/measurementIncorporation';
+import { newMeasuredRow, monthlyTotal } from '@/lib/measurementWorkspace';
+import { getAllTasks } from '@/data/sampleProject';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
 import OperationalGanttChart from './OperationalGanttChart';
 import type { ComponentProps } from 'react';
@@ -98,4 +101,20 @@ it('exibe a quantidade aditivada sem gravá-la ao editar uma data', () => {
   captured.props!.onProjectChange(updated);
   expect(saved.phases[1].tasks[0]).toEqual({ ...task, startDate: '2026-11-13' });
   expect(saved.measurements).toBe(project.measurements);
+});
+
+
+it('reúne a execução e o saldo na mesma linha com o total fiscal da competência', () => {
+  const { project, plans } = measurementFixture();
+  project.scheduleCalendar = { uf: 'RO', municipio: 'Porto Velho', trabalhaSabado: false, jornadaDiaria: 8 };
+  const { candidate } = prepareIncorporation({ project, plans, drafts: [], id: 'test', createdAt: '', manifest: { dataHash: '', files: [] } });
+  candidate.entries = [{ projectId: project.id, serviceId: 'detectors', measurementId: 'm1',
+    rows: [{ ...newMeasuredRow('measured'), multiplier: 200 }] }];
+  render(<OperationalGanttChart project={project} confirmedMeasurement={candidate} monthlyPresentation onProjectChange={() => {}} />);
+  const visible = captured.props!;
+  const rows = getAllTasks(visible.project);
+  expect(rows.filter(task => task.id === 'detectors')).toHaveLength(1);
+  expect(rows.some(task => task.id.startsWith('measured:'))).toBe(false);
+  expect(visible.monthlyRows?.get('detectors')?.measured['2026-09']).toMatchObject({ quantity: 200, evidence: ['1ª medição'] });
+  expect(visible.measurementValues?.['2026-09']).toBe(monthlyTotal(candidate, 'm1'));
 });

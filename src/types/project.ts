@@ -326,7 +326,17 @@ export interface MeasuredScheduleReference {
 export interface ScheduleReleaseMilestone {
   id: string; name: string; startDate: string; phase: string; dependencies: TaskDependency[];
 }
+export interface OperationalScheduleSegment {
+  startDate: string;
+  endDate: string;
+  duration: number;
+  quantity: number;
+}
+
 export interface TaskOperationalReschedule {
+  monthlySegments?: OperationalScheduleSegment[];
+  /** Original operational lower bound, used when removing a monthly allocation. */
+  monthlyOriginalStart?: string;
   executionRevision?: { version: 1; approvedAt: string; approvedBy?: string; references: MeasuredScheduleReference[]; completed: boolean; originalDependencies: TaskDependency[]; milestones: ScheduleReleaseMilestone[] };
   closingActivities?: ClosingScheduleActivity[];
   closingDeadline?: string;
