@@ -1280,18 +1280,21 @@ export type Database = {
       }
       warehouse_project_state: {
         Row: {
+          independent: boolean
           project_id: string
           state_json: Json
           warehouse_updated_at: string
           warehouse_version: number
         }
         Insert: {
+          independent?: boolean
           project_id: string
           state_json?: Json
           warehouse_updated_at?: string
           warehouse_version?: number
         }
         Update: {
+          independent?: boolean
           project_id?: string
           state_json?: Json
           warehouse_updated_at?: string
@@ -1410,6 +1413,10 @@ export type Database = {
       check_warehouse_withdrawal_availability: {
         Args: { p_items: Json; p_project_id: string }
         Returns: Json
+      }
+      clear_warehouse_owner: {
+        Args: { p_project_id: string }
+        Returns: undefined
       }
       checkpoint_measurement_workspace:
         | { Args: { p_project_id: string }; Returns: boolean }

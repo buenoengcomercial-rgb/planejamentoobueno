@@ -125,6 +125,22 @@ describe('criação inicial segura da obra', () => {
     expect(mocks.from).toHaveBeenCalledTimes(1);
   });
 
+  it('inclui o estoque no backup completo quando falta a cópia antiga na obra', async () => {
+    const warehouseState = { state_json: { receivers: [{ name: 'Atual' }] }, warehouse_version: 7, warehouse_updated_at: 'estoque' };
+    mocks.from.mockReturnValueOnce(queryBuilder({ data: {
+      id: 'p', name: 'Obra', updated_at: 'geral', data_json: { phases: [] },
+      warehouse_project_state: warehouseState,
+    }, error: null })).mockReturnValueOnce(queryBuilder({ data: {
+      id: 'p', updated_at: 'geral', warehouse_project_state: { ...warehouseState, independent: true },
+    }, error: null }));
+    const record = await loadCloudProjectRecord('p', { strict: true });
+    expect(record).toMatchObject({
+      warehouseIndependent: true, warehouseVersion: 7,
+      project: { warehouse: { receivers: [{ name: 'Atual' }] } },
+    });
+    expect(mocks.from).toHaveBeenCalledTimes(2);
+  });
+
   it('retries an opening revision race and adopts only the stable read', async () => {
     const response=(version:string)=>queryBuilder({data:{id:'p',name:'Obra',data_json:{phases:[]},updated_at:version},error:null});
     mocks.from.mockReturnValueOnce(response('v1')).mockReturnValueOnce(response('v2'))

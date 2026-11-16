@@ -39,6 +39,7 @@ interface WarehouseOperationResult {
   projectUpdatedAt?: string;
   warehouseUpdatedAt?: string;
   warehouseVersion?: number;
+  warehouseIndependent?: boolean;
   deleted?: boolean;
 }
 
@@ -54,6 +55,7 @@ export interface WarehouseCloudCommitResult {
   projectUpdatedAt: string;
   warehouseUpdatedAt: string;
   warehouseVersion: number;
+  warehouseIndependent?: boolean;
   acknowledgement: WarehouseOperationAcknowledgement;
   /** Compatibilidade para retiradas antigas que publicavam um bloco no Diário. */
   dailyReportChanges: WarehouseDailyReportChange[];
@@ -377,6 +379,7 @@ export async function commitWarehouseOperation(
     committedAt: result.committedAt,
     projectUpdatedAt: result.projectUpdatedAt,
     warehouseUpdatedAt: result.warehouseUpdatedAt,
+    ...(result.warehouseIndependent === true && { warehouseIndependent: true }),
     warehouseVersion: result.warehouseVersion!,
     acknowledgement: {
       requisitionId: operation.requisitionId,

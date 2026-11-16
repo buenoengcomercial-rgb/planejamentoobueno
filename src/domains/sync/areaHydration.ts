@@ -11,7 +11,7 @@ import {
   hydrateProjectFromCloud,
   mergeHydratedProjectCollections,
 } from '@/lib/projectSync';
-import { normalizeProjectCollections, type ProjectCollectionKey } from '@/lib/projectDataScope';
+import { normalizeProjectCollections, WAREHOUSE_REMOTE_SYNC_COLLECTIONS, type ProjectCollectionKey } from '@/lib/projectDataScope';
 import { needsWarehouseProjectState, readWarehouseProjectState } from '@/lib/warehouseProjectState';
 
 const PRODUCTION_COLLECTIONS: readonly ProjectCollectionKey[] = ['taskDailyLogs', 'eapChapters', 'tasks'];
@@ -61,7 +61,9 @@ export async function hydrateAreaCollections(options: HydrationOptions): Promise
   const hydrated = await hydrateProjectFromCloud(base, { collections: [...collections], strict: true });
   try {
     const afterLoad = await getCloudProjectVersion(projectId);
-    if (!afterLoad || afterLoad.updatedAt !== beforeLoad.updatedAt
+    const independentWarehouseOnly = usesWarehouse && afterLoad?.warehouseIndependent
+      && collections.every(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection));
+    if (!afterLoad || (!independentWarehouseOnly && afterLoad.updatedAt !== beforeLoad.updatedAt)
       || (usesWarehouse && beforeLoad.warehouseVersion !== afterLoad.warehouseVersion)
       || (warehouse && warehouse.version !== afterLoad.warehouseVersion)) {
       throw new Error('A obra mudou durante o carregamento. Atualize a área antes de editar.');
@@ -75,21 +77,12 @@ export async function hydrateAreaCollections(options: HydrationOptions): Promise
       discardHydratedProjectCollections(hydrated);
       return null;
     }
-    const withWarehouseState = (project: Project): Project => warehouse ? {
-      ...project,
-      warehouse: {
-        ...warehouse.warehouse,
-        movements: project.warehouse?.movements ?? [],
-        requisitions: project.warehouse?.requisitions ?? [],
-        custodyTerms: project.warehouse?.custodyTerms ?? [],
-      },
-    } : project;
-    const cloudMerged = mergeHydratedProjectCollections(withWarehouseState(latest), hydrated, collections);
+    const cloudMerged = mergeHydratedProjectCollections(latest, hydrated, collections);
     let savedCloudMerged = cloudMerged;
     const savedJson = options.savedProjectJson();
     if (savedJson) {
       try {
-        savedCloudMerged = mergeHydratedProjectCollections(withWarehouseState(JSON.parse(savedJson) as Project), hydrated, collections);
+        savedCloudMerged = mergeHydratedProjectCollections(JSON.parse(savedJson) as Project, hydrated, collections);
       } catch {
         savedCloudMerged = cloudMerged;
       }

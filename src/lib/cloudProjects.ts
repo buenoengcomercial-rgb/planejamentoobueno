@@ -22,10 +22,13 @@ import {
   verifyProductionDeletions,
   acknowledgeExistingProjectAudits,
 } from '@/lib/projectSync';
-import type { ProjectCollectionKey } from '@/lib/projectDataScope';
+import { WAREHOUSE_REMOTE_SYNC_COLLECTIONS, type ProjectCollectionKey } from '@/lib/projectDataScope';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import { prepareWarehouseTestReset } from '@/lib/warehouseReset';
-import { needsWarehouseProjectState, readVersionedProjectRow, readWarehouseProjectState } from '@/lib/warehouseProjectState';
+import {
+  missingWarehouseStateRelationship, needsWarehouseProjectState, readVersionedProjectRow,
+  readWarehouseProjectState, warehouseProjectStateFromRow,
+} from '@/lib/warehouseProjectState';
 
 export interface CloudProjectMeta {
   id: string;
@@ -39,6 +42,7 @@ export interface CloudProjectRecord {
   updatedAt: string;
   warehouseVersion: number | null;
   warehouseUpdatedAt: string | null;
+  warehouseIndependent?: boolean;
   repairApplied?: boolean;
   loadedCollections: ProjectCollectionKey[];
 }
@@ -74,6 +78,7 @@ export interface CloudProjectVersion {
   updatedAt: string;
   warehouseVersion: number | null;
   warehouseUpdatedAt: string | null;
+  warehouseIndependent?: boolean;
 }
 
 export class CloudProjectConflictError extends Error {
@@ -147,6 +152,7 @@ export async function getCloudProjectVersion(id: string): Promise<CloudProjectVe
     updatedAt: current.data.updated_at,
     warehouseVersion: current.data.warehouse_version,
     warehouseUpdatedAt: current.data.warehouse_updated_at,
+    ...('independent' in current.data && current.data.independent === true && { warehouseIndependent: true }),
   };
 }
 
@@ -154,11 +160,19 @@ export async function loadCloudProjectRecord(
   id: string,
   options: CloudProjectLoadOptions = {},
 ): Promise<CloudProjectRecord | null> {
-  const current = await withReadDeadline(supabase
+  const scoped = () => withReadDeadline(supabase
     .from('projects')
     .select('id, name, data_json, updated_at, warehouse_version, warehouse_updated_at')
     .eq('id', id)
     .maybeSingle());
+  // Backups and duplications must include the separate catalog even for a
+  // project whose original JSON never contained a warehouse.
+  const complete = options.collections === undefined;
+  const projected = complete ? await withReadDeadline(supabase
+    .from('projects')
+    .select('id, name, data_json, updated_at, warehouse_version, warehouse_updated_at, warehouse_project_state(state_json, warehouse_version, warehouse_updated_at)')
+    .eq('id', id).maybeSingle()) : null;
+  const current = !projected || missingWarehouseStateRelationship(projected.error) ? await scoped() : projected;
   if (current.error && !isMissingWarehouseVersionColumn(current.error)) throw current.error;
   let data = current.data;
   let warehouseVersion: number | null = current.data?.warehouse_version ?? null;
@@ -173,16 +187,19 @@ export async function loadCloudProjectRecord(
   if (!data) return null;
   const proj = (data.data_json ?? {}) as unknown as Project;
   let base: Project = { ...proj, id: data.id, name: data.name };
-  const shadow = (needsWarehouseProjectState(options.collections)
-    || (options.collections === undefined && !!base.warehouse))
-    ? await readWarehouseProjectState(base)
-    : null;
+  const joined = projected?.data?.warehouse_project_state;
+  const shadow = joined ? warehouseProjectStateFromRow(base, joined)
+    : needsWarehouseProjectState(options.collections) || (complete && (!!base.warehouse || joined === null))
+      ? await readWarehouseProjectState(base)
+      : null;
   if (shadow) base = { ...base, warehouse: shadow.warehouse };
   // Hidrata apenas as coleções necessárias para a rota atual. Sem escopo
   // explícito, mantém o carregamento completo usado por importação e backup.
   const hydrated = await hydrateProjectFromCloud(base, options);
   const versionAfter = await getCloudProjectVersion(id);
-  if (!versionAfter || versionAfter.updatedAt !== data.updated_at
+  const independentWarehouseOnly = !!versionAfter?.warehouseIndependent && !!options.collections?.length
+    && options.collections.every(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection));
+  if (!versionAfter || (!independentWarehouseOnly && versionAfter.updatedAt !== data.updated_at)
     || (shadow && versionAfter.warehouseVersion !== shadow.version)) {
     discardHydratedProjectCollections(hydrated);
     throw new CloudProjectConflictError();
@@ -200,6 +217,7 @@ export async function loadCloudProjectRecord(
     updatedAt: data.updated_at,
     warehouseVersion: shadow?.version ?? warehouseVersion,
     warehouseUpdatedAt: shadow?.updatedAt ?? warehouseUpdatedAt,
+    ...(versionAfter.warehouseIndependent && { warehouseIndependent: true }),
     repairApplied: repaired.changed,
     loadedCollections,
   };
@@ -496,34 +514,31 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
     throw new Error('Somente o proprietário da organização pode limpar o almoxarifado.');
   }
 
-  // Apaga diretamente as coleções normalizadas (não depende do diff em memória).
-  const tables = [
-    'warehouse_movements',
-    'warehouse_requisitions',
-    'warehouse_custody',
-    'stock_movements',
-    'material_price_history',
-  ] as const;
-  for (const table of tables) {
-    const { error } = await supabase.from(table).delete().eq('project_id', projectId);
-    if (error) throw new Error(`Não foi possível apagar ${table}: ${error.message}`);
-  }
-
-  const current = await loadCloudProjectRecord(projectId, { strict: true, deferSnapshot: true });
-  if (!current) throw new Error('Não foi possível carregar a obra antes da limpeza.');
-  const previousEquipmentIds = new Set((current.project.warehouse?.equipments ?? []).map(equipment => equipment.id));
-  const { project: cleared } = prepareWarehouseTestReset(current.project, {
-    userId: expectedUserId,
-    userEmail: currentUserData.user.email,
-  });
-
-  // Sem trava otimista: a limpeza é uma operação administrativa deliberada.
+  const before = await loadCloudProjectRecord(projectId, { strict: true, deferSnapshot: true });
+  if (!before) throw new Error('Não foi possível carregar a obra antes da limpeza.');
+  const previousEquipmentIds = new Set((before.project.warehouse?.equipments ?? []).map(equipment => equipment.id));
+  const independent = before.warehouseIndependent;
+  discardCloudProjectRecord(before);
   try {
-    // A manutenção adotará esta fotografia completa exclusivamente durante a
-    // gravação. Em qualquer falha, o snapshot é invalidado e um autosave comum
-    // será bloqueado até uma nova hidratação da UI.
-    confirmCloudProjectRecord(current);
-    await upsertCloudProject(cleared, projectAccess.data.organization_id);
+    if (independent) {
+      const { error } = await supabase.rpc('clear_warehouse_owner', { p_project_id: projectId });
+      if (error) throw new Error(error.message);
+    } else {
+      const tables = [
+        'warehouse_movements', 'warehouse_requisitions', 'warehouse_custody', 'stock_movements', 'material_price_history',
+      ] as const;
+      for (const table of tables) {
+        const { error } = await supabase.from(table).delete().eq('project_id', projectId);
+        if (error) throw new Error(`Não foi possível apagar ${table}: ${error.message}`);
+      }
+      const current = await loadCloudProjectRecord(projectId, { strict: true, deferSnapshot: true });
+      if (!current) throw new Error('Não foi possível conferir a obra antes de limpar o cadastro.');
+      const { project: cleared } = prepareWarehouseTestReset(current.project, {
+        userId: expectedUserId, userEmail: currentUserData.user.email,
+      });
+      confirmCloudProjectRecord(current);
+      await upsertCloudProject(cleared, projectAccess.data.organization_id);
+    }
   } catch (error) {
     clearCloudSnapshot(projectId);
     throw new Error(`Não foi possível salvar a limpeza: ${error instanceof Error ? error.message : String(error)}`);

@@ -553,15 +553,17 @@ export default function Index() {
     clearPendingRealtimeCollections,
     hasLocalCollectionConflict,
     notifyRemoteDirtyChange,
-    apply: ({ record, project: rebasedCurrent, confirmedBaselineJson, hasPendingLocalChanges }) => {
+    apply: ({ record, project: rebasedCurrent, confirmedBaselineJson, hasPendingLocalChanges, warehouseOnly }) => {
       lastSavedProjectJsonRef.current = confirmedBaselineJson;
-      currentProjectUpdatedAtRef.current = record.updatedAt;
       currentWarehouseVersionRef.current = record.warehouseVersion;
       lastObservedWarehouseVersionRef.current = record.warehouseVersion;
-      setCurrentProjectUpdatedAt(record.updatedAt);
+      if (!warehouseOnly) {
+        currentProjectUpdatedAtRef.current = record.updatedAt;
+        setCurrentProjectUpdatedAt(record.updatedAt);
+      }
       setRemoteUpdateAt(new Date().toISOString());
       // A pending local edit must still be saved after an unrelated remote update.
-      if (!hasPendingLocalChanges) setLastCloudConfirmedAt(record.updatedAt);
+      if (!hasPendingLocalChanges) setLastCloudConfirmedAt(warehouseOnly ? record.warehouseUpdatedAt : record.updatedAt);
       skipNextAutoSaveRef.current = !hasPendingLocalChanges;
       rawProjectRef.current = rebasedCurrent;
       setRawProject(rebasedCurrent);
@@ -1175,6 +1177,7 @@ export default function Index() {
       ownRowsRef: ownWarehouseRealtimeRowsRef,
       pendingCollectionsRef: pendingRealtimeCollectionsRef,
       currentUpdatedAt: () => currentProjectUpdatedAtRef.current,
+      currentWarehouseVersion: () => lastObservedWarehouseVersionRef.current,
       onDailyReport: report => refreshDailyReportFromRealtimeRef.current(report),
       onRefresh: sources => { void refreshProjectFromRealtimeRef.current(sources); },
       onConnected: () => { void checkRemoteProjectVersionRef.current(); },

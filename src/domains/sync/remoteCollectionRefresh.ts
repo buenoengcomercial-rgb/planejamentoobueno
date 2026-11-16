@@ -29,6 +29,7 @@ export interface RemoteCollectionRefreshContext {
     project: Project;
     confirmedBaselineJson: string;
     hasPendingLocalChanges: boolean;
+    warehouseOnly?: boolean;
   }) => void;
 }
 
@@ -72,9 +73,12 @@ export async function refreshRemoteProjectCollections(
     if (!record) return null;
 
     const latest = context.currentProject();
+    const warehouseOnly = requestedCollections.every(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection));
+    const independentWarehouseOnly = warehouseOnly && record.warehouseIndependent;
     // An outdated response cannot replace a newly opened project or a newer version.
     if (context.isBlocked() || !latest || latest.id !== current.id
-      || record.updatedAt !== remoteVersion.updatedAt) {
+      || (!independentWarehouseOnly && record.updatedAt !== remoteVersion.updatedAt)
+      || (warehouseOnly && record.warehouseVersion !== remoteVersion.warehouseVersion)) {
       discardCloudProjectRecord(record);
       return null;
     }
@@ -86,7 +90,6 @@ export async function refreshRemoteProjectCollections(
     }
     // Warehouse RPCs own their version and are applied as a whole only when no
     // local stock operation is pending. Other domains must compare each row.
-    const warehouseOnly = requestedCollections.every(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection));
     const sameWarehouseCollectionEdited = warehouseOnly && context.hasLocalCollectionConflict(current.id, requestedCollections);
     let rebasedCurrent = warehouseOnly && !sameWarehouseCollectionEdited
       ? mergeHydratedProjectCollections(latest, record.project, requestedCollections)
@@ -98,7 +101,8 @@ export async function refreshRemoteProjectCollections(
       discardCloudProjectRecord(record);
       return null;
     }
-    const remoteMetadataChanged = savedBaseline && hasProjectMetadataChanges(savedBaseline, record.project);
+    const remoteMetadataChanged = savedBaseline && !independentWarehouseOnly
+      && hasProjectMetadataChanges(savedBaseline, record.project);
     if (remoteMetadataChanged) {
       const currentMetadata = mergeProjectMetadataFields(savedBaseline, rebasedCurrent, record.project);
       const retryMetadata = mergeProjectMetadataFields(savedBaseline, rebasedForRetry, record.project);
@@ -121,6 +125,7 @@ export async function refreshRemoteProjectCollections(
     context.clearPendingRealtimeCollections(current.id, requestedCollections);
     context.apply({
       record, project: rebasedCurrent, confirmedBaselineJson,
+      ...(independentWarehouseOnly && { warehouseOnly: true }),
       hasPendingLocalChanges: projectHasLocalChanges(rebasedCurrent, confirmedBaselineJson),
     });
     return rebasedForRetry;

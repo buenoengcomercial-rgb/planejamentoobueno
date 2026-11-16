@@ -74,6 +74,7 @@ export function useProjectRealtimeRefresh({
     const {
       affectedCollections, metadataOnly, requestCollections, activeCollections, inactiveCollections,
     } = planRealtimeProjectRefresh(sources, requiredProjectCollections);
+    const stockSignal = affectedCollections.some(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection));
     if (inactiveCollections.length > 0) markRemoteCollections(current.id, inactiveCollections);
     if (affectedCollections.some(collection =>
       WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection) && activeCollections.includes(collection))) {
@@ -88,7 +89,8 @@ export function useProjectRealtimeRefresh({
       if (remoteVersion && rawProjectRef.current?.id === current.id) {
         currentWarehouseVersionRef.current = remoteVersion.warehouseVersion;
         lastObservedWarehouseVersionRef.current = remoteVersion.warehouseVersion;
-        if (remoteVersion.updatedAt !== currentProjectUpdatedAtRef.current) {
+        const warehouseOnly = stockSignal && remoteVersion.warehouseIndependent && !sources.includes('projects');
+        if (!warehouseOnly && remoteVersion.updatedAt !== currentProjectUpdatedAtRef.current) {
           currentProjectUpdatedAtRef.current = remoteVersion.updatedAt;
           setCurrentProjectUpdatedAt(remoteVersion.updatedAt);
           if (!projectHasLocalChanges(rawProjectRef.current, lastSavedProjectJsonRef.current)) {
@@ -137,11 +139,15 @@ export function useProjectRealtimeRefresh({
       }
       confirmCloudProjectRecord(record);
       lastSavedProjectJsonRef.current = reconciled.confirmedBaselineJson;
-      currentProjectUpdatedAtRef.current = record.updatedAt;
       currentWarehouseVersionRef.current = record.warehouseVersion;
       lastObservedWarehouseVersionRef.current = record.warehouseVersion;
-      setCurrentProjectUpdatedAt(record.updatedAt);
-      if (!reconciled.hasPendingLocalChanges) setLastCloudConfirmedAt(record.updatedAt);
+      const warehouseOnly = record.warehouseIndependent && activeCollections.length > 0
+        && activeCollections.every(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection));
+      if (!warehouseOnly) {
+        currentProjectUpdatedAtRef.current = record.updatedAt;
+        setCurrentProjectUpdatedAt(record.updatedAt);
+      }
+      if (!reconciled.hasPendingLocalChanges) setLastCloudConfirmedAt(warehouseOnly ? record.warehouseUpdatedAt : record.updatedAt);
       clearRemoteCollections(current.id, activeCollections);
       setRemoteUpdateAt(new Date().toISOString());
       skipNextAutoSaveRef.current = !reconciled.hasPendingLocalChanges;

@@ -24,6 +24,7 @@ import { recordSyncDiagnostic } from '@/lib/syncDiagnostics';
 import { assertProductionDeletionSafe, type ProductionDeletionState } from '@/lib/productionDeletionSafety';
 import {
   PROJECT_COLLECTION_KEYS,
+  WAREHOUSE_REMOTE_SYNC_COLLECTIONS,
   normalizeProjectCollections,
   type ProjectCollectionKey,
 } from '@/lib/projectDataScope';
@@ -340,12 +341,18 @@ export function getChangedProjectCollections(
 }
 
 /** Campos da linha principal que não pertencem às coleções normalizadas. */
+function projectMetadata(project: Project): Project {
+  const metadata = stripNormalizedCollections(project);
+  delete metadata.warehouse;
+  return metadata;
+}
+
 export function hasProjectMetadataChanges(before: Project, after: Project): boolean {
-  return !shallowEqualJSON(stripNormalizedCollections(before), stripNormalizedCollections(after));
+  return !shallowEqualJSON(projectMetadata(before), projectMetadata(after));
 }
 
 export function mergeProjectMetadataFields(base: Project, local: Project, remote: Project): Project | null {
-  const merged = mergeConcurrentFields(stripNormalizedCollections(base), stripNormalizedCollections(local), stripNormalizedCollections(remote));
+  const merged = mergeConcurrentFields(projectMetadata(base), projectMetadata(local), projectMetadata(remote));
   return merged.conflicts.length ? null : inheritProjectWriteOrigin(local, mergeProjectMetadata(local, merged.value));
 }
 
@@ -355,7 +362,7 @@ export function mergeProjectMetadataFields(base: Project, local: Project, remote
  * tabela principal são metadados e não autorizam uma hidratação integral.
  */
 export function mergeProjectMetadata(current: Project, incoming: Project): Project {
-  const metadata = stripNormalizedCollections(incoming);
+  const metadata = projectMetadata(incoming);
   const next: Project = {
     ...current,
     ...metadata,
@@ -371,15 +378,6 @@ export function mergeProjectMetadata(current: Project, incoming: Project): Proje
     analyticCompositions: current.analyticCompositions,
     subcontracts: current.subcontracts,
   };
-  if (current.warehouse || metadata.warehouse) {
-    next.warehouse = {
-      ...(current.warehouse ?? metadata.warehouse!),
-      ...(metadata.warehouse ?? {}),
-      movements: current.warehouse?.movements ?? [],
-      requisitions: current.warehouse?.requisitions ?? [],
-      custodyTerms: current.warehouse?.custodyTerms ?? [],
-    };
-  }
   return inheritProjectWriteOrigin(current, next);
 }
 
@@ -999,15 +997,15 @@ export function mergeHydratedProjectCollections(
 ): Project {
   const loaded = new Set(normalizeProjectCollections(collections));
   const next: Project = { ...current };
-  if (loaded.has('warehouseMovements') || loaded.has('warehouseRequisitions') || loaded.has('warehouseCustody')) {
+  if (WAREHOUSE_REMOTE_SYNC_COLLECTIONS.some(collection => loaded.has(collection))) {
     const currentWarehouse = current.warehouse;
     const hydratedWarehouse = hydrated.warehouse;
     if (hydratedWarehouse) {
       next.warehouse = {
-        ...(currentWarehouse ?? hydratedWarehouse),
-        ...(loaded.has('warehouseMovements') ? { movements: hydratedWarehouse.movements } : {}),
-        ...(loaded.has('warehouseRequisitions') ? { requisitions: hydratedWarehouse.requisitions } : {}),
-        ...(loaded.has('warehouseCustody') ? { custodyTerms: hydratedWarehouse.custodyTerms } : {}),
+        ...hydratedWarehouse,
+        movements: loaded.has('warehouseMovements') ? hydratedWarehouse.movements : currentWarehouse?.movements ?? [],
+        requisitions: loaded.has('warehouseRequisitions') ? hydratedWarehouse.requisitions : currentWarehouse?.requisitions ?? [],
+        custodyTerms: loaded.has('warehouseCustody') ? hydratedWarehouse.custodyTerms : currentWarehouse?.custodyTerms ?? [],
       };
     }
   }
@@ -1197,7 +1195,7 @@ function changedMetadataFields(before: Project | null, next: Project) {
   const previous = (before ?? {}) as unknown as Record<string, unknown>;
   const proposed = next as unknown as Record<string, unknown>;
   const keys = [...new Set([...Object.keys(previous), ...Object.keys(proposed)])]
-    .filter(key => !shallowEqualJSON(previous[key], proposed[key]));
+    .filter(key => key !== 'warehouse' && !shallowEqualJSON(previous[key], proposed[key]));
   if (!keys.length) return undefined;
   return { expected: Object.fromEntries(keys.filter(key => key in previous).map(key => [key, previous[key]])),
     next: Object.fromEntries(keys.filter(key => key in proposed).map(key => [key, proposed[key]])) };

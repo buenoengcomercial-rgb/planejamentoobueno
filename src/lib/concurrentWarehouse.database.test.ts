@@ -14,33 +14,50 @@ beforeAll(async()=>{
     CREATE TYPE org_role AS ENUM('owner','admin','engineer','warehouse_operator','viewer');
     CREATE TYPE member_status AS ENUM('active','inactive');
     CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT '${actor}'::uuid $$;
+    CREATE FUNCTION auth.jwt() RETURNS jsonb LANGUAGE sql AS $$
+      SELECT CASE WHEN current_setting('warehouse.test_password',true) = 'fresh'
+      THEN jsonb_build_object('amr',jsonb_build_array(jsonb_build_object('method','password','timestamp',extract(epoch from now()))))
+      ELSE '{}'::jsonb END $$;
     CREATE FUNCTION is_org_member(uuid,uuid) RETURNS boolean LANGUAGE sql AS $$ SELECT true $$;
-    CREATE FUNCTION has_org_role(uuid,uuid,org_role[]) RETURNS boolean LANGUAGE sql AS $$ SELECT true $$;
-    CREATE TABLE projects(id uuid PRIMARY KEY,organization_id uuid,data_json jsonb,warehouse_version bigint DEFAULT 0,
+    CREATE TABLE projects(id uuid PRIMARY KEY,organization_id uuid,name text DEFAULT 'Obra teste',data_json jsonb,warehouse_version bigint DEFAULT 0,
       warehouse_updated_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now());
     CREATE TABLE organization_members(organization_id uuid,user_id uuid,role org_role,status member_status);
+    CREATE FUNCTION has_org_role(uuid,uuid,org_role[]) RETURNS boolean LANGUAGE sql AS $$
+      SELECT EXISTS(SELECT 1 FROM public.organization_members WHERE user_id=$1 AND organization_id=$2 AND status='active' AND role=ANY($3)) $$;
+    CREATE FUNCTION app_private.has_org_role(uuid,uuid,org_role[]) RETURNS boolean LANGUAGE sql AS $$
+      SELECT public.has_org_role($1,$2,$3) $$;
     CREATE TABLE warehouse_movements(id text PRIMARY KEY,project_id uuid,data jsonb,occurred_at date,created_by uuid,created_at timestamptz DEFAULT now());
     CREATE TABLE warehouse_requisitions(id text PRIMARY KEY,project_id uuid,data jsonb,created_by uuid);
     CREATE TABLE warehouse_custody(id text PRIMARY KEY,project_id uuid,data jsonb,created_by uuid);
+    CREATE TABLE stock_movements(id text PRIMARY KEY,project_id uuid);
+    CREATE TABLE material_price_history(id text PRIMARY KEY,project_id uuid);
     CREATE TABLE audit_logs(id text PRIMARY KEY,project_id uuid,entity_type text,entity_id text,action text,occurred_at timestamptz,user_id uuid,data jsonb,created_at timestamptz DEFAULT now());
     INSERT INTO projects(id,organization_id,data_json) VALUES('${project}','${project}','{"warehouse":{"items":[]}}');
     INSERT INTO organization_members VALUES('${project}','${actor}','owner','active');`);
-  for (const file of ['20260912110000_atomic_warehouse_operations.sql','20260912213000_repair_warehouse_audit_payloads.sql',
+  for (const file of [
+    '20260818090000_owner_only_warehouse_clear.sql','20260819225720_2ed3c938-b3d0-4e0e-bf47-ad4138ea63a3.sql',
+    '20260819233000_owner_only_warehouse_hard_delete.sql','20260819234500_owner_only_warehouse_historical_edits.sql',
+    '20260902120000_owner_only_requisition_corrections.sql','20260907100000_prevent_duplicate_fiscal_notes.sql',
+    '20260912110000_atomic_warehouse_operations.sql','20260912213000_repair_warehouse_audit_payloads.sql',
     '20260912230000_version_atomic_warehouse_operations.sql','20260929190000_warehouse_withdrawal_availability.sql',
     '20260912233000_scoped_warehouse_commits.sql','20261016120000_concurrent_field_merge.sql','20261016121000_concurrent_warehouse_fields.sql',
     '20261016123000_concurrent_requisition_receipts.sql','20261016130000_concurrent_audit_stamps.sql',
     '20260914120000_atomic_supplement_corrections.sql','20260916120000_operational_requisition_corrections_and_cancellations.sql',
     '20261020090000_allow_negative_requisition_stock.sql',
     '20261024203000_warehouse_project_state_shadow.sql','20261115223000_warehouse_compact_audit_receipts.sql',
-    '20261116133000_compact_legacy_warehouse_receipts.sql']) {
+    '20261116133000_compact_legacy_warehouse_receipts.sql',
+    '20261116140000_independent_warehouse_persistence.sql']) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8'));
   }
 },20000);
 afterAll(async()=>db.close());
 beforeEach(async()=>{
-  await db.exec(`TRUNCATE warehouse_movements,warehouse_requisitions,warehouse_operation_commits,warehouse_custody,audit_logs,warehouse_scoped_commits,app_private.concurrent_operation_receipts;
-    UPDATE projects SET warehouse_version=0,data_json='{"warehouse":{"items":[{"key":"a","description":"A","unit":"un"},{"key":"b","description":"B","unit":"un"}]}}';
-    UPDATE organization_members SET role='owner';`);
+  await db.exec(`TRUNCATE warehouse_movements,warehouse_requisitions,warehouse_operation_commits,warehouse_custody,
+    stock_movements,material_price_history,audit_logs,warehouse_scoped_commits,app_private.concurrent_operation_receipts;
+    UPDATE organization_members SET role='owner';
+    SELECT set_config('warehouse.test_password','stale',false);
+    UPDATE warehouse_project_state SET independent=false;
+    UPDATE projects SET warehouse_version=0,data_json='{"warehouse":{"items":[{"key":"a","description":"A","unit":"un"},{"key":"b","description":"B","unit":"un"}]}}';`);
 });
 const changes=(state:unknown={},movements:unknown[]=[])=>({state,movements:{upserts:movements,deletes:[]},custody:{upserts:[],deletes:[]},audits:[]});
 async function commit(domain:string,key:string,payload:unknown) {
@@ -58,6 +75,82 @@ it('mantém a projeção separada consistente após uma RPC de catálogo', async
   expect(rows[0].state_json.items).toEqual([item('a', 'Atualizado'), item('b', 'B')]);
   expect(rows[0].warehouse_version).toBe(confirmed.warehouseVersion);
   expect(rows[0].state_json).not.toHaveProperty('movements');
+});
+
+it('confirma o catálogo isolado sem escrever na obra e preserva o catálogo após outro domínio salvar', async () => {
+  const fetchParent = async () => (await db.query('SELECT data_json, updated_at, warehouse_version FROM public.projects')).rows[0];
+  const original = await fetchParent();
+  await db.query('SELECT app_private.enable_independent_warehouse($1)', [project]);
+  const applied = await commit('catalog', 'independent-catalog', catalog(item('a', 'A'), item('a', 'Novo')));
+  expect(await fetchParent()).toEqual(original);
+  expect(applied).toMatchObject({ warehouseVersion: 1, warehouseIndependent: true });
+
+  // An old copy of the project can still arrive in a metadata save. The live
+  // warehouse catalog and its revision must stay in the warehouse domain.
+  await db.exec(`UPDATE public.projects SET data_json='{"warehouse":{"items":[]},"city":"Porto Velho"}',
+    updated_at=clock_timestamp(), warehouse_version=999`);
+  expect(await fetchParent()).toMatchObject({ warehouse_version: 0, data_json: {
+    city: 'Porto Velho', warehouse: { items: [item('a', 'A'), item('b', 'B')] },
+  } });
+  const replay = await commit('catalog', 'independent-catalog', catalog(item('a', 'A'), item('a', 'Novo')));
+  expect(replay).toMatchObject({ warehouseIndependent: true, warehouseVersion: 1, warehouseState: { items: [item('a', 'Novo'), item('b', 'B')] } });
+  expect((await db.query('SELECT count(*)::int n FROM audit_logs')).rows[0]).toEqual({ n: 1 });
+  await db.query('SELECT app_private.retire_warehouse_mirror($1)', [project]);
+  expect(await fetchParent()).toMatchObject({ data_json: { city: 'Porto Velho' } });
+  expect((await fetchParent()).data_json).not.toHaveProperty('warehouse');
+  expect((await db.query('SELECT legacy_warehouse FROM ops_backup.warehouse_cutover')).rows)
+    .toEqual([{ legacy_warehouse: { items: [item('a', 'A'), item('b', 'B')] } }]);
+  expect(await commit('catalog', 'independent-catalog', catalog(item('a', 'A'), item('a', 'Novo'))))
+    .toMatchObject({ warehouseIndependent: true, warehouseVersion: 1, warehouseState: { items: [item('a', 'Novo'), item('b', 'B')] } });
+
+  await db.query('SELECT app_private.restore_warehouse_mirror($1)', [project]);
+  expect(await fetchParent()).toMatchObject({ warehouse_version: 2, data_json: {
+    city: 'Porto Velho', warehouse: { items: [item('a', 'Novo'), item('b', 'B')] },
+  } });
+  expect(await commit('catalog', 'independent-catalog', catalog(item('a', 'A'), item('a', 'Novo'))))
+    .toMatchObject({ warehouseIndependent: false, warehouseVersion: 2 });
+});
+
+it('recusa a migração quando existem linhas operacionais ainda não copiadas', async () => {
+  await db.exec(`UPDATE projects SET data_json=jsonb_set(data_json,'{warehouse,movements}',
+    '[{"id":"legacy-embedded","quantity":2}]')`);
+  await expect(db.query('SELECT app_private.enable_independent_warehouse($1)', [project]))
+    .rejects.toThrow('WAREHOUSE_LEGACY_ROWS_NOT_MIGRATED: movements');
+});
+
+it('mantém as restrições do Almoxarife e a deduplicação fiscal na tabela própria', async () => {
+  const approved = { id: 'nf', supplierCnpj: '12.345.678/0001-00', invoiceNumber: '025', totalAmount: 90, status: 'aprovada' };
+  const equipment = { id: 'equip-1', name: 'Equipamento', status: 'disponivel' };
+  await db.query("UPDATE projects SET data_json=data_json||jsonb_build_object('warehouse',data_json->'warehouse'||$1::jsonb)",
+    [JSON.stringify({ fiscalNotes: [approved], equipments: [equipment] })]);
+  await db.query('SELECT app_private.enable_independent_warehouse($1)', [project]);
+  await db.exec("UPDATE organization_members SET role='warehouse_operator'");
+  const recordChange = <T extends { id: string }>(key: string, before: T | null, row: T) => changes({
+    [key]: { records: { identity: 'id', upserts: [{ id: row.id, expected: before, row }], deletes: [] } },
+  });
+  await expect(commit('receipt', 'note-rewrite', recordChange('fiscalNotes', approved, { ...approved, totalAmount: 1 })))
+    .rejects.toThrow('WAREHOUSE_HISTORICAL_EDIT_OWNER_ONLY');
+  await expect(commit('receipt', 'note-duplicate',
+    recordChange('fiscalNotes', null, { ...approved, id: 'copy', invoiceNumber: '25' })))
+    .rejects.toThrow('DUPLICATE_FISCAL_NOTE');
+  await expect(commit('catalog', 'equipment-rewrite', recordChange('equipments', equipment, { ...equipment, name: 'Outro' })))
+    .rejects.toThrow('WAREHOUSE_EQUIPMENT_EDIT_OWNER_ONLY');
+  expect((await db.query('SELECT count(*)::int n FROM audit_logs')).rows[0]).toEqual({ n: 0 });
+});
+
+it('limpeza administrativa exige reautenticação, preserva equipamentos e avança só o estoque', async () => {
+  const equipment = { id: 'equip-1', name: 'Equipamento', status: 'em_uso' };
+  await db.query("UPDATE projects SET data_json=jsonb_set(data_json,'{warehouse,equipments}',$1)", [JSON.stringify([equipment])]);
+  const parent = (await db.query('SELECT updated_at,data_json FROM projects')).rows;
+  await db.query('SELECT app_private.enable_independent_warehouse($1)', [project]);
+  await db.query("INSERT INTO material_price_history VALUES ('preco',$1)", [project]);
+  await expect(db.query('SELECT public.clear_warehouse_owner($1)', [project])).rejects.toThrow('WAREHOUSE_CLEAR_PASSWORD_REQUIRED');
+  await db.exec("SELECT set_config('warehouse.test_password','fresh',false)");
+  await db.query('SELECT public.clear_warehouse_owner($1)', [project]);
+  expect((await db.query('SELECT updated_at,data_json FROM projects')).rows).toEqual(parent);
+  expect((await db.query('SELECT state_json,warehouse_version FROM warehouse_project_state')).rows[0])
+    .toMatchObject({ warehouse_version: 2, state_json: { items: [], equipments: [{ ...equipment, status: 'disponivel' }] } });
+  expect((await db.query('SELECT count(*)::int n FROM material_price_history')).rows[0]).toEqual({ n: 0 });
 });
 
 it('mescla reordenação com campo independente e recusa ordens incompatíveis', async () => {
@@ -198,7 +291,9 @@ it('preserva as permissões e recusa campo de outro domínio',async()=>{
   await expect(commit('catalog','forbidden',catalog(item('a','A'),item('a','Outra')))).rejects.toThrow('WAREHOUSE_PERMISSION_DENIED');
 });
 
-it('duas retiradas da mesma fotografia permitem déficit; repetir não duplica', async () => {
+it.each([false,true])('duas retiradas da mesma fotografia permitem déficit e reenvio (estoque separado=%s)', async independent => {
+  if (independent) await db.query('SELECT app_private.enable_independent_warehouse($1)', [project]);
+  const parent = (await db.query('SELECT warehouse_version,updated_at FROM projects')).rows;
   await db.query('INSERT INTO warehouse_movements(id,project_id,data,created_by) VALUES($1,$2,$3,$4)',
     ['stock',project,JSON.stringify({id:'stock',itemKey:'a',type:'entrada',quantity:5}),actor]);
   const request = (id: string) => ({ type:'delivery', requisitionId:id, expected:null,
@@ -217,6 +312,7 @@ it('duas retiradas da mesma fotografia permitem déficit; repetir não duplica',
   expect((await db.query("SELECT result FROM app_private.concurrent_operation_receipts WHERE domain='warehouse-requisition' AND operation_id=$1", [id])).rows[0])
     .toEqual({ result: { receiptFormat: 'warehouse-reference-v1', source: 'operation' } });
   expect((await db.query<{n:number}>('SELECT count(*)::int n FROM warehouse_movements')).rows[0].n).toBe(3);
+  if (independent) expect((await db.query('SELECT warehouse_version,updated_at FROM projects')).rows).toEqual(parent);
 });
 
 
@@ -257,7 +353,9 @@ async function writeRequisition(before: Project, after: Project, type: string, k
 async function signedBalance() {
   return (await db.query<{balance:string}>(`SELECT coalesce(sum(CASE WHEN coalesce(data->>'reversedById','')<>'' OR data->>'type'='estorno' THEN 0 WHEN data->>'type' IN ('entrada','devolucao') THEN (data->>'quantity')::numeric ELSE -(data->>'quantity')::numeric END),0)::text balance FROM warehouse_movements`)).rows[0].balance;
 }
-it('executa entrega, aumento e redução de original e complemento com saldo negativo', async () => {
+it.each([false,true])('executa entrega e correções com saldo negativo (estoque separado=%s)', async independent => {
+  if (independent) await db.query('SELECT app_private.enable_independent_warehouse($1)', [project]);
+  const parent = (await db.query('SELECT warehouse_version,updated_at FROM projects')).rows;
   let state = await seedRequisition();
   expect(await signedBalance()).toBe('-5');
   let next = correctDeliveredRequisition(state, state.warehouse!.requisitions[0].id, { items: [material(20)], reason: 'Aumento', idempotencyKey: 'increase' }, auditActor);
@@ -267,6 +365,7 @@ it('executa entrega, aumento e redução de original e complemento com saldo neg
   next = correctDeliveredRequisition(state, state.warehouse!.requisitions[0].id, { items: [material(12)], reason: 'Redução', idempotencyKey: 'reduce' }, auditActor);
   state = await writeRequisition(state, next, 'correction', 'reduce');
   expect(await signedBalance()).toBe('-2');
+  if (independent) expect((await db.query('SELECT warehouse_version,updated_at FROM projects')).rows).toEqual(parent);
   const supplement = addRequisitionSupplement(state, { requisitionId: state.warehouse!.requisitions[0].id, date: '2026-10-20', receiverName: 'Teste', signatureReceiver: 'fixture', items: [material(3)], idempotencyKey: 'supplement' }, auditActor, { publishToDailyReport: false });
   state = await writeRequisition(state, supplement.project, 'supplement', 'supplement');
   expect(await signedBalance()).toBe('-5');

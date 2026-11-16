@@ -788,7 +788,7 @@ describe('segurança de sincronização da página da obra', () => {
     expect(draft).toHaveValue('Preenchimento em andamento');
 
     await act(async () => {
-      remoteRecord.resolve(cloudRecord(makeProject(), 'cloud-v3'));
+      remoteRecord.resolve({ ...cloudRecord(makeProject(), 'cloud-v3'), warehouseVersion: 2 });
       await Promise.resolve();
     });
     expect(screen.getByRole('textbox', { name: draftLabel })).toBe(draft);

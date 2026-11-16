@@ -67,7 +67,9 @@ A mudança do cliente usa a projeção quando a hidratação solicitada contém 
 
 - A consulta leve cruza a revisão de `projects` com a de `warehouse_project_state` em uma resposta. A paginação do estoque confere a revisão da projeção antes e depois de ler as páginas.
 - Ao abrir uma área que usa estoque, a hidratação lê o catálogo próprio e confere sua revisão junto das coleções carregadas. Realtime e a conferência periódica marcam as coleções do estoque para atualização quando a aba ativa não as usa.
-- A troca do escritor precisa mover o avanço da revisão e as validações que hoje rodam nos gatilhos de `projects`. Conferir as RPCs de retirada, devolução, correção, complemento, entrada, cautela, catálogo e inventário. Atualizar a rotina de armazenamento para reconhecer anexos da nova fonte.
+- A migração `20261116140000` instala os escritores e as validações da fonte separada. As obras passam para o novo escritor mediante `app_private.enable_independent_warehouse(project_id)`, após publicar o cliente compatível e conferir a igualdade da projeção. A função recusa a ativação quando houver registros operacionais presentes somente no JSON antigo.
+- Com o teste operacional aprovado, `app_private.retire_warehouse_mirror(project_id)` retira o JSON congelado da carga da obra e guarda uma cópia técnica em `ops_backup.warehouse_cutover`. A retirada do espelho é uma operação administrativa que avança o timestamp da obra uma vez. Os lançamentos rotineiros só avançam a revisão do estoque.
+- Se for necessário voltar, `app_private.restore_warehouse_mirror(project_id)` restaura na obra a cópia **atual** do estoque, inclusive alterações confirmadas após a ativação.
 
 ### Recibos antigos
 

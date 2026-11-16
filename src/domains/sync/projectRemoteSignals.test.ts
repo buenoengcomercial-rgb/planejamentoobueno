@@ -15,12 +15,23 @@ function setup() {
   const onDailyReport = vi.fn();
   const dispatcher = createProjectRealtimeDispatcher({
     projectId: 'obra', timerRef, sourcesRef, ownRowsRef, pendingCollectionsRef,
-    currentUpdatedAt: () => 'v1', onRefresh, onDailyReport,
+    currentUpdatedAt: () => 'v1', currentWarehouseVersion: () => 8, onRefresh, onDailyReport,
   });
   return { dispatcher, timerRef, sourcesRef, ownRowsRef, pendingCollectionsRef, onRefresh, onDailyReport };
 }
 
 describe('despacho dos sinais remotos da obra', () => {
+  it('separa a revisão já confirmada de uma atualização do estoque recebida de outro aparelho', () => {
+    const { dispatcher, onRefresh, pendingCollectionsRef } = setup();
+    dispatcher.onRow({ new: { warehouse_version: 8, independent: true } }, 'warehouse_project_state');
+    vi.advanceTimersByTime(1200);
+    expect(onRefresh).not.toHaveBeenCalled();
+    dispatcher.onRow({ new: { warehouse_version: 9, independent: true } }, 'warehouse_project_state');
+    expect(pendingCollectionsRef.current.get('obra')).toContain('warehouseRequisitions');
+    vi.advanceTimersByTime(1200);
+    expect(onRefresh).toHaveBeenCalledWith(['warehouse_project_state']);
+    dispatcher.dispose();
+  });
   it('ignora o próprio eco e entrega o Diário pelo seu canal específico', () => {
     const { dispatcher, ownRowsRef, pendingCollectionsRef, onDailyReport, onRefresh } = setup();
     ownRowsRef.current.set('warehouse_movements:mov-1', Date.now() + 10_000);
