@@ -943,6 +943,7 @@ export interface Project {
   auditLogs?: AuditLog[];
   /** Solicitações de reprogramação operacional, preservadas para aprovação e auditoria. */
   rescheduleRequests?: TaskRescheduleRequest[];
+  monthlySchedule?: Record<string, { allocations: Record<string, number> }>;
   contractedTaskSchedules?: Record<string, ContractedTaskSchedule>;
   /** Comparativos de preços de materiais (Lista de Material). Isolado das demais áreas. */
   materialComparisons?: MaterialComparison[];
@@ -2171,4 +2172,4 @@ export interface AuditLog {
 }
 
 export type ViewMode = 'days' | 'weeks' | 'months';
-export type AppView = 'dashboard' | 'management' | 'gantt' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'additiveSchedule' | 'realCost' | 'materials' | 'warehouse';
+export type AppView = 'dashboard' | 'management' | 'gantt' | 'physicalFinancial' | 'tasks' | 'measurement' | 'dailyReport' | 'additive' | 'additiveSchedule' | 'realCost' | 'materials' | 'warehouse';

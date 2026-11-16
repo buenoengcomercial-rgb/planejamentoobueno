@@ -159,9 +159,20 @@ export default function ProjectAreaContent({
           />
         </>
       );
+    case 'physicalFinancial':
     case 'gantt':
       return <MonthlyExecutionSchedule
-        key={JSON.stringify([project.id, userId])}
+        key={JSON.stringify([project.id, userId, safeCurrentView])}
+        mode={safeCurrentView}
+        openPhysicalFinancial={() => onViewChange('physicalFinancial')}
+        saveMonthlyAllocation={editor ? (serviceId, allocations) => ganttSetter(previous => {
+          const observed = project.monthlySchedule?.[serviceId];
+          const current = previous.monthlySchedule?.[serviceId];
+          if (JSON.stringify(current) !== JSON.stringify(observed)) {
+            throw new Error('A distribuição deste serviço mudou. Confira a versão atual antes de salvar.');
+          }
+          return { ...previous, monthlySchedule: { ...previous.monthlySchedule, [serviceId]: { allocations } } };
+        }) : undefined}
         project={project}
         userId={userId}
         independentMeasurementConfirmed={independentMeasurementConfirmed}

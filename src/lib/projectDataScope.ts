@@ -151,6 +151,7 @@ const VIEW_COLLECTIONS: Record<Exclude<AppView, 'warehouse'>, ProjectCollectionK
   ]),
   management: unique([...SCHEDULE, 'dailyReports']),
   gantt: unique([...SCHEDULE, 'budgetItems']),
+  physicalFinancial: unique([...SCHEDULE, 'budgetItems', 'measurements']),
   tasks: unique([...SCHEDULE]),
   dailyReport: unique([
     ...SCHEDULE,

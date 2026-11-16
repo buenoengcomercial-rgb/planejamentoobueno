@@ -6,7 +6,7 @@ import { replaceProjectTasksById } from './taskTree';
 import { includeMeasuredSchedule } from './measuredSchedule';
 import type { ContractedQuantityAdjustment } from './contractedAdditiveSchedule';
 import type { MeasurementWorkspace } from './measurementWorkspace';
-import { includeClosingSchedule } from './closingSchedule';
+import { includeClosingSchedule, closingScheduleArchived, closingSchedulePhaseId } from './closingSchedule';
 import { operationalEndDate, parseScheduleDate, scheduleDateISO, scheduleWorkdayWeight } from './scheduleCalendar';
 import { logToProject, type AuditUserInfo } from './audit';
 
@@ -68,6 +68,7 @@ export function includeReleaseMilestones(project: Project): Project {
   const all = getAllTasks({ ...project, phases });
   const groups = new Map<string, Task[]>();
   for (const parent of all) for (const m of parent.operationalReschedule?.executionRevision?.milestones ?? []) {
+    if (closingScheduleArchived(project) && m.phase === closingSchedulePhaseId) continue;
     let owner = phases.find(p => p.id === m.phase);
     const seen = new Set<string>();
     while (owner?.parentId && !seen.has(owner.id)) { seen.add(owner.id); owner = phases.find(p => p.id === owner!.parentId) ?? owner; }

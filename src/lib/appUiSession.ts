@@ -3,12 +3,13 @@ import type { AppView } from '@/types/project';
 const UI_SESSION_VERSION = 1;
 const APP_UI_SESSION_KEY = 'obraplanner:ui-session';
 
-export const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
+export const APP_VIEWS: AppView[] = ['dashboard', 'management', 'gantt', 'physicalFinancial', 'tasks', 'measurement', 'dailyReport', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
 
 export const VIEW_ROUTE: Record<AppView, string> = {
   dashboard: 'dashboard',
   management: 'rotina',
   gantt: 'cronograma',
+  physicalFinancial: 'cronograma-fisico-financeiro',
   tasks: 'producao',
   dailyReport: 'diario',
   measurement: 'medicao',

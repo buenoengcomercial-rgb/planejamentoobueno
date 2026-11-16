@@ -3,11 +3,29 @@ import { getAllTasks } from '@/data/sampleProject';
 import { replaceProjectTasksById } from './taskTree';
 import { operationalEndDate, parseScheduleDate, scheduleDateISO, scheduleWorkdayWeight } from './scheduleCalendar';
 
-const phaseId = 'operational-closing-schedule';
+const PALACIO_RIO_MADEIRA = '86593327-d5f7-4c9d-81da-6f23c697b6e2';
+export const closingScheduleArchived = (project: Project) => project.id === PALACIO_RIO_MADEIRA;
+export const closingSchedulePhaseId = 'operational-closing-schedule';
+
+const phaseId = closingSchedulePhaseId;
 
 /** Project metadata into the Gantt only; the raw contract remains unchanged. */
 export function includeClosingSchedule(project: Project) {
   const phases = project.phases.filter(p => p.id !== phaseId);
+  if (closingScheduleArchived(project)) {
+    const source = { ...project, phases };
+    const all = getAllTasks(source);
+    const archived = new Set(all.flatMap(task => [
+      ...(task.operationalReschedule?.closingActivities ?? []).map(stage => stage.id),
+      ...(task.operationalReschedule?.executionRevision?.milestones ?? []).filter(milestone => milestone.phase === phaseId).map(milestone => milestone.id),
+    ]));
+    const changed = new Map<string, Task>();
+    for (const task of all) if (task.dependencies.some(id => archived.has(id)) || task.dependencyDetails?.some(edge => archived.has(edge.taskId))) {
+      changed.set(task.id, { ...task, dependencies: task.dependencies.filter(id => !archived.has(id)),
+        dependencyDetails: task.dependencyDetails?.filter(edge => !archived.has(edge.taskId)) });
+    }
+    return { project: replaceProjectTasksById(source, changed), taskIds: new Set<string>() };
+  }
   const tasks: Task[] = getAllTasks({ ...project, phases }).flatMap(parent =>
     (parent.operationalReschedule?.closingActivities ?? []).map(activity => ({
       scheduleDisplayKind: 'closing' as const, id: activity.id, name: activity.name, phase: phaseId, startDate: activity.startDate,

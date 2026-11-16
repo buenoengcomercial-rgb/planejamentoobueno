@@ -66,9 +66,9 @@ export function createProjectViewSetter(view: AppView, context: ProjectViewEditC
 
     setRawProject(prev => {
       if (!prev) return prev;
-      const candidate = typeof next === 'function' ? next(prev) : next;
       let resolved: Project;
       try {
+        const candidate = typeof next === 'function' ? next(prev) : next;
         resolved = role === 'warehouse_operator' && view === 'warehouse'
           ? { ...prev, warehouse: candidate.warehouse }
           : applyProjectOperation(view, prev, typeof next === 'function' ? prev : (renderedBase ?? prev), candidate);

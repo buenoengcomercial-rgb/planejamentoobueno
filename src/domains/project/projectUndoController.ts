@@ -13,7 +13,7 @@ export type UndoStacks = Record<AppView, UndoOperation[]>;
 
 export function emptyUndoStacks(): UndoStacks {
   return {
-    dashboard: [], management: [], gantt: [], tasks: [], measurement: [],
+    dashboard: [], management: [], gantt: [], physicalFinancial: [], tasks: [], measurement: [],
     dailyReport: [], additive: [], additiveSchedule: [], realCost: [],
     materials: [], warehouse: [],
   };

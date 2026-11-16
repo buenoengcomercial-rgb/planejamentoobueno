@@ -128,6 +128,7 @@ import {
 const NEXT_VIEW_PRELOAD: Record<AppView, { view: AppView; load: () => Promise<unknown> }> = {
   dashboard: { view: 'management', load: loadManagementRoutine },
   management: { view: 'tasks', load: () => Promise.all([loadDailyProductionWorkspace(), loadTaskList()]) },
+  physicalFinancial: { view: 'gantt', load: () => import('@/components/MonthlyExecutionSchedule') },
   gantt: { view: 'tasks', load: () => Promise.all([loadDailyProductionWorkspace(), loadTaskList()]) },
   tasks: { view: 'dailyReport', load: loadDailyReport },
   dailyReport: { view: 'tasks', load: loadTaskList },
