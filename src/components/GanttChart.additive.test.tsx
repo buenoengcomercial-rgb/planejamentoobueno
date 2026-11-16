@@ -61,6 +61,8 @@ it('exporta a obra completa mesmo com o filtro crítico ativo e capítulos recol
   fireEvent.click(screen.getByRole('button', { name: /Crítico/ }));
   fireEvent.click(screen.getByRole('button', { name: 'Exportar PDF' }));
   await waitFor(() => expect(exportPdf).toHaveBeenCalledWith(expect.objectContaining({ project, monthlyRows, measurementValues })));
+  fireEvent.click(screen.getByRole('button', { name: 'PDF por capítulos' }));
+  await waitFor(() => expect(exportPdf).toHaveBeenCalledWith(expect.objectContaining({ project, byChapter: true })));
   expect(onProjectChange).not.toHaveBeenCalled();
 });
 

@@ -92,6 +92,18 @@ describe('PDF do cronograma oficial', () => {
     expect(firstPage).not.toMatch(/Contratante:|Contratada:|undefined/);
   });
 
+  it('reúne as parcelas dos subcapítulos numa única linha do capítulo principal', async () => {
+    const doc = await buildSchedulePdfDocument({ ...inputForPdf(), byChapter: true });
+    const [content] = pageContents(doc);
+    expect(doc.getNumberOfPages()).toBe(1);
+    expect(content.match(/2 Proteção contra incêndio/g)).toHaveLength(1);
+    expect(content).toContain('Cronograma por capítulos');
+    expect(content).toContain('setembro');
+    expect(content).toContain('janeiro');
+    expect(content).toContain('1.000,00');
+    expect(content).not.toMatch(/Hidrantes|2\.1\.1|Montagem do sistema|novembro/);
+  });
+
   it('informa quando não há atividades para exportar', async () => {
     const input = inputForPdf();
     await expect(buildSchedulePdfDocument({ ...input, project: { ...project, phases: [], contractInfo: undefined } }))

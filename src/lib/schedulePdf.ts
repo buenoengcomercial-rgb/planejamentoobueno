@@ -16,6 +16,7 @@ interface SchedulePdfInput {
   monthlyRows: ReadonlyMap<string, MonthlyRow>;
   measurementValues?: Readonly<Record<string, number>>;
   suspensionMap?: Readonly<Record<string, AdditiveScheduleSuspensionMeta>>;
+  byChapter?: boolean;
 }
 
 const money = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -103,18 +104,19 @@ export function buildSchedulePdfData({ project, monthlyRows, measurementValues =
       parent = parent.parentId && phaseById.get(parent.parentId);
     }
     const title = trail.map(item => `${numbers.get(item.id)} ${item.name}`).join(' / ');
-    return [{ title, rows }];
+    return [{ title, root: trail[0], rows }];
   });
-  return { groups, months: [...months].sort(), measurementValues };
+  return { groups, months: [...months].sort(), measurementValues, numbers };
 }
 
 export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise<jsPDF> {
-  const { project } = input;
-  const { groups, months, measurementValues } = buildSchedulePdfData(input);
+  const { project, byChapter = false } = input;
+  const { groups, months, measurementValues, numbers } = buildSchedulePdfData(input);
   if (!groups.length) throw new Error('O cronograma está sem atividades para exportar.');
   const [{ jsPDF }, { autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
   const doc = new jsPDF({ orientation: 'landscape', format: 'a4', compress: true });
-  doc.setProperties({ title: `Cronograma - ${project.name}` });
+  const reportName = byChapter ? 'Cronograma por capítulos' : 'Cronograma da obra';
+  doc.setProperties({ title: `${reportName} - ${project.name}` });
   doc.setLineHeightFactor(1.1);
 
   const width = doc.internal.pageSize.getWidth() - 2 * margin;
@@ -136,13 +138,27 @@ export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise
   const period = months.length ? [months[0], ...(months.length > 1 ? [months.at(-1)!] : [])].map(monthlyPeriodLabel).join(' a ') : '';
   const blocks = Array.from({ length: Math.max(1, Math.ceil(months.length / monthsPerPage)) },
     (_, index) => months.slice(index * monthsPerPage, (index + 1) * monthsPerPage));
+  type Portions = Pick<typeof groups[number]['rows'][number], 'measured' | 'planned'>;
+  const chapters = new Map<string, Portions & { title: string }>();
+  if (byChapter) for (const group of groups) {
+    const chapter = chapters.get(group.root.id) ?? {
+      title: `${numbers.get(group.root.id)} ${group.root.name}`,
+      measured: new Map<string, string>(),
+      planned: new Map<string, string>(),
+    };
+    for (const row of group.rows) {
+      for (const month of row.measured.keys()) chapter.measured.set(month, '');
+      for (const month of row.planned.keys()) chapter.planned.set(month, '');
+    }
+    chapters.set(group.root.id, chapter);
+  }
 
   function drawHeader() {
     doc.setTextColor('#0f172a').setFont('helvetica', 'bold').setFontSize(15);
     doc.text(titleLines, margin, 14);
     doc.setFont('helvetica', 'normal').setFontSize(9);
     const subheading = 13 + titleLines.length * 6;
-    doc.text(`Cronograma da obra${period ? ` · ${period}` : ''}`, margin, subheading);
+    doc.text(`${reportName}${period ? ` · ${period}` : ''}`, margin, subheading);
     if (metadataLines.length) doc.text(metadataLines, margin, subheading + 4);
     doc.setFillColor('#bbf7d0').rect(margin, legendY - 3, 4, 3, 'F');
     doc.text('Execução medida', margin + 6, legendY);
@@ -153,34 +169,40 @@ export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise
 
   blocks.forEach((block, index) => {
     if (index) doc.addPage();
-    const descriptions = width - codeWidth - progressWidth - blocks[0].length * minimumMonthWidth;
-    const monthWidth = block.length ? (width - codeWidth - progressWidth - descriptions) / block.length : 0;
+    const leadingColumns = byChapter ? 1 : 3;
+    const calendarWidth = blocks[0].length * minimumMonthWidth;
+    const descriptions = width - calendarWidth - (byChapter ? 0 : codeWidth + progressWidth);
+    const monthWidth = block.length ? calendarWidth / block.length : 0;
     const body: CellInput[][] = [];
-    const portions = new Map<number, typeof groups[number]['rows'][number]>();
+    const portions = new Map<number, Portions>();
+    function addRow(labels: CellInput[], row: Portions) {
+      portions.set(body.length, row);
+      body.push([...labels, ...block.map(month => ({ content: '', styles: {
+        minCellHeight: row.measured.has(month) && row.planned.has(month) ? 12 : 0,
+      } }))]);
+    }
     doc.setFont('helvetica', 'normal').setFontSize(rowFontSize);
-    for (const group of groups) {
-      const rows = group.rows.filter(row => row.measured.size || row.planned.size
-        ? block.some(month => row.measured.has(month) || row.planned.has(month))
-        : index === 0);
-      if (!rows.length) continue;
-      body.push([{ content: group.title, colSpan: 3 + block.length,
-        styles: { fillColor: '#e2e8f0', fontStyle: 'bold', halign: 'left' } }]);
-      for (const row of rows) {
-        portions.set(body.length, row);
-        const name = shortActivityName(doc, row.name, descriptions - 4);
-        body.push([
-          row.code || '—', row.note ? `${name}\n${row.note}` : name, monthlyPercentage(row.progress / 100),
-          ...block.map(month => ({ content: '', styles: {
-            minCellHeight: row.measured.has(month) && row.planned.has(month) ? 12 : 0,
-          } })),
-        ]);
+    if (byChapter) {
+      for (const chapter of chapters.values()) addRow([{ content: chapter.title, styles: { fontStyle: 'bold' } }], chapter);
+    } else {
+      for (const group of groups) {
+        const rows = group.rows.filter(row => row.measured.size || row.planned.size
+          ? block.some(month => row.measured.has(month) || row.planned.has(month))
+          : index === 0);
+        if (!rows.length) continue;
+        body.push([{ content: group.title, colSpan: leadingColumns + block.length,
+          styles: { fillColor: '#e2e8f0', fontStyle: 'bold', halign: 'left' } }]);
+        for (const row of rows) {
+          const name = shortActivityName(doc, row.name, descriptions - 4);
+          addRow([row.code || '—', row.note ? `${name}\n${row.note}` : name, monthlyPercentage(row.progress / 100)], row);
+        }
       }
     }
-    if (!body.length) body.push([{ content: 'Nenhuma atividade com parcela nestes meses.', colSpan: 3 + block.length }]);
+    if (!body.length) body.push([{ content: 'Nenhuma atividade com parcela nestes meses.', colSpan: leadingColumns + block.length }]);
     autoTable(doc, {
       theme: 'grid',
       head: [[
-        'EAP', 'Atividade', 'Execução\n(%)',
+        ...(byChapter ? ['Capítulo'] : ['EAP', 'Atividade', 'Execução\n(%)']),
         ...block.map<CellInput>(month => ({
           content: `${monthlyPeriodLabel(month).replace('/', '\n')}${measurementValues[month] === undefined ? '' : `\n${money.format(measurementValues[month])}`}`,
           styles: { halign: 'center', cellPadding: { top: 1.4, bottom: 1.4, left: 0.8, right: 0.8 } },
@@ -195,13 +217,15 @@ export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise
         valign: 'middle', overflow: 'linebreak' },
       headStyles: { fillColor: '#334155', textColor: '#ffffff' },
       columnStyles: {
-        0: { cellWidth: codeWidth, cellPadding: { top: 1.4, bottom: 1.4, left: 1.4, right: 1.4 } },
-        1: { cellWidth: descriptions }, 2: { cellWidth: progressWidth, halign: 'right' },
-        ...Object.fromEntries(block.map((_, column) => [column + 3, { cellWidth: monthWidth, halign: 'center' }])),
+        ...(byChapter ? { 0: { cellWidth: descriptions } } : {
+          0: { cellWidth: codeWidth, cellPadding: { top: 1.4, bottom: 1.4, left: 1.4, right: 1.4 } },
+          1: { cellWidth: descriptions }, 2: { cellWidth: progressWidth, halign: 'right' as const },
+        }),
+        ...Object.fromEntries(block.map((_, column) => [column + leadingColumns, { cellWidth: monthWidth, halign: 'center' }])),
       },
       willDrawPage: drawHeader,
       didDrawCell: ({ section, column, row, cell }) => {
-        const month = block[column.index - 3];
+        const month = block[column.index - leadingColumns];
         const task = portions.get(row.index);
         if (section !== 'body' || !month || !task) return;
         const measured = task.measured.get(month);
@@ -232,5 +256,5 @@ export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise
 export async function exportSchedulePdf(input: SchedulePdfInput) {
   const document = await buildSchedulePdfDocument(input);
   const name = input.project.name.trim().replace(/[<>:"/\\|?*]/g, '-');
-  document.save(`Cronograma - ${name || 'Obra'}.pdf`);
+  document.save(`${input.byChapter ? 'Cronograma por capítulos' : 'Cronograma'} - ${name || 'Obra'}.pdf`);
 }
