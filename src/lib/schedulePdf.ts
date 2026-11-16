@@ -18,9 +18,24 @@ interface SchedulePdfInput {
   suspensionMap?: Readonly<Record<string, AdditiveScheduleSuspensionMeta>>;
 }
 
-const money = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-const monthsPerPage = 5;
+const money = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const monthsPerPage = 9;
 const margin = 10;
+const rowFontSize = 9;
+const codeWidth = 17;
+const progressWidth = 19;
+const minimumMonthWidth = 21;
+
+function shortActivityName(doc: jsPDF, name: string, width: number): string {
+  const lines: string[] = doc.splitTextToSize(name.replace(/\s+/g, ' ').trim(), width);
+  if (lines.length <= 2) return lines.join('\n');
+  let last = lines[1];
+  while (last && doc.getTextWidth(`${last}…`) > width) {
+    const boundary = last.lastIndexOf(' ');
+    last = last.slice(0, boundary > 0 ? boundary : -1);
+  }
+  return `${lines[0]}\n${last}…`;
+}
 
 export function buildSchedulePdfData({ project, monthlyRows, measurementValues = {}, suspensionMap = {} }: SchedulePdfInput) {
   const phases = flattenPhasesByChapter(project);
@@ -31,8 +46,6 @@ export function buildSchedulePdfData({ project, monthlyRows, measurementValues =
   const includeMonth = (month: string | undefined) => {
     if (month && executionMonth(`${month}-01`)) months.add(month);
   };
-  includeMonth(executionMonth(project.startDate));
-  includeMonth(executionMonth(project.endDate));
   Object.keys(measurementValues).forEach(includeMonth);
 
   const groups = phases.flatMap(phase => {
@@ -92,8 +105,13 @@ export function buildSchedulePdfData({ project, monthlyRows, measurementValues =
     const title = trail.map(item => `${numbers.get(item.id)} ${item.name}`).join(' / ');
     return [{ title, rows }];
   });
+  // A start date alone does not make the opening month an execution period.
+  if (!months.size) includeMonth(executionMonth(project.startDate));
   const bounds = [...months].sort();
-  return { groups, months: bounds.length ? monthRange(bounds[0], bounds.at(-1)!) : [], measurementValues };
+  const plannedEnd = executionMonth(project.endDate);
+  const lastMonth = bounds.at(-1);
+  const end = plannedEnd && (!lastMonth || plannedEnd > lastMonth) ? plannedEnd : lastMonth;
+  return { groups, months: end ? monthRange(bounds[0] ?? end, end) : [], measurementValues };
 }
 
 export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise<jsPDF> {
@@ -136,15 +154,16 @@ export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise
     doc.text('Execução medida', margin + 6, legendY);
     doc.setFillColor('#dbeafe').rect(margin + 42, legendY - 3, 4, 3, 'F');
     doc.text('Saldo planejado', margin + 48, legendY);
-    doc.text('Valores no cabeçalho mensal correspondem à medição da competência.', margin + 86, legendY);
+    doc.text('Valores das medições por competência (R$)', margin + 86, legendY);
   }
 
   blocks.forEach((block, index) => {
     if (index) doc.addPage();
-    const descriptions = width - 18 - 22 - (block.length ? monthsPerPage * 29 : 0);
-    const monthWidth = block.length ? (width - 18 - 22 - descriptions) / block.length : 0;
+    const descriptions = width - codeWidth - progressWidth - blocks[0].length * minimumMonthWidth;
+    const monthWidth = block.length ? (width - codeWidth - progressWidth - descriptions) / block.length : 0;
     const body: CellInput[][] = [];
     const portions = new Map<number, typeof groups[number]['rows'][number]>();
+    doc.setFont('helvetica', 'normal').setFontSize(rowFontSize);
     for (const group of groups) {
       const rows = group.rows.filter(row => row.measured.size || row.planned.size
         ? block.some(month => row.measured.has(month) || row.planned.has(month))
@@ -154,8 +173,9 @@ export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise
         styles: { fillColor: '#e2e8f0', fontStyle: 'bold', halign: 'left' } }]);
       for (const row of rows) {
         portions.set(body.length, row);
+        const name = shortActivityName(doc, row.name, descriptions - 4);
         body.push([
-          row.code || '—', row.note ? `${row.name}\n${row.note}` : row.name, monthlyPercentage(row.progress / 100),
+          row.code || '—', row.note ? `${name}\n${row.note}` : name, monthlyPercentage(row.progress / 100),
           ...block.map(month => ({ content: '', styles: {
             minCellHeight: row.measured.has(month) && row.planned.has(month) ? 12 : 0,
           } })),
@@ -166,19 +186,23 @@ export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise
     autoTable(doc, {
       theme: 'grid',
       head: [[
-        'EAP', 'Atividade', '% executado',
-        ...block.map(month => `${monthlyPeriodLabel(month)}${measurementValues[month] === undefined ? '' : `\n${money.format(measurementValues[month])}`}`),
+        'EAP', 'Atividade', 'Execução\n(%)',
+        ...block.map(month => ({
+          content: `${monthlyPeriodLabel(month).replace('/', '\n')}${measurementValues[month] === undefined ? '' : `\n${money.format(measurementValues[month])}`}`,
+          styles: { halign: 'center', cellPadding: { top: 1.4, bottom: 1.4, left: 0.8, right: 0.8 } },
+        })),
       ]],
       body,
       margin: { top: tableTop, bottom: 14, left: margin, right: margin },
       showHead: 'everyPage',
       rowPageBreak: 'avoid',
-      styles: { font: 'helvetica', fontSize: 9, cellPadding: { top: 1.4, bottom: 1.4, left: 2, right: 2 },
+      styles: { font: 'helvetica', fontSize: rowFontSize, cellPadding: { top: 1.4, bottom: 1.4, left: 2, right: 2 },
         textColor: '#0f172a', lineColor: '#e2e8f0',
         valign: 'middle', overflow: 'linebreak' },
       headStyles: { fillColor: '#334155', textColor: '#ffffff' },
       columnStyles: {
-        0: { cellWidth: 18 }, 1: { cellWidth: descriptions }, 2: { cellWidth: 22, halign: 'right' },
+        0: { cellWidth: codeWidth, cellPadding: { top: 1.4, bottom: 1.4, left: 1.4, right: 1.4 } },
+        1: { cellWidth: descriptions }, 2: { cellWidth: progressWidth, halign: 'right' },
         ...Object.fromEntries(block.map((_, column) => [column + 3, { cellWidth: monthWidth, halign: 'center' }])),
       },
       willDrawPage: drawHeader,

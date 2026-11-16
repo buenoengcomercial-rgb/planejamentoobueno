@@ -9,7 +9,7 @@ const task: Task = {
   dependencies: ['MARCO-INTERNO'], responsible: '', materials: [], level: 0,
 };
 const project: Project = {
-  id: 'obra', name: 'Palácio Rio Madeira', startDate: '2026-09-01', endDate: '2027-05-14', totalBudget: 1000,
+  id: 'obra', name: 'Palácio Rio Madeira', startDate: '2026-08-24', endDate: '2027-05-14', totalBudget: 1000,
   contractInfo: { contractNumber: '123/2026', location: 'Porto Velho', contractor: 'SUGESP' },
   phases: [
     { id: 'root', name: 'Proteção contra incêndio', customNumber: '2', tasks: [], color: '#fff' },
@@ -55,7 +55,19 @@ describe('PDF do cronograma oficial', () => {
     expect(project.phases[1].tasks[0].dependencies).toEqual(['MARCO-INTERNO']);
   });
 
-  it('gera A4 paisagem com cabeçalho e identificação das atividades em cada bloco de meses', async () => {
+  it('preserva um mês inicial que tem execução, mesmo antes da primeira competência', () => {
+    const input = inputForPdf();
+    const partial = input.monthlyRows.get(task.id)!;
+    partial.measured = { '2026-08': { quantity: 5, value: 500 } };
+    expect(buildSchedulePdfData(input).months[0]).toBe('2026-08');
+  });
+
+  it('não coloca no início da grade uma data final anterior à execução', () => {
+    const input = inputForPdf();
+    expect(buildSchedulePdfData({ ...input, project: { ...project, endDate: project.startDate } }).months[0]).toBe('2026-09');
+  });
+
+  it('coloca setembro a maio na mesma página A4 e encurta somente a descrição impressa', async () => {
     const input = inputForPdf();
     const partial = input.monthlyRows.get(task.id)!;
     partial.planned = { '2027-05': { quantity: 5, value: 500 } };
@@ -63,18 +75,13 @@ describe('PDF do cronograma oficial', () => {
     const doc = await buildSchedulePdfDocument(input);
     expect(doc.internal.pageSize.getWidth()).toBeCloseTo(297);
     expect(doc.internal.pageSize.getHeight()).toBeCloseTo(210);
-    expect(doc.getNumberOfPages()).toBe(2);
-    const pages = pageContents(doc);
-    for (const content of pages) {
-      expect(content).toContain('Palácio Rio Madeira');
-      expect(content).toContain('Contrato 123/2026');
-      expect(content).toContain('2.1.1');
-      expect(content).toContain('DESCRICAO-FINAL');
-      expect(content).not.toMatch(/Predecessora|MARCO-INTERNO|Marco de liberação interno|Parcela histórica sintética/);
-    }
-    expect(pages[0]).toContain('500,00');
-    expect(pages[1]).toContain('maio/2027');
-    expect(pages[1]).not.toContain('Conjunto sem programação');
+    expect(doc.getNumberOfPages()).toBe(1);
+    const [content] = pageContents(doc);
+    for (const text of ['Palácio Rio Madeira', 'Contrato 123/2026', '2.1.1', 'Montagem completa',
+      '500,00', '1.000,00', 'setembro', 'outubro', 'novembro', 'dezembro', 'janeiro', 'fevereiro', 'março', 'abril', 'maio',
+      'Conjunto sem', 'Sem mês programado']) expect(content).toContain(text);
+    expect(content).not.toMatch(/agosto|DESCRICAO-FINAL|Predecessora|MARCO-INTERNO|Marco de liberação interno|Parcela histórica sintética/);
+    expect(partial.name).toContain('DESCRICAO-FINAL');
   });
 
   it('gera o cabeçalho com o nome da obra quando os dados contratuais não foram cadastrados', async () => {
