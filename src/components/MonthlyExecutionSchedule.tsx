@@ -112,7 +112,9 @@ export default function MonthlyExecutionSchedule({
     {(additiveError || measurementError) && <p role="alert" className="px-4 py-3 text-sm text-destructive">
       Não foi possível confirmar {additiveError && measurementError && view === 'monthly' ? 'a Medição e o Aditivo' : additiveError ? 'o Aditivo' : 'a Medição'} na nuvem. Use “Conferir na nuvem” para tentar novamente.
     </p>}
-    {view === 'gantt' ? (userId && (measurement === undefined || measurementError) ? <p role="status" className="p-4">Confirme a Medição na nuvem antes de revisar o Gantt.</p> : renderGantt(additiveError ? [] : additives ?? [], measurement)) : mode === 'physicalFinancial' ? (measurement !== undefined && additives && !measurementError && !additiveError
+    {view === 'gantt' ? (userId && (measurement === undefined || !additives || measurementError || additiveError)
+      ? !measurementError && !additiveError && <p role="status" className="p-4">Conferindo a Medição e o Aditivo na nuvem…</p>
+      : renderGantt(additives ?? [], measurement)) : mode === 'physicalFinancial' ? (measurement !== undefined && additives && !measurementError && !additiveError
       ? <PhysicalFinancialGrid project={project} measurement={measurement} additives={additives} onSave={saveMonthlyAllocation} />
       : !measurementError && !additiveError && <p role="status" className="p-4">Conferindo a Medição e o Aditivo na nuvem…</p>) : <div className="space-y-6 p-4">
       <section aria-label="Execução medida">
