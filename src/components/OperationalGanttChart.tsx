@@ -54,9 +54,13 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
       const row = monthlyRows.get(task.id);
       if (!row) return [];
       const totalMeasured = Object.values(row.measured).reduce((sum, cell) => sum + cell.quantity, 0);
+      const completion = row.quantity > 0 && totalMeasured > 0
+        ? Math.min(100, Math.max(totalMeasured / row.quantity * 100, task.physicalProgress ?? task.percentComplete))
+        : task.physicalProgress ?? task.percentComplete;
       return [[task.id, { ...task, name: row.name,
         scheduleDisplayKind: task.scheduleDisplayKind === 'completed-summary' ? undefined : task.scheduleDisplayKind,
-        percentComplete: row.quantity && totalMeasured ? Math.min(100, totalMeasured / row.quantity * 100) : task.percentComplete,
+        percentComplete: completion,
+        physicalProgress: completion,
       }] as const];
     }));
     return replaceProjectTasksById({ ...settled, phases: settled.phases.map(phase => ({

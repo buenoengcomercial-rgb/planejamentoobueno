@@ -2511,7 +2511,9 @@ export default function GanttChart({
                               {/* % Concluído */}
                               <div className="text-center">
                                 {(() => {
-                                  const pct = Math.round(task.physicalProgress ?? task.percentComplete ?? 0);
+                                  const progress = task.physicalProgress ?? task.percentComplete ?? 0;
+                                  const pct = Math.round(progress);
+                                  const progressLabel = monthlyRows ? monthlyPercentage(progress / 100) : `${pct}%`;
                                   // Esperado pelo tempo decorrido
                                   const start = parseISODateLocal(task.startDate);
                                   const totalDays = Math.max(1, task.duration);
@@ -2527,9 +2529,9 @@ export default function GanttChart({
                                       <span
                                         className="text-[10px] font-bold"
                                         style={{ color, filter: 'drop-shadow(0 0 1px white)' }}
-                                        title={`Concluído: ${pct}% • Esperado: ${expected}%`}
+                                        title={`Concluído: ${progressLabel} • Esperado: ${expected}%`}
                                       >
-                                        {pct}%
+                                        {progressLabel}
                                       </span>
                                       {delay !== null && delay !== 0 && (
                                         <span
@@ -2569,7 +2571,7 @@ export default function GanttChart({
                                 {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : depTypes.length > 0 ? <select aria-label={`Tipo de dependência da tarefa #${taskNum}`} data-testid={`gantt-dependency-types-${task.id}`} value={depTypes.length === 1 ? `${depTypes[0].index}:${depTypes[0].type}` : '__multiple__'} onChange={(event) => { const [depIndex, dependencyType] = event.target.value.split(':'); if (dependencyType) handleDepTypeChange(task.id, Number(depIndex), dependencyType as DependencyType); }} disabled={readOnly || scheduleLocked || !onProjectChange} className="h-5 w-full border-0 border-b border-border/50 bg-transparent px-0.5 text-center text-[9px] focus:outline-none focus:border-primary disabled:cursor-default" style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined} title={depTypes.map(dep => `#${dep.num} ${dep.type}`).join(', ')}>{depTypes.length > 1 && <option value="__multiple__" disabled>{depTypes.map(dep => dep.type).join('/')}</option>}{depTypes.map(dep => depTypes.length === 1 ? (['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => <option key={type} value={`${dep.index}:${type}`}>{type}</option>) : <optgroup key={dep.taskId} label={`Tarefa #${dep.num}`}>{(['TI', 'II', 'TT', 'IT'] as DependencyType[]).map(type => <option key={type} value={`${dep.index}:${type}`}>{type}</option>)}</optgroup>)}</select> : <span className={`text-[9px] ${rowTeamDef ? 'opacity-60' : 'text-muted-foreground'}`}>—</span>}
                               </div>
                               <div className="text-center">
-                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <Select value={task.team || '_none'} disabled={readOnly || scheduleLocked || !onProjectChange} onValueChange={(val) => { const newTeam = val === '_none' ? undefined : val as TeamCode; onProjectChange?.(updateProjectTask(project, task.id, item => ({ ...item, team: newTeam }))); }}><SelectTrigger className="h-5 min-h-0 px-1 py-0 text-[9px] border-border/50 bg-transparent" style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="_none" className="text-[10px]">—</SelectItem>{projectTeams.map(def => <SelectItem key={def.code} value={def.code} className="text-[10px]"><span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full inline-block flex-shrink-0" style={{ background: def.bgColor, border: `1px solid ${def.borderColor}` }} />{def.label}</span></SelectItem>)}</SelectContent></Select>}
+                                {statusOnly ? <span className="text-[9px] text-muted-foreground">—</span> : <Select value={task.team || '_none'} disabled={readOnly || scheduleLocked || !onProjectChange} onValueChange={(val) => { const newTeam = val === '_none' ? undefined : val as TeamCode; onProjectChange?.(updateProjectTask(project, task.id, item => ({ ...item, team: newTeam }))); }}><SelectTrigger className="h-5 min-h-0 px-1 py-0 text-[9px] border-border/50 bg-transparent [&>span]:min-w-0 [&>span]:truncate [&>svg]:shrink-0" title={rowTeamDef?.label} style={rowTeamDef ? { color: rowTeamDef.textColor } : undefined}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="_none" className="text-[10px]">—</SelectItem>{projectTeams.map(def => <SelectItem key={def.code} value={def.code} className="text-[10px]"><span className="flex min-w-0 items-center gap-1"><span className="w-2 h-2 rounded-full inline-block flex-shrink-0" style={{ background: def.bgColor, border: `1px solid ${def.borderColor}` }} /><span className="truncate">{def.label}</span></span></SelectItem>)}</SelectContent></Select>}
                               </div>
                             </div>
                           );
@@ -3130,7 +3132,9 @@ export default function GanttChart({
                                         const lastLog = parseISODateLocal(lastLogISO);
                                         const offsetDays = Math.max(0, diffDays(realStart, lastLog));
                                         const offsetPx = Math.min(width, offsetDays * dayWidth);
-                                        const pct = Math.round(task.physicalProgress ?? task.percentComplete ?? 0);
+                                        const progress = task.physicalProgress ?? task.percentComplete ?? 0;
+                                  const pct = Math.round(progress);
+                                  const progressLabel = monthlyRows ? monthlyPercentage(progress / 100) : `${pct}%`;
                                         return (
                                           <span
                                             className="absolute text-[9px] font-bold px-1 rounded leading-none whitespace-nowrap"
@@ -3144,7 +3148,7 @@ export default function GanttChart({
                                             }}
                                             title={`Concluído: ${pct}% • Último apontamento: ${formatDateFull(lastLogISO)}`}
                                           >
-                                            {pct}%
+                                            {progressLabel}
                                           </span>
                                         );
                                       })()}
