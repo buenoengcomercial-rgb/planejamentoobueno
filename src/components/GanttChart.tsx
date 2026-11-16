@@ -2893,17 +2893,30 @@ export default function GanttChart({
                                     style={{ left: left + 1, width: Math.max(1, right - left - 2) }}
                                     title={`${monthlyPeriodLabel(month)} · ${label} medido · ${cell.evidence?.join(' / ') ?? ''}`}>{label}</div>;
                                 })}
-                                {!statusOnly && task.operationalReschedule?.monthlySegments?.map(segment => {
+                                {!statusOnly && task.operationalReschedule?.monthlySegments?.length && (() => {
+                                  const segments = task.operationalReschedule.monthlySegments;
                                   const row = monthlyRows?.get(task.id);
-                                  const label = row?.quantity ? monthlyPercentage(segment.quantity / row.quantity) : '';
-                                  const left = diffDays(projectStart, parseISODateLocal(segment.startDate)) * dayWidth;
-                                  const width = (diffDays(parseISODateLocal(segment.startDate), parseISODateLocal(segment.endDate)) + 1) * dayWidth;
-                                  return <button key={segment.startDate} type="button" data-testid={`gantt-planned-${task.id}-${segment.startDate}`}
-                                    disabled={readOnly || !onEditMonthly} onClick={() => onEditMonthly?.(task.id)}
-                                    className="absolute bottom-0.5 z-10 h-3.5 overflow-hidden rounded bg-blue-600 px-0.5 text-[9px] font-semibold text-white"
-                                    style={{ left, width }}
-                                    title={`${label} planejado · ${formatDateFull(segment.startDate)} a ${formatDateFull(segment.endDate)}`}>{label}</button>;
-                                })}
+                                  const portions = new Map<string, { start: Date; end: Date; quantity: number; dates: string[] }>();
+                                  for (const segment of segments) {
+                                    const key = viewMode === 'months' ? segment.startDate.slice(0, 7) : segment.startDate;
+                                    const start = parseISODateLocal(viewMode === 'months' ? `${key}-01` : segment.startDate);
+                                    const end = viewMode === 'months' ? new Date(start.getFullYear(), start.getMonth() + 1, 0) : parseISODateLocal(segment.endDate);
+                                    const portion = portions.get(key) ?? { start, end, quantity: 0, dates: [] };
+                                    portion.quantity += segment.quantity;
+                                    portion.dates.push(`${formatDateFull(segment.startDate)} a ${formatDateFull(segment.endDate)}`);
+                                    portions.set(key, portion);
+                                  }
+                                  return [...portions].map(([key, portion]) => {
+                                    const label = row?.quantity ? monthlyPercentage(portion.quantity / row.quantity) : '';
+                                    const left = diffDays(projectStart, portion.start) * dayWidth;
+                                    const width = (diffDays(portion.start, portion.end) + 1) * dayWidth;
+                                    return <button key={key} type="button" data-testid={`gantt-planned-${task.id}-${key}`}
+                                      disabled={readOnly || !onEditMonthly} onClick={() => onEditMonthly?.(task.id)}
+                                      className="absolute bottom-0.5 z-10 h-3.5 overflow-hidden rounded bg-blue-600 px-0.5 text-[9px] font-semibold text-white"
+                                      style={{ left: left + 1, width: Math.max(1, width - 2) }}
+                                      title={`${label} planejado · ${portion.dates.join(' / ')}`}>{label}</button>;
+                                  });
+                                })()}
                                 {/* Ordinary plan remains draggable outside monthly schedules. */}
                                 {statusOnly || proposedLabelOnly ? (
                                   <div
