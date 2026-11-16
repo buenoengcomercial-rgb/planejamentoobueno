@@ -114,7 +114,7 @@ it('grava uma auditoria enxuta e referencia a resposta no novo recibo do Almoxar
   expect(stored.request).toEqual({ sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
   expect(stored.result).toEqual({ receiptFormat: 'warehouse-reference-v1', source: 'scoped' });
   expect(await commit('receipt', 'compact', first)).toEqual(result);
-  const equivalent = JSON.stringify(first).replaceAll('"quantity":3', '"quantity":3.00');
+  const equivalent = JSON.stringify(first).replace(/"quantity":3/g, '"quantity":3.00');
   expect((await db.query('SELECT commit_warehouse_receipt_v2($1,$2,0,$3) result', [project, 'compact', equivalent])).rows)
     .toEqual([{ result }]);
   expect((await db.query('SELECT id FROM audit_logs')).rows).toEqual([{ id: 'audit-compact' }]);
