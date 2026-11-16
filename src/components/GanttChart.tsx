@@ -62,7 +62,6 @@ interface GanttChartProps {
   measuredReferences?: ReadonlyMap<string, MeasuredScheduleReference[]>;
   monthlyRows?: ReadonlyMap<string, ReturnType<typeof buildPhysicalFinancialSchedule>['rows'][number]>;
   measurementValues?: Readonly<Record<string, number>>;
-  schedulePdfDeadline?: string;
   onEditMonthly?: (id: string) => void;
   financialForecastNode?: React.ReactNode | null;
   monthlyFinancialForecast?: Array<{
@@ -100,7 +99,7 @@ export default function GanttChart({
   onEditSuspension,
   financialForecastNode,
   monthlyFinancialForecast,
-  monthlyRows, measurementValues, schedulePdfDeadline, onEditMonthly, measuredReferences,
+  monthlyRows, measurementValues, onEditMonthly, measuredReferences,
   lockedTaskLabels = {},
   displayOnlyTaskIds,
   contractedQuantityAdjustments,
@@ -178,7 +177,7 @@ export default function GanttChart({
     setExportingPdf(true);
     try {
       const { exportSchedulePdf } = await import('@/lib/schedulePdf');
-      await exportSchedulePdf({ project, monthlyRows, measurementValues, suspensionMap, deadline: schedulePdfDeadline });
+      await exportSchedulePdf({ project, monthlyRows, measurementValues, suspensionMap });
     } catch (error) {
       toast.error(error instanceof Error && error.message === 'O cronograma está sem atividades para exportar.'
         ? error.message : 'Não foi possível gerar o PDF do cronograma. Tente novamente.');

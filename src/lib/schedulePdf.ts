@@ -15,7 +15,6 @@ interface SchedulePdfInput {
   project: Project;
   monthlyRows: ReadonlyMap<string, MonthlyRow>;
   measurementValues?: Readonly<Record<string, number>>;
-  deadline?: string;
   suspensionMap?: Readonly<Record<string, AdditiveScheduleSuspensionMeta>>;
 }
 
@@ -38,7 +37,7 @@ function shortActivityName(doc: jsPDF, name: string, width: number): string {
   return `${lines[0]}\n${last}…`;
 }
 
-export function buildSchedulePdfData({ project, monthlyRows, measurementValues = {}, suspensionMap = {}, deadline }: SchedulePdfInput) {
+export function buildSchedulePdfData({ project, monthlyRows, measurementValues = {}, suspensionMap = {} }: SchedulePdfInput) {
   const phases = flattenPhasesByChapter(project);
   const phaseById = new Map(phases.map(phase => [phase.id, phase]));
   const numbers = getChapterNumbering(project);
@@ -106,13 +105,7 @@ export function buildSchedulePdfData({ project, monthlyRows, measurementValues =
     const title = trail.map(item => `${numbers.get(item.id)} ${item.name}`).join(' / ');
     return [{ title, rows }];
   });
-  // A start date alone does not make the opening month an execution period.
-  if (!months.size) includeMonth(executionMonth(project.startDate));
-  const bounds = [...months].sort();
-  const plannedEnd = executionMonth(deadline) ?? executionMonth(project.endDate);
-  const lastMonth = bounds.at(-1);
-  const end = plannedEnd && (!lastMonth || plannedEnd > lastMonth) ? plannedEnd : lastMonth;
-  return { groups, months: end ? monthRange(bounds[0] ?? end, end) : [], measurementValues };
+  return { groups, months: [...months].sort(), measurementValues };
 }
 
 export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise<jsPDF> {

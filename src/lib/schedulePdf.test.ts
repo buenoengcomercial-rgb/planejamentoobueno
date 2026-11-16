@@ -40,10 +40,10 @@ function pageContents(doc: Awaited<ReturnType<typeof buildSchedulePdfDocument>>)
 }
 
 describe('PDF do cronograma oficial', () => {
-  it('consolida a EAP, preserva os meses vazios e não programa serviços integralmente executados', () => {
+  it('consolida a EAP, omite os meses vazios e não programa serviços integralmente executados', () => {
     const input = inputForPdf();
     const data = buildSchedulePdfData(input);
-    expect(data.months).toEqual(['2026-09', '2026-10', '2026-11', '2026-12', '2027-01', '2027-02', '2027-03', '2027-04', '2027-05']);
+    expect(data.months).toEqual(['2026-09', '2026-10', '2027-01']);
     expect(data.groups.map(group => group.title)).toEqual(['2 Proteção contra incêndio / 2.1 Hidrantes']);
     const rows = Object.fromEntries(data.groups[0].rows.map(row => [row.code, row]));
     expect(Object.keys(rows)).toHaveLength(3);
@@ -62,24 +62,13 @@ describe('PDF do cronograma oficial', () => {
     expect(buildSchedulePdfData(input).months[0]).toBe('2026-08');
   });
 
-  it('não coloca no início da grade uma data final anterior à execução', () => {
+  it('preserva a competência com valor de medição mesmo sem parcela associada', () => {
     const input = inputForPdf();
-    expect(buildSchedulePdfData({ ...input, project: { ...project, endDate: project.startDate } }).months[0]).toBe('2026-09');
+    const measurementValues = { ...input.measurementValues, '2026-12': 100 };
+    expect(buildSchedulePdfData({ ...input, measurementValues }).months).toEqual(['2026-09', '2026-10', '2026-12', '2027-01']);
   });
 
-  it('inclui os meses até o prazo aprovado mesmo sem parcelas nos últimos meses', () => {
-    const input = inputForPdf();
-    const data = buildSchedulePdfData({
-      ...input,
-      project: { ...project, endDate: project.startDate },
-      deadline: '2027-05-14',
-    });
-    expect(data.months).toHaveLength(9);
-    expect(data.months[0]).toBe('2026-09');
-    expect(data.months.at(-1)).toBe('2027-05');
-  });
-
-  it('coloca setembro a maio na mesma página A4 e encurta somente a descrição impressa', async () => {
+  it('coloca todos os meses com dados na mesma página A4 e encurta somente a descrição impressa', async () => {
     const input = inputForPdf();
     const partial = input.monthlyRows.get(task.id)!;
     partial.planned = { '2027-05': { quantity: 5, value: 500 } };
@@ -90,9 +79,9 @@ describe('PDF do cronograma oficial', () => {
     expect(doc.getNumberOfPages()).toBe(1);
     const [content] = pageContents(doc);
     for (const text of ['Palácio Rio Madeira', 'Contrato 123/2026', '2.1.1', 'Montagem completa',
-      '500,00', '1.000,00', 'setembro', 'outubro', 'novembro', 'dezembro', 'janeiro', 'fevereiro', 'março', 'abril', 'maio',
+      '500,00', '1.000,00', 'setembro', 'outubro', 'maio',
       'Conjunto sem', 'Sem mês programado']) expect(content).toContain(text);
-    expect(content).not.toMatch(/agosto|DESCRICAO-FINAL|Predecessora|MARCO-INTERNO|Marco de liberação interno|Parcela histórica sintética/);
+    expect(content).not.toMatch(/agosto|novembro|dezembro|janeiro|fevereiro|março|abril|DESCRICAO-FINAL|Predecessora|MARCO-INTERNO|Marco de liberação interno|Parcela histórica sintética/);
     expect(partial.name).toContain('DESCRICAO-FINAL');
   });
 
