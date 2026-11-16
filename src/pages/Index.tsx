@@ -1038,6 +1038,10 @@ export default function Index() {
         });
         if (!hydrated) { cancelled = true; return; }
         lastSavedProjectJsonRef.current = hydrated.savedProjectJson;
+        if (hydrated.warehouseVersion !== undefined) {
+          currentWarehouseVersionRef.current = hydrated.warehouseVersion;
+          lastObservedWarehouseVersionRef.current = hydrated.warehouseVersion;
+        }
         confirmAreaHydration(hydrated);
         clearRemoteCollections(projectId, requestCollections);
         skipNextAutoSaveRef.current = !hydrated.repaired;

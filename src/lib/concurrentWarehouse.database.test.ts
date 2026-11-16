@@ -31,7 +31,8 @@ beforeAll(async()=>{
     '20261016123000_concurrent_requisition_receipts.sql','20261016130000_concurrent_audit_stamps.sql',
     '20260914120000_atomic_supplement_corrections.sql','20260916120000_operational_requisition_corrections_and_cancellations.sql',
     '20261020090000_allow_negative_requisition_stock.sql',
-    '20261024203000_warehouse_project_state_shadow.sql','20261115223000_warehouse_compact_audit_receipts.sql']) {
+    '20261024203000_warehouse_project_state_shadow.sql','20261115223000_warehouse_compact_audit_receipts.sql',
+    '20261116133000_compact_legacy_warehouse_receipts.sql']) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8'));
   }
 },20000);
@@ -85,6 +86,44 @@ it('repetição usa o recibo sem repetir efeitos e devolve os valores atuais',as
   expect(replay.warehouseVersion).toBe(2);
   expect(replay.warehouseState.items[0]).toEqual(item('a','Mais recente'));
   await expect(commit('catalog','once',catalog(item('a','A'),item('a','Forjada')))).rejects.toThrow('conteúdo diferente');
+});
+
+it('compacta recibos antigos somente quando o mesmo resultado está guardado na transação original', async () => {
+  const first = catalog(item('a', 'A'), item('a', 'Primeiro'));
+  await commit('catalog', 'legacy-verified', first);
+  await commit('catalog', 'legacy-divergent', catalog(item('a', 'Primeiro'), item('a', 'Atual')));
+  await db.query(`UPDATE app_private.concurrent_operation_receipts r
+    SET request=$1, result=c.result
+    FROM public.warehouse_scoped_commits c
+    WHERE c.project_id=r.project_id AND c.operation_key=r.operation_id
+      AND r.operation_id='legacy-verified'`, [JSON.stringify({ domain: 'catalog', changes: first })]);
+  await db.exec(`UPDATE app_private.concurrent_operation_receipts r
+    SET request='{"domain":"catalog"}', result=c.result || '{"extra":"retido"}'::jsonb
+    FROM public.warehouse_scoped_commits c
+    WHERE c.project_id=r.project_id AND c.operation_key=r.operation_id
+      AND r.operation_id='legacy-divergent'`);
+  await db.query(`INSERT INTO app_private.concurrent_operation_receipts
+    (project_id,domain,operation_id,actor_id,request,result)
+    VALUES($1,'measurement','measurement-receipt',$2,'{}','{"committedAt":"original"}')`, [project, actor]);
+
+  const compact = () => db.query(
+    'SELECT app_private.compact_legacy_warehouse_receipts($1, 10) n', [project],
+  );
+  expect((await compact()).rows).toEqual([{ n: 1 }]);
+  expect((await compact()).rows).toEqual([{ n: 0 }]);
+  const { rows } = await db.query<{ operation_id: string; request: unknown; result: unknown }>(
+    'SELECT operation_id, request, result FROM app_private.concurrent_operation_receipts ORDER BY operation_id',
+  );
+  expect(rows).toEqual([
+    { operation_id: 'legacy-divergent', request: { domain: 'catalog' }, result: expect.objectContaining({ extra: 'retido' }) },
+    { operation_id: 'legacy-verified', request: { sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      result: { receiptFormat: 'warehouse-reference-v1', source: 'scoped' } },
+    { operation_id: 'measurement-receipt', request: {}, result: { committedAt: 'original' } },
+  ]);
+  expect((await commit('catalog', 'legacy-verified', first)).warehouseState.items[0]).toEqual(item('a', 'Atual'));
+  await expect(commit('catalog', 'legacy-verified', catalog(item('a', 'A'), item('a', 'Forjada'))))
+    .rejects.toThrow('conteúdo diferente');
+  expect((await db.query('SELECT count(*)::int n FROM audit_logs')).rows).toEqual([{ n: 2 }]);
 });
 
 it('grava uma auditoria enxuta e referencia a resposta no novo recibo do Almoxarifado', async () => {

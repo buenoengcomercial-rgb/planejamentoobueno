@@ -25,7 +25,7 @@ import {
 import type { ProjectCollectionKey } from '@/lib/projectDataScope';
 import { repairProjectAnalyticLinks } from '@/lib/analyticLinks';
 import { prepareWarehouseTestReset } from '@/lib/warehouseReset';
-import { needsWarehouseProjectState, readWarehouseProjectState } from '@/lib/warehouseProjectState';
+import { needsWarehouseProjectState, readVersionedProjectRow, readWarehouseProjectState } from '@/lib/warehouseProjectState';
 
 export interface CloudProjectMeta {
   id: string;
@@ -128,11 +128,7 @@ const isMissingWarehouseVersionColumn = (error: { code?: string; message?: strin
 
 /** Consulta leve usada para detectar alterações feitas em outro aparelho. */
 export async function getCloudProjectVersion(id: string): Promise<CloudProjectVersion | null> {
-  const current = await withReadDeadline(supabase
-    .from('projects')
-    .select('id, updated_at, warehouse_version, warehouse_updated_at')
-    .eq('id', id)
-    .maybeSingle());
+  const current = await readVersionedProjectRow(id);
   if (current.error && !isMissingWarehouseVersionColumn(current.error)) throw current.error;
   if (current.error) {
     const legacy = await withReadDeadline(supabase.from('projects').select('id, updated_at').eq('id', id).maybeSingle());

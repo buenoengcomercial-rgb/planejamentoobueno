@@ -74,23 +74,26 @@ export function useProjectRealtimeRefresh({
     const {
       affectedCollections, metadataOnly, requestCollections, activeCollections, inactiveCollections,
     } = planRealtimeProjectRefresh(sources, requiredProjectCollections);
-    if (affectedCollections.some(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection))) {
+    if (inactiveCollections.length > 0) markRemoteCollections(current.id, inactiveCollections);
+    if (affectedCollections.some(collection =>
+      WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection) && activeCollections.includes(collection))) {
       if (await refreshRemoteWarehouseInBackground(current)) return;
     }
-    if (await refreshRemoteCollectionsInBackground(current, affectedCollections)) return;
-    // Sem tabela identificada, a consulta permanece limitada à área aberta.
-    if (inactiveCollections.length > 0) markRemoteCollections(current.id, inactiveCollections);
+    const activeAffected = affectedCollections.filter(collection => activeCollections.includes(collection));
+    if (activeAffected.length > 0 && await refreshRemoteCollectionsInBackground(current, activeAffected)) return;
     // Outra aba recebeu alteração: atualize somente o marcador e a versão
     // otimista. Não faça download, não troque objetos locais e não mexa no UI.
     if (requestCollections.length > 0 && activeCollections.length === 0) {
       const remoteVersion = await getCloudProjectVersion(current.id).catch(() => null);
       if (remoteVersion && rawProjectRef.current?.id === current.id) {
-        currentProjectUpdatedAtRef.current = remoteVersion.updatedAt;
         currentWarehouseVersionRef.current = remoteVersion.warehouseVersion;
         lastObservedWarehouseVersionRef.current = remoteVersion.warehouseVersion;
-        setCurrentProjectUpdatedAt(remoteVersion.updatedAt);
-        if (!projectHasLocalChanges(rawProjectRef.current, lastSavedProjectJsonRef.current)) {
-          setLastCloudConfirmedAt(remoteVersion.updatedAt);
+        if (remoteVersion.updatedAt !== currentProjectUpdatedAtRef.current) {
+          currentProjectUpdatedAtRef.current = remoteVersion.updatedAt;
+          setCurrentProjectUpdatedAt(remoteVersion.updatedAt);
+          if (!projectHasLocalChanges(rawProjectRef.current, lastSavedProjectJsonRef.current)) {
+            setLastCloudConfirmedAt(remoteVersion.updatedAt);
+          }
         }
       }
       return;
@@ -104,7 +107,7 @@ export function useProjectRealtimeRefresh({
       const dataScopeAtRequest = activeDataScopeKeyRef.current;
 
       const record = await loadCloudProjectRecord(current.id, {
-        collections: requestCollections,
+        collections: activeCollections,
         strict: true,
         deferSnapshot: true,
       });
@@ -123,12 +126,12 @@ export function useProjectRealtimeRefresh({
         local: localAfterRequest,
         remote: record.project,
         savedProjectJson: lastSavedProjectJsonRef.current,
-        collections: requestCollections,
+        collections: activeCollections,
         metadataOnly,
       });
       if (reconciled.conflict) {
         discardCloudProjectRecord(record);
-        markRemoteCollections(current.id, requestCollections);
+        markRemoteCollections(current.id, activeCollections);
         setSaveStatus('conflict');
         return;
       }
@@ -139,7 +142,7 @@ export function useProjectRealtimeRefresh({
       lastObservedWarehouseVersionRef.current = record.warehouseVersion;
       setCurrentProjectUpdatedAt(record.updatedAt);
       if (!reconciled.hasPendingLocalChanges) setLastCloudConfirmedAt(record.updatedAt);
-      clearRemoteCollections(current.id, requestCollections);
+      clearRemoteCollections(current.id, activeCollections);
       setRemoteUpdateAt(new Date().toISOString());
       skipNextAutoSaveRef.current = !reconciled.hasPendingLocalChanges;
       rawProjectRef.current = reconciled.project;

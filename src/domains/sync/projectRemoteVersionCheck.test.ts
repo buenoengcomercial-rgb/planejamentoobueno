@@ -19,7 +19,7 @@ const project = (name = 'Obra', diary = 'Original'): Project => ({
   additives: [],
 } as Project);
 
-function setup(local = project()) {
+function setup(local = project(), collections: Parameters<typeof checkProjectRemoteVersion>[0]['collections'] = ['dailyReports']) {
   const refs = {
     project: { current: local as Project | null },
     initialized: { current: true },
@@ -48,7 +48,7 @@ function setup(local = project()) {
     setProjectUpdatedAt: vi.fn(), setLastCloudConfirmedAt: vi.fn(), setProject: vi.fn(),
   };
   const check = () => checkProjectRemoteVersion({
-    organizationId: 'org-1', collections: ['dailyReports'], refs, ...actions,
+    organizationId: 'org-1', collections, refs, ...actions,
   });
   return { refs, actions, check };
 }
@@ -56,11 +56,23 @@ function setup(local = project()) {
 beforeEach(() => {
   vi.clearAllMocks();
   cloud.getVersion.mockResolvedValue({
-    id: 'obra-1', updatedAt: 'v2', warehouseVersion: 2, warehouseUpdatedAt: 'v2',
+    id: 'obra-1', updatedAt: 'v2', warehouseVersion: 1, warehouseUpdatedAt: 'v1',
   });
 });
 
 describe('consulta da versão remota por domínio', () => {
+  it('preserva o Cronograma quando somente o Almoxarifado mudou', async () => {
+    cloud.getVersion.mockResolvedValue({ updatedAt: 'v1', warehouseVersion: 2, warehouseUpdatedAt: 'warehouse-v2' });
+    const { refs, actions, check } = setup(project(), ['tasks']);
+    await check();
+    expect(actions.refreshWarehouse).not.toHaveBeenCalled();
+    expect(actions.refreshCollections).not.toHaveBeenCalled();
+    expect(cloud.loadRecord).not.toHaveBeenCalled();
+    expect(actions.markRemoteCollections).toHaveBeenCalledWith('obra-1', expect.arrayContaining(['warehouseRequisitions']));
+    expect(refs.warehouseVersion.current).toBe(2);
+    expect(refs.projectUpdatedAt.current).toBe('v1');
+  });
+
   it('mescla uma versão remota em outro domínio sem bloquear a edição local', async () => {
     const local = project('Nome local');
     cloud.loadRecord.mockResolvedValue({ project: project('Obra', 'Diário remoto'), updatedAt: 'v2', warehouseVersion: 2 });

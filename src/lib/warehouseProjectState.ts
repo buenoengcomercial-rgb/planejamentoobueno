@@ -13,6 +13,24 @@ export interface WarehouseProjectStateRead {
   updatedAt: string;
 }
 
+export async function readVersionedProjectRow(projectId: string) {
+  const projected = await withReadDeadline(supabase.from('projects')
+    .select('id, updated_at, warehouse_version, warehouse_updated_at, warehouse_project_state(warehouse_version, warehouse_updated_at)')
+    .eq('id', projectId).maybeSingle());
+  // A missing relationship is expected only before the projection migration.
+  if (projected.error?.code === 'PGRST200'
+    && /warehouse_project_state/i.test(projected.error.message)) {
+    return withReadDeadline(supabase.from('projects')
+      .select('id, updated_at, warehouse_version, warehouse_updated_at')
+      .eq('id', projectId).maybeSingle());
+  }
+  if (projected.data?.warehouse_project_state) {
+    const { warehouse_project_state: state, ...parent } = projected.data;
+    return { ...projected, data: { ...parent, ...state } };
+  }
+  return projected;
+}
+
 /** Lê a projeção nas áreas do estoque e na carga completa de uma obra com estoque. */
 export function needsWarehouseProjectState(collections?: readonly ProjectCollectionKey[]): boolean {
   return collections?.some(collection => WAREHOUSE_COLLECTIONS.has(collection)) ?? false;
@@ -44,9 +62,7 @@ export async function readWarehouseProjectState(
   }
   return {
     warehouse: {
-      ...(project.warehouse ?? {
-        locations: [], items: [], movements: [], requisitions: [], equipments: [], equipmentGroups: [], custodyTerms: [],
-      }),
+      locations: [], items: [], equipments: [], equipmentGroups: [],
       ...data.state_json,
       // As coleções operacionais continuam vindo das tabelas próprias.
       movements: project.warehouse?.movements ?? [],

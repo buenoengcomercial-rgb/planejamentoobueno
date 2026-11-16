@@ -4,6 +4,7 @@ import { mergeConcurrentFields } from '@/lib/concurrentFields';
 import { commitProjectFields, type ProjectFieldBatch, type ProjectFieldReceipt, type ProjectFieldRequest } from '@/lib/projectFieldCommit';
 import type { ProductionCaptureChange } from '@/lib/planTakeoff';
 import { withReadDeadline } from '@/lib/readDeadline';
+import { readVersionedProjectRow } from '@/lib/warehouseProjectState';
 /**
  * Sincronização incremental das coleções de alto volume entre o objeto
  * `Project` (UI) e as tabelas normalizadas no Supabase.
@@ -692,7 +693,7 @@ const WAREHOUSE_PAGE_SIZE = 500;
 type WarehouseRowTable = 'warehouse_movements' | 'warehouse_requisitions' | 'warehouse_custody';
 
 async function warehouseLedgerVersion(projectId: string): Promise<number> {
-  const result = await supabase.from('projects').select('warehouse_version').eq('id', projectId).maybeSingle();
+  const result = await readVersionedProjectRow(projectId);
   if (result.error || !Number.isSafeInteger(result.data?.warehouse_version)) {
     throw result.error ?? new Error('A versão do livro de estoque não está disponível.');
   }

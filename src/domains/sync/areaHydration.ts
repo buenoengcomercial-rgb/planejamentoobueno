@@ -12,6 +12,7 @@ import {
   mergeHydratedProjectCollections,
 } from '@/lib/projectSync';
 import { normalizeProjectCollections, type ProjectCollectionKey } from '@/lib/projectDataScope';
+import { needsWarehouseProjectState, readWarehouseProjectState } from '@/lib/warehouseProjectState';
 
 const PRODUCTION_COLLECTIONS: readonly ProjectCollectionKey[] = ['taskDailyLogs', 'eapChapters', 'tasks'];
 
@@ -47,16 +48,22 @@ export type AreaHydrationResult = {
   project: Project;
   savedProjectJson: string;
   repaired: boolean;
+  warehouseVersion?: number;
 };
 
 export async function hydrateAreaCollections(options: HydrationOptions): Promise<AreaHydrationResult | null> {
   const { projectId, collections, source } = options;
   const beforeLoad = await getCloudProjectVersion(projectId);
   if (!beforeLoad) throw new Error('A versão da obra não pôde ser conferida.');
-  const hydrated = await hydrateProjectFromCloud(source, { collections: [...collections], strict: true });
+  const usesWarehouse = needsWarehouseProjectState(collections);
+  const warehouse = usesWarehouse ? await readWarehouseProjectState(source) : null;
+  const base = warehouse ? { ...source, warehouse: warehouse.warehouse } : source;
+  const hydrated = await hydrateProjectFromCloud(base, { collections: [...collections], strict: true });
   try {
     const afterLoad = await getCloudProjectVersion(projectId);
-    if (!afterLoad || afterLoad.updatedAt !== beforeLoad.updatedAt) {
+    if (!afterLoad || afterLoad.updatedAt !== beforeLoad.updatedAt
+      || (usesWarehouse && beforeLoad.warehouseVersion !== afterLoad.warehouseVersion)
+      || (warehouse && warehouse.version !== afterLoad.warehouseVersion)) {
       throw new Error('A obra mudou durante o carregamento. Atualize a área antes de editar.');
     }
     if (!options.isCurrent()) {
@@ -68,12 +75,21 @@ export async function hydrateAreaCollections(options: HydrationOptions): Promise
       discardHydratedProjectCollections(hydrated);
       return null;
     }
-    const cloudMerged = mergeHydratedProjectCollections(latest, hydrated, collections);
+    const withWarehouseState = (project: Project): Project => warehouse ? {
+      ...project,
+      warehouse: {
+        ...warehouse.warehouse,
+        movements: project.warehouse?.movements ?? [],
+        requisitions: project.warehouse?.requisitions ?? [],
+        custodyTerms: project.warehouse?.custodyTerms ?? [],
+      },
+    } : project;
+    const cloudMerged = mergeHydratedProjectCollections(withWarehouseState(latest), hydrated, collections);
     let savedCloudMerged = cloudMerged;
     const savedJson = options.savedProjectJson();
     if (savedJson) {
       try {
-        savedCloudMerged = mergeHydratedProjectCollections(JSON.parse(savedJson) as Project, hydrated, collections);
+        savedCloudMerged = mergeHydratedProjectCollections(withWarehouseState(JSON.parse(savedJson) as Project), hydrated, collections);
       } catch {
         savedCloudMerged = cloudMerged;
       }
@@ -96,6 +112,7 @@ export async function hydrateAreaCollections(options: HydrationOptions): Promise
       project: repair.project,
       savedProjectJson: serializeProject(savedCloudMerged),
       repaired: repair.changed,
+      ...(warehouse && { warehouseVersion: warehouse.version }),
     };
   } catch (error) {
     discardHydratedProjectCollections(hydrated);

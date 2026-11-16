@@ -27,6 +27,7 @@ export type ProjectCollectionKey = typeof PROJECT_COLLECTION_KEYS[number];
  * as duas coleções, evitando uma árvore com pai e filhos de versões diferentes.
  */
 const REALTIME_TABLE_COLLECTIONS: Record<string, readonly ProjectCollectionKey[]> = {
+  warehouse_project_state: ['warehouseMovements', 'warehouseRequisitions', 'warehouseCustody', 'stockMovements'],
   warehouse_movements: ['warehouseMovements'],
   warehouse_requisitions: ['warehouseRequisitions'],
   warehouse_custody: ['warehouseCustody'],

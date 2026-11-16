@@ -59,6 +59,7 @@ import {
   CloudProjectPartialSyncError,
   confirmCloudProjectRecord,
   createCloudProject,
+  getCloudProjectVersion,
   loadCloudProject,
   loadCloudProjectRecord,
   loadStableCloudProjectRecord,
@@ -109,6 +110,19 @@ describe('criação inicial segura da obra', () => {
     await expect(loadCloudProjectRecord('p',{strict:true})).rejects.toBeInstanceOf(CloudProjectConflictError);
     expect(mocks.discardHydratedProjectCollections).toHaveBeenCalled();
     expect(mocks.confirmHydratedProjectCollections).not.toHaveBeenCalled();
+  });
+
+  it('lê a versão independente do estoque sem avançar a versão geral', async () => {
+    const query = queryBuilder({ data: {
+      id: 'p', updated_at: 'geral', warehouse_version: 4, warehouse_updated_at: 'antiga',
+      warehouse_project_state: { warehouse_version: 7, warehouse_updated_at: 'estoque' },
+    }, error: null });
+    mocks.from.mockReturnValueOnce(query);
+    await expect(getCloudProjectVersion('p')).resolves.toEqual({
+      projectId: 'p', updatedAt: 'geral', warehouseVersion: 7, warehouseUpdatedAt: 'estoque',
+    });
+    expect(query.select).toHaveBeenCalledWith(expect.stringContaining('warehouse_project_state('));
+    expect(mocks.from).toHaveBeenCalledTimes(1);
   });
 
   it('retries an opening revision race and adopts only the stable read', async () => {
