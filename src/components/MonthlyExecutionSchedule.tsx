@@ -1,3 +1,4 @@
+import PhysicalFinancialGrid from './PhysicalFinancialGrid';
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { cloudMeasurementRepository } from '@/lib/measurementCloudRepository';
@@ -12,6 +13,9 @@ const formatMonth = (month: string) => `${month.slice(5)}/${month.slice(0, 4)}`;
 
 interface Props {
   project: Project;
+  mode?: 'gantt' | 'physicalFinancial';
+  openPhysicalFinancial?: () => void;
+  saveMonthlyAllocation?: (serviceId: string, allocations: Record<string, number> | null) => void;
   userId?: string;
   independentMeasurementConfirmed: boolean;
   openMeasurement?: () => void;
@@ -27,9 +31,10 @@ interface ConfirmedData {
 }
 
 export default function MonthlyExecutionSchedule({
-  project, userId, independentMeasurementConfirmed, openMeasurement, openAdditive, renderGantt,
+  project, userId, independentMeasurementConfirmed, openMeasurement, openAdditive, renderGantt, mode, openPhysicalFinancial, saveMonthlyAllocation,
 }: Props) {
-  const [view, setView] = useState<'monthly' | 'gantt'>('monthly');
+  const [selectedView, setView] = useState<'monthly' | 'gantt'>('monthly');
+  const view = mode === 'gantt' ? 'gantt' : mode === 'physicalFinancial' ? 'monthly' : selectedView;
   const [read, setRead] = useState(0);
   const [data, setData] = useState<ConfirmedData>({});
   const projectId = project.id;
@@ -99,14 +104,17 @@ export default function MonthlyExecutionSchedule({
 
   return <div className="min-w-0">
     <div role="group" aria-label="Visualização do cronograma" className="flex flex-wrap gap-2 border-b bg-card px-4 py-3">
-      <Button type="button" variant={view === 'monthly' ? 'default' : 'outline'} aria-pressed={view === 'monthly'} onClick={() => setView('monthly')}>Cronograma físico-financeiro</Button>
-      <Button type="button" variant={view === 'gantt' ? 'default' : 'outline'} aria-pressed={view === 'gantt'} onClick={() => setView('gantt')}>Gantt</Button>
+      {mode === 'gantt' && <Button variant="outline" onClick={openPhysicalFinancial}>Cronograma físico-financeiro</Button>}
+      {!mode && <><Button type="button" variant={view === 'monthly' ? 'default' : 'outline'} aria-pressed={view === 'monthly'} onClick={() => setView('monthly')}>Cronograma físico-financeiro</Button>
+      <Button type="button" variant={view === 'gantt' ? 'default' : 'outline'} aria-pressed={view === 'gantt'} onClick={() => setView('gantt')}>Gantt</Button></>}
       <Button type="button" variant="ghost" onClick={() => { setData({}); setRead(current => current + 1); }}>Conferir na nuvem</Button>
     </div>
     {(additiveError || measurementError) && <p role="alert" className="px-4 py-3 text-sm text-destructive">
       Não foi possível confirmar {additiveError && measurementError && view === 'monthly' ? 'a Medição e o Aditivo' : additiveError ? 'o Aditivo' : 'a Medição'} na nuvem. Use “Conferir na nuvem” para tentar novamente.
     </p>}
-    {view === 'gantt' ? (userId && (measurement === undefined || measurementError) ? <p role="status" className="p-4">Confirme a Medição na nuvem antes de revisar o Gantt.</p> : renderGantt(additiveError ? [] : additives ?? [], measurement)) : <div className="space-y-6 p-4">
+    {view === 'gantt' ? (userId && (measurement === undefined || measurementError) ? <p role="status" className="p-4">Confirme a Medição na nuvem antes de revisar o Gantt.</p> : renderGantt(additiveError ? [] : additives ?? [], measurement)) : mode === 'physicalFinancial' ? (measurement !== undefined && additives && !measurementError && !additiveError
+      ? <PhysicalFinancialGrid project={project} measurement={measurement} additives={additives} onSave={saveMonthlyAllocation} />
+      : !measurementError && !additiveError && <p role="status" className="p-4">Conferindo a Medição e o Aditivo na nuvem…</p>) : <div className="space-y-6 p-4">
       <section aria-label="Execução medida">
         <h2 className="font-semibold">1ª e 2ª medições</h2>
         {!execution && !measurementError && <p role="status" className="py-3 text-sm text-muted-foreground">Conferindo a Medição na nuvem…</p>}

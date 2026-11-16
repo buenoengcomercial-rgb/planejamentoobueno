@@ -30,7 +30,7 @@ function setup(current = project(), overrides: Partial<ProjectViewEditContext> =
     lastSavedProjectJsonRef: { current: JSON.stringify(current) },
     currentProjectUpdatedAtRef: { current: 'v1' },
     undoStacksRef: { current: {
-      dashboard: [], management: [], gantt: [], tasks: [], measurement: [],
+      dashboard: [], management: [], gantt: [], physicalFinancial: [], tasks: [], measurement: [],
       dailyReport: [], additive: [], additiveSchedule: [], realCost: [], materials: [], warehouse: [],
     } },
     setRawProject: updater => {
