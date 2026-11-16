@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
-import { stageWarehouseOperation, rejectWarehouseOperation } from './warehouseOperationOutbox';
+import { stageWarehouseOperation, rejectWarehouseOperation, WAREHOUSE_RECEIPT_UNAVAILABLE } from './warehouseOperationOutbox';
+import { summarizeWarehouseAudit } from './warehouseAuditSummary';
 import type {
   AuditLog,
   Project,
@@ -150,6 +151,9 @@ function warehouseCommitError(
   if (/WAREHOUSE_INVALID_AUDIT|null value in column ["']id["'].*audit_logs/i.test(message)) {
     return new Error('A auditoria desta operação não pôde ser validada. Nenhuma requisição ou baixa de estoque foi gravada; atualize a obra e tente novamente.');
   }
+  if (error.code === WAREHOUSE_RECEIPT_UNAVAILABLE.code) {
+    return new Error(WAREHOUSE_RECEIPT_UNAVAILABLE.message);
+  }
   if (error.code === 'PGRST202' || /schema cache|could not find the function/i.test(message)) {
     const failedAction: Record<WarehouseCloudOperationType, string> = {
       delivery: 'A retirada não foi registrada nem liberada para PDF',
@@ -285,7 +289,9 @@ export async function commitWarehouseOperation(
   const nextRequisition = afterWarehouse?.requisitions.find(row => row.id === operation.requisitionId) ?? null;
   const movementUpserts = changedRows(beforeWarehouse?.movements ?? [], afterWarehouse?.movements ?? []);
   const movementDeletes = missingIds(beforeWarehouse?.movements ?? [], afterWarehouse?.movements ?? []);
-  const auditUpserts = operationAuditRows(before.auditLogs ?? [], after.auditLogs ?? [], operation);
+  const affected = new Set([...movementUpserts.map(row => row.id), ...movementDeletes]);
+  const auditUpserts = operationAuditRows(before.auditLogs ?? [], after.auditLogs ?? [], operation)
+    .map(row => summarizeWarehouseAudit(row, affected));
   if (auditUpserts.length !== 1) {
     throw new Error('Não foi possível preparar a auditoria segura desta operação. Nenhuma requisição ou baixa de estoque foi gravada; atualize a obra e tente novamente.');
   }
@@ -331,7 +337,7 @@ export async function commitWarehouseOperation(
   if (!warehouse) throw new Error('A operação foi confirmada, mas o estado local do Almoxarifado ficou incompleto. Atualize a obra.');
 
   const returnedMovementById = new Map((result.movements ?? []).map(row => [row.id, row]));
-  const returnedAuditById = new Map((result.auditLogs ?? []).map(row => [row.id, row]));
+  const returnedAuditById = new Map([...auditUpserts, ...(result.auditLogs ?? [])].map(row => [row.id, row]));
   const deleted = new Set(result.deletedMovementIds ?? []);
   if (result.movementsComplete) warehouse.movements.forEach(row => {
     if (row.requisitionId === operation.requisitionId && !returnedMovementById.has(row.id)) deleted.add(row.id);
