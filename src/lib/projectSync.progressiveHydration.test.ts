@@ -87,12 +87,12 @@ beforeEach(() => {
 });
 
 describe('hidratação progressiva da obra', () => {
-  it.each([273, 501])('carrega %i requisições sem count=exact e só aceita a lista completa', async requisitionCount => {
+  it.each([273, 501])('carrega %i requisições assinadas em páginas completas sem count=exact', async requisitionCount => {
     const current = project(`warehouse-requisitions-uncounted-${requisitionCount}`);
     clearCloudSnapshot(current.id);
     const requisitions = Array.from({ length: requisitionCount }, (_, index) => ({
       id: `req-${String(index).padStart(4, '0')}`,
-      data: { id: `req-${String(index).padStart(4, '0')}`, number: index + 1 },
+      data: { id: `req-${String(index).padStart(4, '0')}`, number: index + 1, signatureReceiver: `signature-${index}` },
     }));
     const selectedOptions: unknown[] = [];
     const requestedAfter: Array<string | undefined> = [];
@@ -102,18 +102,26 @@ describe('hidratação progressiva da obra', () => {
       };
       expect(table).toBe('warehouse_requisitions');
       let afterId: string | undefined;
+      let pageSize = 0;
       const query = {
         select: vi.fn((_columns: string, options?: unknown) => { selectedOptions.push(options); return query; }),
-        eq: vi.fn(), order: vi.fn(), limit: vi.fn(), gt: vi.fn((_field: string, value: string) => { afterId = value; return query; }),
+        eq: vi.fn(), order: vi.fn(),
+        limit: vi.fn((limit: number) => { pageSize = limit; return query; }),
+        gt: vi.fn((_field: string, value: string) => { afterId = value; return query; }),
         then: (resolve: (result: MockQueryResult) => unknown) => {
           requestedAfter.push(afterId);
+          if (pageSize > 80) {
+            return Promise.resolve(resolve({
+              data: null, error: { message: '57014: canceling statement due to statement timeout' },
+            }));
+          }
           return Promise.resolve(resolve({
-            data: requisitions.filter(row => !afterId || row.id > afterId).slice(0, 500),
+            data: requisitions.filter(row => !afterId || row.id > afterId).slice(0, pageSize),
             error: null,
           }));
         },
       };
-      for (const method of [query.eq, query.order, query.limit]) method.mockReturnValue(query);
+      for (const method of [query.eq, query.order]) method.mockReturnValue(query);
       return query;
     });
 
@@ -121,11 +129,12 @@ describe('hidratação progressiva da obra', () => {
       collections: ['warehouseRequisitions'], strict: true,
     });
 
-    expect(hydrated.warehouse?.requisitions).toHaveLength(requisitionCount);
+    expect(hydrated.warehouse?.requisitions).toEqual(requisitions.map(row => row.data));
     expect(selectedOptions).toEqual(Array(requestedAfter.length).fill(undefined));
-    expect(requestedAfter).toEqual(requisitionCount === 273
-      ? [undefined, 'req-0272']
-      : [undefined, 'req-0499', 'req-0500']);
+    expect(requestedAfter).toEqual([
+      undefined,
+      ...requisitions.filter((_, index) => (index + 1) % 80 === 0 || index + 1 === requisitionCount).map(row => row.id),
+    ]);
     expect(getLoadedProjectCollections(current.id)).toEqual([]);
     expect(getHydratedProjectCollections(hydrated)).toEqual(['warehouseRequisitions']);
   });

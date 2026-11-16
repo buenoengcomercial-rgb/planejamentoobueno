@@ -687,8 +687,14 @@ export async function loadVerifiedRows<T extends { id: string }>(
 
 // O PostgREST limita as linhas por consulta. A página vazia e uma revisão
 // estável confirmam que o livro inteiro foi lido, sem COUNT(*) em cada página.
-const WAREHOUSE_PAGE_SIZE = 500;
 type WarehouseRowTable = 'warehouse_movements' | 'warehouse_requisitions' | 'warehouse_custody';
+// Retiradas e termos podem conter assinaturas incorporadas. Páginas menores
+// mantêm o trabalho por consulta limitado e preservam a leitura desses dados.
+const WAREHOUSE_PAGE_SIZE: Record<WarehouseRowTable, number> = {
+  warehouse_movements: 500,
+  warehouse_requisitions: 80,
+  warehouse_custody: 80,
+};
 
 async function warehouseLedgerVersion(projectId: string): Promise<number> {
   const result = await readVersionedProjectRow(projectId);
@@ -709,7 +715,7 @@ async function loadWarehouseRows(table: WarehouseRowTable, projectId: string): P
           .select('id, data')
           .eq('project_id', projectId)
           .order('id', { ascending: true })
-          .limit(WAREHOUSE_PAGE_SIZE);
+          .limit(WAREHOUSE_PAGE_SIZE[table]);
         if (lastId) query = query.gt('id', lastId);
         const result = await query;
         if (result.error) return { data: null, error: result.error };
