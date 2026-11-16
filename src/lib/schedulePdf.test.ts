@@ -67,6 +67,18 @@ describe('PDF do cronograma oficial', () => {
     expect(buildSchedulePdfData({ ...input, project: { ...project, endDate: project.startDate } }).months[0]).toBe('2026-09');
   });
 
+  it('inclui os meses até o prazo aprovado mesmo sem parcelas nos últimos meses', () => {
+    const input = inputForPdf();
+    const data = buildSchedulePdfData({
+      ...input,
+      project: { ...project, endDate: project.startDate },
+      deadline: '2027-05-14',
+    });
+    expect(data.months).toHaveLength(9);
+    expect(data.months[0]).toBe('2026-09');
+    expect(data.months.at(-1)).toBe('2027-05');
+  });
+
   it('coloca setembro a maio na mesma página A4 e encurta somente a descrição impressa', async () => {
     const input = inputForPdf();
     const partial = input.monthlyRows.get(task.id)!;
