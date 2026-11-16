@@ -143,7 +143,6 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
       project={ganttProject}
       contractedQuantityAdjustments={display.quantityAdjustments}
       monthlyRows={monthlyRows}
-      schedulePdfDeadline={deadline}
       measuredReferences={monthlyPresentation ? measured.references : undefined}
       measurementValues={fiscalTotals}
       onEditMonthly={onSaveMonthly ? setEditMonthlyId : undefined}
