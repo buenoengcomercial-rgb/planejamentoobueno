@@ -187,7 +187,7 @@ export async function buildSchedulePdfDocument(input: SchedulePdfInput): Promise
       theme: 'grid',
       head: [[
         'EAP', 'Atividade', 'Execução\n(%)',
-        ...block.map(month => ({
+        ...block.map<CellInput>(month => ({
           content: `${monthlyPeriodLabel(month).replace('/', '\n')}${measurementValues[month] === undefined ? '' : `\n${money.format(measurementValues[month])}`}`,
           styles: { halign: 'center', cellPadding: { top: 1.4, bottom: 1.4, left: 0.8, right: 0.8 } },
         })),
