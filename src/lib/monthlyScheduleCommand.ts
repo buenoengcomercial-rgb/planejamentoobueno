@@ -33,8 +33,8 @@ export function proposeMonthlySchedule(project: Project, measurement: Measuremen
   }
   if (getPendingAdditiveScheduleControls(project).has(edit.serviceId)) throw Error('O serviço está aguardando definição do aditivo.');
   const projected = includeClosingSchedule(display.project).project;
-  const measured = includeMeasuredSchedule(projected, measurement, additives, display.quantityAdjustments);
-  const graph = settleReleaseProject(includeReleaseMilestones(measured.project));
+  const measured = includeMeasuredSchedule(includeReleaseMilestones(projected), measurement, additives, display.quantityAdjustments);
+  const graph = settleReleaseProject(measured.project, measured.measuredCount > 0);
   const originals = new Map(getAllTasks(graph).map(task => [task.id, task]));
   const monthlySchedule = { ...project.monthlySchedule };
   if (edit.allocations) monthlySchedule[edit.serviceId] = { allocations: edit.allocations };

@@ -52,12 +52,23 @@ export default function MonthlyExecutionSchedule({
   useEffect(() => {
     let active = true;
     if (!repository) return;
-    void (repository.loadForRetry?.() ?? repository.load()).then(workspace => {
-      if (repository.loadedOffline?.() || (!workspace && independentMeasurementConfirmed)) throw new Error();
-      if (active) setData(current => ({ ...current, measurement: workspace, measurementError: false }));
-    }).catch(() => {
-      if (active) setData(current => ({ ...current, measurementError: true }));
-    });
+    let pending = false;
+    const refreshMeasurement = async () => {
+      if (pending) return;
+      pending = true;
+      try {
+        const workspace = await (repository.loadForRetry?.() ?? repository.load());
+        if (repository.loadedOffline?.() || (!workspace && independentMeasurementConfirmed)) throw new Error();
+        if (active) setData(current => current.measurement === workspace && !current.measurementError ? current
+          : { ...current, measurement: workspace, measurementError: false });
+      } catch {
+        if (active) setData(current => ({ ...current, measurementError: true }));
+      } finally { pending = false; }
+    };
+    void refreshMeasurement();
+    const refreshVisibleMeasurement = () => { if (!document.hidden) void refreshMeasurement(); };
+    const timer = window.setInterval(refreshVisibleMeasurement, 30_000);
+    window.addEventListener('focus', refreshVisibleMeasurement);
     void loadStableCloudProjectRecord(projectId, { collections: ['additives'], strict: true }).then(record => {
       if (!record) throw new Error();
       discardCloudProjectRecord(record);
@@ -65,7 +76,11 @@ export default function MonthlyExecutionSchedule({
     }).catch(() => {
       if (active) setData(current => ({ ...current, additiveError: true }));
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshVisibleMeasurement);
+    };
   }, [independentMeasurementConfirmed, projectId, read, repository]);
 
   const { measurement, additives, measurementError, additiveError } = data;

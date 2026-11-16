@@ -34,10 +34,10 @@ export default function DependencyArrows({ tasks, taskYPositions, projectStart, 
       if (srcY === undefined || tgtY === undefined) return;
 
       const predStart = diffDays(projectStart, parseISODateLocal(src.startDate));
-      const predLast = src.operationalReschedule?.monthlySegments?.at(-1)?.endDate;
+      const predLast = src.measuredExecutionEndDate ?? src.operationalReschedule?.monthlySegments?.at(-1)?.endDate;
       const predEnd = predLast ? diffDays(projectStart, parseISODateLocal(predLast)) + 1 : predStart + src.duration;
       const succStart = diffDays(projectStart, parseISODateLocal(task.startDate));
-      const succLast = task.operationalReschedule?.monthlySegments?.at(-1)?.endDate;
+      const succLast = task.measuredExecutionEndDate ?? task.operationalReschedule?.monthlySegments?.at(-1)?.endDate;
       const succEnd = succLast ? diffDays(projectStart, parseISODateLocal(succLast)) + 1 : succStart + task.duration;
 
       const xPredLeft = predStart * dayWidth;

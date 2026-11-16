@@ -41,8 +41,9 @@ describe('cronograma físico-financeiro', () => {
     task.executedQuantityTotal = service.contracted * 0.75;
     const changed = buildPhysicalFinancialSchedule(project, candidate, []).rows.find(item => item.id === task.id)!;
     expect(changed.exceeds).toBe(true);
-    expect(changed.allocations).toEqual(row.allocations);
-    expect(isValidMonthlyAllocation(changed.allocations, changed.balance)).toBe(false);
+    expect(project.monthlySchedule[task.id].allocations).toEqual(row.allocations);
+    expect(changed.allocations).toEqual({ '2027-01': changed.balance });
+    expect(isValidMonthlyAllocation(changed.allocations, changed.balance)).toBe(true);
     expect(isValidMonthlyAllocation({ '2027-01': changed.balance }, changed.balance)).toBe(true);
   });
 
