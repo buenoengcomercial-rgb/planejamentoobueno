@@ -38,7 +38,9 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
   const operationalProject = useMemo(() => buildOperationalProjectFromPendingAdditives(project), [project]);
   const display = useMemo(() => includeContractedAdditiveTasks(operationalProject, confirmedAdditives), [operationalProject, confirmedAdditives]);
   const closing = useMemo(() => includeClosingSchedule(display.project), [display.project]);
-  const measured = useMemo(() => includeMeasuredSchedule(closing.project, confirmedMeasurement, confirmedAdditives, display.quantityAdjustments), [closing.project, confirmedMeasurement, confirmedAdditives, display.quantityAdjustments]);
+  const deadline = useMemo(() => getAllTasks(closing.project).flatMap(task => task.operationalReschedule?.closingDeadline
+    ? [task.operationalReschedule.closingDeadline] : []).sort()[0], [closing.project]);
+  const measured = useMemo(() => includeMeasuredSchedule(includeReleaseMilestones(closing.project), confirmedMeasurement, confirmedAdditives, display.quantityAdjustments), [closing.project, confirmedMeasurement, confirmedAdditives, display.quantityAdjustments]);
   const monthly = useMemo(() => monthlyPresentation ? buildPhysicalFinancialSchedule(operationalProject, confirmedMeasurement ?? null, confirmedAdditives) : undefined,
     [monthlyPresentation, operationalProject, confirmedMeasurement, confirmedAdditives]);
   const fiscalTotals = useMemo(() => monthlyPresentation ? measurementValuesByMonth(confirmedMeasurement ?? null) : undefined,
@@ -46,9 +48,9 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
   const monthlyRows = useMemo(() => monthly ? new Map(monthly.rows.map(row => [row.id, row])) : undefined, [monthly]);
   const selectedMonthly = editMonthlyId ? monthlyRows?.get(editMonthlyId) : undefined;
   const ganttProject = useMemo(() => {
-    const projected = includeReleaseMilestones(measured.project);
-    const revised = projected.phases.some(p => p.tasks.some(t => t.operationalReschedule?.executionRevision));
-    const settled = calculateClosingCPM(revised ? settleReleaseProject(projected) : projected);
+    const projected = measured.project;
+    const revised = measured.measuredCount > 0 || projected.phases.some(p => p.tasks.some(t => t.operationalReschedule?.executionRevision));
+    const settled = calculateClosingCPM(revised ? settleReleaseProject(projected, measured.measuredCount > 0) : projected, deadline);
     if (!monthlyRows) return settled;
     const replacements = new Map(getAllTasks(settled).flatMap(task => {
       const row = monthlyRows.get(task.id);
@@ -66,7 +68,7 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
     return replaceProjectTasksById({ ...settled, phases: settled.phases.map(phase => ({
       ...phase, tasks: phase.tasks.filter(task => task.scheduleDisplayKind !== 'history'),
     })) }, replacements);
-  }, [measured.project, monthlyRows]);
+  }, [measured.project, measured.measuredCount, monthlyRows, deadline]);
   const suspensionMap = useMemo(() => buildOfficialAdditiveSuspensionMap(display.project), [display.project]);
   const lockedTaskLabels = useMemo(() => Object.fromEntries([
     ...Array.from(getPendingAdditiveScheduleControls(project), ([taskId, control]) => [taskId, control.additiveName]),
@@ -75,14 +77,14 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
     onProjectChange(previous => {
       const previousOperational = buildOperationalProjectFromPendingAdditives(calculateProjectSchedule(previous, true));
       const currentDisplay = includeContractedAdditiveTasks(previousOperational, confirmedAdditives).project;
-      const nextOperational = stripMeasuredSchedule(display.project, typeof next === 'function' ? next(currentDisplay) : next, measured.lockedIds);
+      const nextOperational = stripMeasuredSchedule(display.project, typeof next === 'function' ? next(currentDisplay) : next, measured.lockedIds, ganttProject);
       const planned = captureContractedTaskSchedules(display.project, display.project, nextOperational,
         confirmedAdditives, display.projectedTaskIds);
       return applyProjectedProjectOperation('gantt', previous, currentDisplay,
         mergeOperationalProjectIntoRaw(previous, display.project),
         mergeOperationalProjectIntoRaw(previous, planned));
     });
-  }, [confirmedAdditives, display, measured.lockedIds, onProjectChange]);
+  }, [confirmedAdditives, display, measured.lockedIds, onProjectChange, ganttProject]);
 
   const reviseExecution = () => {
     if (!confirmedMeasurement) return;
@@ -129,8 +131,11 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
       </div>}
       {importError && <p role="alert" className="mt-2 text-destructive">{importError}</p>}
     </details>}
-    {!monthlyPresentation && measured.measuredCount > 0 && <p className="my-2 text-sm">{measured.measuredCount} serviços com execução nas medições 1–2. Executado identificado no próprio subcapítulo, com datas comprovadas ou referência convencionada em 15/09 e 15/10/2026. Somente o saldo permanece no planejamento futuro.</p>}
+    {measured.measuredCount > 0 && <p className="my-2 text-sm">{measured.measuredCount} serviços com execução na Medição. A partir da 3ª medição, as parcelas sem data comprovada usam o dia 05 ou o próximo dia útil da competência.</p>}
     {closing.taskIds.size > 0 && <p className="my-2 text-sm">Fechamento incluído no caminho crítico até {getDeadline(display.project)}. Folgas em dias úteis, considerando as datas liberadas e os vínculos. Etapas operacionais sem quantidade ou valor contratual.</p>}
+    {getAllTasks(ganttProject).some(task => (task.float ?? 0) < -1e-8) && <p role="status" className="my-2 text-sm text-destructive">
+      Há atividades com folga negativa. Confira o impacto no prazo do cronograma.
+    </p>}
     {selectedMonthly && monthly && onSaveMonthly && <MonthlyPortionEditor key={selectedMonthly.id} row={selectedMonthly} months={monthly.months}
       onSave={onSaveMonthly} onClose={() => setEditMonthlyId(undefined)} />}
     <GanttChart
@@ -138,11 +143,12 @@ export default function OperationalGanttChart({ project, confirmedAdditives = NO
       project={ganttProject}
       contractedQuantityAdjustments={display.quantityAdjustments}
       monthlyRows={monthlyRows}
+      measuredReferences={monthlyPresentation ? measured.references : undefined}
       measurementValues={fiscalTotals}
       onEditMonthly={onSaveMonthly ? setEditMonthlyId : undefined}
       onProjectChange={updateOperationalProject}
       displayOnlyTaskIds={new Set([...measured.lockedIds].filter(id => id.startsWith('measured:')))}
-      lockedTaskLabels={{ ...lockedTaskLabels, ...Object.fromEntries([...measured.lockedIds].map(id => [id, 'Execução registrada nas medições 1–2 — somente consulta'])), ...Object.fromEntries(ganttProject.phases.flatMap(p => p.tasks).filter(t => t.scheduleDisplayKind === 'release').map(t => [t.id, 'Marco de liberação — atualizar pela revisão do cronograma'])), ...Object.fromEntries(getAllTasks(ganttProject).filter(task => task.operationalReschedule?.monthlySegments?.length).map(task => [task.id, 'Edite as datas pela programação de parcelas mensais'])), ...Object.fromEntries([...closing.taskIds].map(id => [id, 'Etapa operacional de fechamento — atualizar pela programação revisada'])) }}
+      lockedTaskLabels={{ ...lockedTaskLabels, ...Object.fromEntries([...measured.lockedIds].map(id => [id, 'Execução registrada na Medição — somente consulta'])), ...Object.fromEntries(ganttProject.phases.flatMap(p => p.tasks).filter(t => t.scheduleDisplayKind === 'release').map(t => [t.id, 'Marco de liberação — atualizar pela revisão do cronograma'])), ...Object.fromEntries(getAllTasks(ganttProject).filter(task => task.operationalReschedule?.monthlySegments?.length).map(task => [task.id, 'Edite as datas pela programação de parcelas mensais'])), ...Object.fromEntries([...closing.taskIds].map(id => [id, 'Etapa operacional de fechamento — atualizar pela programação revisada'])) }}
       suspensionMap={props.suspensionMap ?? suspensionMap}
       financialForecastNode={props.financialForecastNode === undefined && display.projectedTaskIds.size > 0
         ? <GanttFinancialForecast project={operationalProject} trabalhaSabado={props.calendarConfig?.trabalhaSabado} />

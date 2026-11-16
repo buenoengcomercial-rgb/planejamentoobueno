@@ -1,6 +1,7 @@
 import type { Project, Task, TaskDependency } from '@/types/project';
 import { getAllTasks } from '@/data/sampleProject';
 import { replaceProjectTasksById } from './taskTree';
+import { placeWork } from './monthlySegmentPlacement';
 import { operationalEndDate, parseScheduleDate, scheduleDateISO, scheduleWorkdayWeight } from './scheduleCalendar';
 /** Dates are boundaries: a zero-duration release consumes no workday. */
 export function releaseAxis(project: Project) {
@@ -20,7 +21,7 @@ export function releaseAxis(project: Project) {
   const at = (iso: string) => { const n = offsets.get(iso); if (n === undefined) throw Error('Data fora do horizonte da revisão.'); return n; };
   const span = (t: Task) => {
     if (t.duration === 0) return 0;
-    const last = t.operationalReschedule?.monthlySegments?.at(-1)?.endDate ?? operationalEndDate(t.startDate, t.duration, cal);
+    const last = t.measuredExecutionEndDate ?? t.operationalReschedule?.monthlySegments?.at(-1)?.endDate ?? operationalEndDate(t.startDate, t.duration, cal);
     return at(last) + scheduleWorkdayWeight(parseScheduleDate(last), cal) - at(t.startDate);
   };
   const dateAt = (n: number) => { const iso = dates.get(n); if (!iso) throw Error('Marco fora do calendário operacional.'); return iso; };
@@ -46,7 +47,7 @@ export function releaseAxis(project: Project) {
 
 
 /** One topological pass, avoiding repeated fan-out through shared binary gates. */
-export function settleReleaseProject(project: Project): Project {
+export function settleReleaseProject(project: Project, alignMeasured = false): Project {
   const all=getAllTasks(project), axis=releaseAxis(project), map=new Map(all.map(t=>[t.id,t]));
   const visited=new Set<string>(), visiting=new Set<string>();
   const resolve=(id:string):Task=>{
@@ -60,12 +61,21 @@ export function settleReleaseProject(project: Project): Project {
     for(let attempt=0;attempt<10;attempt++) {
       const required=Math.max(t.scheduleDisplayKind==='release' && preds.length ? -Infinity : axis.at(t.startDate), ...preds.map(({d,p})=>axis.at(p.startDate)+(d.type==='TI'||d.type==='TT'?axis.span(p):0)-(d.type==='TT'||d.type==='IT'?axis.span(next):0)+(d.lag??0)));
       const date=axis.dateAtOrAfter(required); if(date===next.startDate) break;
-      if (t.operationalReschedule?.monthlySegments?.length) {
-        // A changed calendar or dependency is reconciled by the monthly planning command.
-        // Moving the parent in isolation would detach its stored work intervals.
-        break;
-      }
-      next={...next,startDate:date};
+      const plan = next.operationalReschedule;
+      if (plan?.monthlySegments?.length) {
+        if (!alignMeasured) break;
+        const allocations: Record<string, number> = {};
+        for (const segment of plan.monthlySegments) {
+          const month = segment.startDate.slice(0, 7);
+          allocations[month] = (allocations[month] ?? 0) + segment.quantity;
+        }
+        const balance = Object.values(allocations).reduce((total, quantity) => total + quantity, 0);
+        if (balance <= 0) break;
+        const monthlySegments = placeWork({ allocations, balance }, plan.duration, date, project.scheduleCalendar!);
+        const startDate = monthlySegments[0].startDate;
+        next = { ...next, startDate, operationalReschedule: { ...plan, monthlySegments,
+          startDate, endDate: monthlySegments.at(-1)!.endDate } };
+      } else next={...next,startDate:date};
       if(attempt===9) throw Error('Não foi possível estabilizar o calendário do marco.');
     }
     visiting.delete(id); visited.add(id); map.set(id,next); return next;

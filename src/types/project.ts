@@ -120,6 +120,7 @@ export interface TaskLocation {
 
 export interface Task {
   /** Gantt-only rows; never contractual quantities. */
+  measuredExecutionEndDate?: string; // Read-only Gantt projection of confirmed execution.
   scheduleDisplayKind?: "history" | "completed-summary" | "release" | "closing";
   id: string;
   name: string;

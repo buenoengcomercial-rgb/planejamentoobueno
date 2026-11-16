@@ -172,7 +172,7 @@ export default function PhysicalFinancialGrid({ project, measurement, additives,
                 <td className="sticky left-0 z-10 border-t bg-background p-2">{row.code}</td>
                 <th scope="row" className="border-t p-2 text-left font-normal">
                   {row.name}
-                  {row.exceeds && <div className="text-destructive">Planejamento acima do saldo. Revise as parcelas.</div>}
+                  {row.exceeds && <div className="text-destructive">Parcelas ajustadas ao saldo atual. Revise a distribuição salva.</div>}
                   {!!row.discrepancy && <div className="text-amber-700 dark:text-amber-400">Execução a conciliar: {quantity(row.discrepancy)} {row.unit}</div>}
                   {row.excessMeasured && <div className="text-amber-700 dark:text-amber-400">Execução medida acima do contratado.</div>}
                   {!!row.unallocated && <div className="text-muted-foreground">A distribuir: {quantity(row.unallocated)} {row.unit}</div>}
@@ -195,7 +195,7 @@ export default function PhysicalFinancialGrid({ project, measurement, additives,
                     save(row, next, drag.original);
                     setDrag(null);
                   }}>
-                    {actual && <div title={`Medido: ${quantity(actual.quantity)} ${row.unit}`} className="whitespace-nowrap rounded bg-emerald-100 px-1 text-emerald-900">{percentage(actual.quantity, row.quantity)} · {currency(actual.value)}</div>}
+                    {actual && <div title={`Medido: ${quantity(actual.quantity)} ${row.unit}${actual.evidence?.length ? ` · ${actual.evidence.join(' / ')}` : ''}`} className="whitespace-nowrap rounded bg-emerald-100 px-1 text-emerald-900">{percentage(actual.quantity, row.quantity)} · {currency(actual.value)}</div>}
                     {editable ? <button type="button" className={`w-full whitespace-nowrap rounded px-1 text-right hover:ring-1 hover:ring-blue-400 ${planned ? 'bg-blue-100 text-blue-900' : 'text-muted-foreground'}`}
                       aria-label={`Editar ${row.code || row.name} em ${monthLabel(month)}`}
                       draggable={!!planned} onDragStart={event => {

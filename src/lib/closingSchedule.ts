@@ -43,12 +43,12 @@ export function includeClosingSchedule(project: Project) {
  * Dates and execution are never moved. Fractional work consumes its calendar day
  * for date-only dependencies, consistently with the dependency editor.
  */
-export function calculateClosingCPM(project: Project): Project {
+export function calculateClosingCPM(project: Project, originalDeadline?: string): Project {
   const all = getAllTasks(project);
   const deadlines = all.flatMap(t => t.operationalReschedule?.closingDeadline ? [t.operationalReschedule.closingDeadline] : []);
   const cal = project.scheduleCalendar;
-  if (!deadlines.length || !cal) return project;
-  const deadline = deadlines.sort()[0];
+  const deadline = originalDeadline ?? deadlines.sort()[0];
+  if (!deadline || !cal) return project;
   const active = all.filter(t => t.scheduleDisplayKind === 'release' || t.phase === phaseId || (!!t.operationalReschedule && !t.operationalReschedule.executionRevision?.completed && (!t.operationalReschedule.executionRevision || t.operationalReschedule.quantity > 0)));
   const first = [...active.map(t => t.startDate), deadline].sort()[0];
   const offsets = new Map<string, number>();

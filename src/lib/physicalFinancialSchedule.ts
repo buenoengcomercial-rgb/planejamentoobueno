@@ -3,6 +3,7 @@ import { additiveServiceId, additiveTaskId, approvedAdditiveRows, includeContrac
 import { calculateLineTotal, money2 } from './financialEngine';
 import { monthlyLines, monthlyTotal, type MeasurementWorkspace } from './measurementWorkspace';
 import { resolveObraConfig } from './obraConfig';
+import { measurementReferenceDate } from './measuredSchedule';
 import { executionMonth } from './monthlyExecution';
 import { detailPartial } from './productionQuantityDetails';
 import { operationalEndDate, parseScheduleDate, scheduleDateISO, scheduleWorkdayWeight } from './scheduleCalendar';
@@ -50,18 +51,20 @@ function suggest(task: Task, balance: number, calendar: Project['scheduleCalenda
   }));
 }
 
-function measuredCells(workspace: MeasurementWorkspace) {
+function measuredCells(workspace: MeasurementWorkspace, calendar: NonNullable<Project['scheduleCalendar']>) {
   const actual = new Map<string, Record<string, Cell>>();
   const entries = new Map(workspace.entries.map(entry => [JSON.stringify([entry.measurementId, entry.serviceId]), entry.rows]));
   for (const period of workspace.periods) {
     const competence = executionMonth(period.endDate);
     if (!competence) continue;
+    const reference = period.number >= 3 ? measurementReferenceDate(period.endDate, calendar) : undefined;
     for (const line of monthlyLines(workspace, period.id)) {
       if (!line.qty) continue;
       const cells = actual.get(line.service.id) ?? {};
       actual.set(line.service.id, cells);
       const portions = new Map<string, number>();
       const daysByMonth = new Map<string, Set<string>>();
+      const undatedMonths = new Set<string>();
       for (const row of entries.get(JSON.stringify([period.id, line.service.id])) ?? []) {
         const day = row.origin?.kind === 'daily' ? row.origin.date : undefined;
         const month = day && day >= period.startDate && day <= period.endDate ? executionMonth(day) ?? competence : competence;
@@ -71,12 +74,13 @@ function measuredCells(workspace: MeasurementWorkspace) {
           const dates = daysByMonth.get(month) ?? new Set<string>();
           dates.add(day);
           daysByMonth.set(month, dates);
-        }
+        } else if (amount) undatedMonths.add(month);
       }
       const sum = [...portions.values()].reduce((total, quantity) => total + quantity, 0);
       if (Math.abs(sum - line.qty) > MONTHLY_EPSILON) {
         portions.clear();
         daysByMonth.clear();
+        undatedMonths.add(competence);
         portions.set(competence, line.qty);
       }
       let distributed = 0;
@@ -88,7 +92,8 @@ function measuredCells(workspace: MeasurementWorkspace) {
         cell.quantity += quantity;
         cell.value = money2(cell.value + value);
         const dates = [...(daysByMonth.get(month) ?? [])].sort().map(date => date.split('-').reverse().join('/'));
-        const evidence = `${period.number}ª medição${dates.length ? ` · ${dates.join(', ')}` : ''}`;
+        const source = reference && undatedMonths.has(month) ? ` · Referência da medição: ${reference.split('-').reverse().join('/')}` : '';
+        const evidence = `${period.number}ª medição${dates.length ? ` · ${dates.join(', ')}` : ''}${source}`;
         (cell.evidence ??= []).push(evidence);
       });
     }
@@ -141,7 +146,7 @@ export function buildPhysicalFinancialSchedule(project: Project, workspace: Meas
     services.set(service.id, service);
     if (service.sourceTaskId) services.set(service.sourceTaskId, service);
   });
-  const actual = workspace ? measuredCells(workspace) : new Map<string, Record<string, Cell>>();
+  const actual = workspace ? measuredCells(workspace, calendar) : new Map<string, Record<string, Cell>>();
   if (!workspace) for (const period of project.measurements ?? []) {
     const month = executionMonth(period.endDate);
     if (!month) continue;
@@ -168,14 +173,21 @@ export function buildPhysicalFinancialSchedule(project: Project, workspace: Meas
     const known = Math.max(totalMeasured, task.executedQuantityTotal ?? 0, task.percentComplete >= 100 ? task.quantityContracted ?? quantity : 0);
     const balance = roundQuantity(Math.max(0, quantity - known));
     const saved = project.monthlySchedule?.[task.id];
-    const allocations = saved?.allocations ?? suggest(task, balance, calendar);
+    const savedTotal = saved ? Object.values(saved.allocations).reduce((sum, amount) => sum + amount, 0) : 0;
+    const exceeds = savedTotal > balance + MONTHLY_EPSILON;
+    let remaining = balance;
+    const allocations = saved ? (exceeds ? Object.fromEntries(Object.entries(saved.allocations).sort().reverse().flatMap(([month, amount]) => {
+      const quantity = roundQuantity(Math.min(remaining, amount));
+      remaining = roundQuantity(remaining - quantity);
+      return quantity > 0 ? [[month, quantity]] : [];
+    })) : saved.allocations) : suggest(task, balance, calendar);
     const distributed = roundQuantity(Object.values(allocations).reduce((sum, amount) => sum + amount, 0));
     const planned = Object.fromEntries(Object.entries(allocations).sort().map(([month, amount]) => [month, { quantity: amount, value: calculateLineTotal(price, amount) }]));
     return [{
       id: task.id, phaseId: phase.id, code: task.contractItem ?? item?.item ?? service?.item ?? '',
       name: task.name, unit: task.unit ?? item?.unit ?? service?.unit ?? '',
       quantity, contractedValue: calculateLineTotal(price, quantity), balance, measured, planned, allocations,
-      manual: !!saved, exceeds: distributed > balance + MONTHLY_EPSILON,
+      manual: !!saved, exceeds,
       unallocated: roundQuantity(Math.max(0, balance - distributed)),
       discrepancy: roundQuantity(Math.max(0, known - totalMeasured)), excessMeasured: totalMeasured > quantity + MONTHLY_EPSILON,
     }];
