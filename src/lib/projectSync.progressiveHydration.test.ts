@@ -174,6 +174,41 @@ describe('hidratação progressiva da obra', () => {
     expect(getHydratedProjectCollections(retried)).toEqual(['warehouseRequisitions']);
   });
 
+  it('aceita uma leitura lenta que confirma cada página de retiradas dentro do prazo', async () => {
+    const current = project('warehouse-requisitions-page-deadlines');
+    const row = { id: 'req-001', signatureReceiver: 'assinatura preservada' };
+    vi.useFakeTimers();
+    try {
+      fromMock.mockImplementation((table: string) => {
+        if (table === 'projects') return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { warehouse_version: 8 }, error: null }) }) }),
+        };
+        expect(table).toBe('warehouse_requisitions');
+        let afterId: string | undefined;
+        const query = {
+          select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(),
+          gt: vi.fn((_field: string, id: string) => { afterId = id; return query; }),
+          then: (resolve: (result: MockQueryResult) => unknown) => {
+            const data = afterId ? [] : [{ id: row.id, data: row }];
+            return new Promise(resolvePage => {
+              setTimeout(() => resolvePage(resolve({ data, error: null })), 18_000);
+            });
+          },
+        };
+        for (const method of [query.select, query.eq, query.order, query.limit]) method.mockReturnValue(query);
+        return query;
+      });
+
+      const hydrated = hydrateProjectFromCloud(current, {
+        collections: ['warehouseRequisitions'], strict: true,
+      }).then(result => result, error => error);
+      await vi.advanceTimersByTimeAsync(36_000);
+      expect(await hydrated).toMatchObject({ warehouse: { requisitions: [row] } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('persiste auditoria append-only sem carregar ou excluir histórico anterior', async () => {
     const current = project('append-only-history');
     clearCloudSnapshot(current.id);

@@ -717,7 +717,7 @@ async function loadWarehouseRows(table: WarehouseRowTable, projectId: string): P
           .order('id', { ascending: true })
           .limit(WAREHOUSE_PAGE_SIZE[table]);
         if (lastId) query = query.gt('id', lastId);
-        const result = await query;
+        const result = await withReadDeadline(query);
         if (result.error) return { data: null, error: result.error };
         if (!Array.isArray(result.data)) throw new Error('A consulta devolveu uma coleção incompleta.');
         const page = result.data;
@@ -761,10 +761,12 @@ export async function hydrateProjectFromCloud(
   const projectId = project.id;
   const requested = normalizeProjectCollections(options.collections ?? PROJECT_COLLECTION_KEYS);
   const wants = new Set(requested);
+  const warehouseRows = (collection: ProjectCollectionKey, table: WarehouseRowTable) =>
+    wants.has(collection) ? loadWarehouseRows(table, projectId) : { data: null, error: null };
   const [movRes, reqRes, custRes, drRes, logsRes, measRes, addRes, audRes, stkRes, phRes, biRes, mcRes, acRes, subRes, chRes, tkRes] = await Promise.all([
-    optionalQuery<DataRow>(wants.has('warehouseMovements'), () => loadWarehouseRows('warehouse_movements', projectId)),
-    optionalQuery<DataRow>(wants.has('warehouseRequisitions'), () => loadWarehouseRows('warehouse_requisitions', projectId)),
-    optionalQuery<DataRow>(wants.has('warehouseCustody'), () => loadWarehouseRows('warehouse_custody', projectId)),
+    warehouseRows('warehouseMovements', 'warehouse_movements'),
+    warehouseRows('warehouseRequisitions', 'warehouse_requisitions'),
+    warehouseRows('warehouseCustody', 'warehouse_custody'),
     optionalQuery<DataRow>(wants.has('dailyReports'), () => loadVerifiedRows((lastId, head) => {
       const query = supabase.from('daily_reports').select('id, data', { count: 'exact', head })
         .eq('project_id', projectId).order('id').limit(VERIFIED_PAGE_SIZE);
