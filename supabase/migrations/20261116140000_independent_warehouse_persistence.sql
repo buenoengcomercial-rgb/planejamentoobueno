@@ -314,6 +314,55 @@ BEGIN
 END;
 $publish_warehouse_revisions$;
 
+CREATE FUNCTION public.clear_independent_warehouse_owner(p_project_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE actor uuid:=auth.uid(); cleared_at timestamptz:=clock_timestamp();
+  password_at timestamptz; domain record; equipments jsonb; counts jsonb;
+BEGIN
+  IF actor IS NULL OR NOT EXISTS (
+    SELECT 1 FROM public.projects p JOIN public.organization_members m ON m.organization_id=p.organization_id
+    WHERE p.id=p_project_id AND m.user_id=actor AND m.status='active' AND m.role='owner'
+  ) THEN RAISE EXCEPTION 'WAREHOUSE_CLEAR_OWNER_ONLY' USING ERRCODE='42501'; END IF;
+  SELECT max(to_timestamp((entry->>'timestamp')::double precision)) INTO password_at
+    FROM jsonb_array_elements(coalesce(auth.jwt()->'amr','[]'::jsonb)) entry WHERE entry->>'method'='password';
+  IF password_at IS NULL OR password_at<now()-interval '5 minutes' THEN
+    RAISE EXCEPTION 'WAREHOUSE_CLEAR_PASSWORD_REQUIRED' USING ERRCODE='42501';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended(p_project_id::text, 0));
+  SELECT * INTO domain FROM app_private.read_warehouse_domain(p_project_id,true);
+  IF domain.independent IS DISTINCT FROM true THEN RAISE EXCEPTION 'WAREHOUSE_INDEPENDENT_MODE_REQUIRED'; END IF;
+  SELECT coalesce(jsonb_agg(CASE WHEN e->>'status'='em_uso' AND coalesce(e->>'archivedAt','')=''
+      THEN e || jsonb_build_object('status','disponivel','updatedAt',cleared_at,'updatedBy',jsonb_build_object('userId',actor))
+      ELSE e END ORDER BY n),'[]'::jsonb) INTO equipments
+    FROM jsonb_array_elements(coalesce(domain.state_json->'equipments','[]'::jsonb)) WITH ORDINALITY AS equipment(e,n);
+  counts:=jsonb_build_object(
+    'items',coalesce(jsonb_array_length(domain.state_json->'items'),0),
+    'fiscalNotes',coalesce(jsonb_array_length(domain.state_json->'fiscalNotes'),0),
+    'movements',(SELECT count(*) FROM public.warehouse_movements WHERE project_id=p_project_id),
+    'requisitions',(SELECT count(*) FROM public.warehouse_requisitions WHERE project_id=p_project_id),
+    'custodyTerms',(SELECT count(*) FROM public.warehouse_custody WHERE project_id=p_project_id),
+    'stockMovements',(SELECT count(*) FROM public.stock_movements WHERE project_id=p_project_id),
+    'materialPriceHistory',(SELECT count(*) FROM public.material_price_history WHERE project_id=p_project_id)
+  );
+  PERFORM app_private.advance_warehouse_domain(p_project_id,cleared_at,jsonb_build_object(
+    'locations','[]'::jsonb,'items','[]'::jsonb,'equipments',equipments,'equipmentGroups','[]'::jsonb,
+    'fiscalNotes','[]'::jsonb,'materialLinks','[]'::jsonb,'inventorySessions','[]'::jsonb,
+    'valuationMethod','weighted_average'));
+  DELETE FROM public.warehouse_movements WHERE project_id=p_project_id;
+  DELETE FROM public.warehouse_requisitions WHERE project_id=p_project_id;
+  DELETE FROM public.warehouse_custody WHERE project_id=p_project_id;
+  DELETE FROM public.stock_movements WHERE project_id=p_project_id;
+  DELETE FROM public.material_price_history WHERE project_id=p_project_id;
+  INSERT INTO public.audit_logs(id,project_id,entity_type,entity_id,action,occurred_at,user_id,data)
+    VALUES(gen_random_uuid()::text,p_project_id,'warehouse',p_project_id::text,'warehouse_cleared',cleared_at,actor,
+      jsonb_build_object('removedCounts',counts,'equipmentsPreserved',true));
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.clear_independent_warehouse_owner(uuid) FROM PUBLIC,anon,authenticated,service_role;
+GRANT EXECUTE ON FUNCTION public.clear_independent_warehouse_owner(uuid) TO authenticated;
+
 -- Reuse the active routines and their existing stock, permission and receipt
 -- rules. Every replacement below is checked before its definition is installed.
 CREATE FUNCTION pg_temp.swap_warehouse_sql(
@@ -454,50 +503,18 @@ $before$,
     $after$'projectUpdatedAt',parent.project_updated_at,'warehouseIndependent',parent.independent,$after$);
   EXECUTE def;
 
-  def := pg_get_functiondef('public.clear_warehouse_owner(uuid)'::regprocedure);
-  def := pg_temp.swap_warehouse_sql(def, $before$  v_counts jsonb;$before$,
-    $after$  v_counts jsonb;
-  v_domain record;
-  v_equipment jsonb;
-  v_cleared_at timestamptz := clock_timestamp();$after$);
-  def := pg_temp.swap_warehouse_sql(def, $before$  SELECT p.organization_id, p.data_json
-    INTO v_org_id, v_data
-  FROM public.projects p
-  WHERE p.id = p_project_id
-  FOR UPDATE;$before$,
-    $after$  PERFORM pg_advisory_xact_lock(hashtextextended(p_project_id::text, 0));
-  SELECT p.organization_id INTO v_org_id FROM public.projects p WHERE p.id=p_project_id;$after$);
-  def := pg_temp.swap_warehouse_sql(def, $before$v_warehouse := COALESCE(v_data -> 'warehouse', '{}'::jsonb);$before$,
-    $after$SELECT * INTO v_domain FROM app_private.read_warehouse_domain(p_project_id,true);
-  v_warehouse := v_domain.state_json;$after$);
-  def := pg_temp.swap_warehouse_sql(def, $before$  UPDATE public.projects
-  SET data_json = jsonb_set($before$,
-    $after$  IF v_domain.independent THEN
-    SELECT coalesce(jsonb_agg(CASE
-      WHEN e->>'status'='em_uso' AND coalesce(e->>'archivedAt','')='' THEN e || jsonb_build_object(
-        'status','disponivel','updatedAt',v_cleared_at,'updatedBy',jsonb_build_object('userId',v_user))
-      ELSE e END ORDER BY n),'[]'::jsonb)
-      INTO v_equipment
-      FROM jsonb_array_elements(coalesce(v_warehouse->'equipments','[]'::jsonb)) WITH ORDINALITY AS equipment(e,n);
-    v_counts := v_counts || jsonb_build_object('materialPriceHistory',
-      (SELECT count(*) FROM public.material_price_history WHERE project_id=p_project_id));
-    PERFORM app_private.advance_warehouse_domain(p_project_id, v_cleared_at, jsonb_build_object(
-      'locations','[]'::jsonb,'items','[]'::jsonb,'equipments',v_equipment,'equipmentGroups','[]'::jsonb,
-      'fiscalNotes','[]'::jsonb,'materialLinks','[]'::jsonb,'inventorySessions','[]'::jsonb,
-      'valuationMethod','weighted_average'));
-    DELETE FROM public.material_price_history WHERE project_id=p_project_id;
-  ELSE
-  SELECT p.data_json INTO v_data FROM public.projects p WHERE p.id=p_project_id;
-  UPDATE public.projects
-  SET data_json = jsonb_set($after$);
-  def := pg_temp.swap_warehouse_sql(def, $before$  WHERE id = p_project_id;
-
-  DELETE FROM public.warehouse_movements$before$,
-    $after$  WHERE id = p_project_id;
+  -- Some installations never exposed this legacy RPC.
+  IF to_regprocedure('public.clear_warehouse_owner(uuid)') IS NOT NULL THEN
+    def := pg_get_functiondef('public.clear_warehouse_owner(uuid)'::regprocedure);
+    def := pg_temp.swap_warehouse_sql(def, $before$  SELECT p.organization_id, p.data_json$before$,
+      $after$  PERFORM pg_advisory_xact_lock(hashtextextended(p_project_id::text, 0));
+  IF EXISTS (SELECT 1 FROM public.warehouse_project_state s WHERE s.project_id=p_project_id AND s.independent) THEN
+    PERFORM public.clear_independent_warehouse_owner(p_project_id);
+    RETURN;
   END IF;
-
-  DELETE FROM public.warehouse_movements$after$);
-  EXECUTE def;
+  SELECT p.organization_id, p.data_json$after$);
+    EXECUTE def;
+  END IF;
 END;
 $warehouse_redirect_writes$;
 

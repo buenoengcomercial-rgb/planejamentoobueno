@@ -1414,7 +1414,7 @@ export type Database = {
         Args: { p_items: Json; p_project_id: string }
         Returns: Json
       }
-      clear_warehouse_owner: {
+      clear_independent_warehouse_owner: {
         Args: { p_project_id: string }
         Returns: undefined
       }

@@ -521,7 +521,7 @@ export async function clearCloudWarehouseAsOwner(projectId: string, password: st
   discardCloudProjectRecord(before);
   try {
     if (independent) {
-      const { error } = await supabase.rpc('clear_warehouse_owner', { p_project_id: projectId });
+      const { error } = await supabase.rpc('clear_independent_warehouse_owner', { p_project_id: projectId });
       if (error) throw new Error(error.message);
     } else {
       const tables = [

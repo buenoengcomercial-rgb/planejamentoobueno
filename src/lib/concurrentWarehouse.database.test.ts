@@ -146,7 +146,7 @@ it('limpeza administrativa exige reautenticação, preserva equipamentos e avan�
   await db.query("INSERT INTO material_price_history VALUES ('preco',$1)", [project]);
   await expect(db.query('SELECT public.clear_warehouse_owner($1)', [project])).rejects.toThrow('WAREHOUSE_CLEAR_PASSWORD_REQUIRED');
   await db.exec("SELECT set_config('warehouse.test_password','fresh',false)");
-  await db.query('SELECT public.clear_warehouse_owner($1)', [project]);
+  await db.query('SELECT public.clear_independent_warehouse_owner($1)', [project]);
   expect((await db.query('SELECT updated_at,data_json FROM projects')).rows).toEqual(parent);
   expect((await db.query('SELECT state_json,warehouse_version FROM warehouse_project_state')).rows[0])
     .toMatchObject({ warehouse_version: 2, state_json: { items: [], equipments: [{ ...equipment, status: 'disponivel' }] } });
