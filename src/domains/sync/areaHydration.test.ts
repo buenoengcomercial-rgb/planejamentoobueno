@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import * as cloud from '@/lib/cloudProjects';
 import * as sync from '@/lib/projectSync';
+import * as warehouse from '@/lib/warehouseProjectState';
 import { hydrateAreaCollections, planAreaHydration } from './areaHydration';
 
 const project = (id = 'obra'): Project => ({
@@ -56,5 +57,27 @@ describe('hidratação delimitada da área', () => {
     expect(result).toBeNull();
     expect(discard).toHaveBeenCalledWith(hydrated);
     expect(merge).not.toHaveBeenCalled();
+  });
+
+  it('carrega o catálogo corrente ao abrir uma aba do estoque com a versão geral intacta', async () => {
+    vi.spyOn(cloud, 'getCloudProjectVersion').mockResolvedValue({
+      projectId: 'obra', updatedAt: 'v1', warehouseVersion: 6, warehouseUpdatedAt: 'stock-v6',
+    });
+    const warehouseState = {
+      locations: [], items: [], movements: [], requisitions: [], equipments: [], equipmentGroups: [],
+      custodyTerms: [], receivers: [{ name: 'Recebedor atual' }],
+    };
+    vi.spyOn(warehouse, 'readWarehouseProjectState').mockResolvedValue({
+      warehouse: warehouseState, version: 6, updatedAt: 'stock-v6',
+    });
+    vi.spyOn(sync, 'hydrateProjectFromCloud').mockImplementation(async source => source);
+    const source: Project = { ...project(), warehouse: { ...warehouseState, receivers: [{ name: 'Legado' }] } };
+    const result = await hydrateAreaCollections({
+      projectId: 'obra', collections: ['warehouseRequisitions'], source,
+      currentProject: () => source, savedProjectJson: () => JSON.stringify(source), isCurrent: () => true,
+    });
+    expect(result?.warehouseVersion).toBe(6);
+    expect(result?.project.warehouse?.receivers).toEqual([{ name: 'Recebedor atual' }]);
+    expect(JSON.parse(result!.savedProjectJson).warehouse.receivers).toEqual([{ name: 'Recebedor atual' }]);
   });
 });

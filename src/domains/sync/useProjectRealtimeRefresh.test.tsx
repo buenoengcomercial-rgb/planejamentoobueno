@@ -51,10 +51,22 @@ describe('aplicação de atualizações Realtime por coleção', () => {
     const { hook, refs, actions } = setup(['tasks']);
     await act(async () => hook.result.current(['warehouse_movements']));
     expect(actions.markRemoteCollections).toHaveBeenCalledWith('obra-1', ['warehouseMovements']);
+    expect(actions.refreshRemoteWarehouseInBackground).not.toHaveBeenCalled();
+    expect(actions.refreshRemoteCollectionsInBackground).not.toHaveBeenCalled();
     expect(actions.setRawProject).not.toHaveBeenCalled();
     expect(cloud.load).not.toHaveBeenCalled();
     expect(refs.rawProjectRef.current?.name).toBe('Obra');
     expect(refs.currentWarehouseVersionRef.current).toBe(2);
+  });
+
+  it('não aplica metadados de obra atrasados ao receber somente um sinal do estoque', async () => {
+    const { hook, refs, actions } = setup(['tasks']);
+    cloud.version.mockResolvedValue({ projectId: 'obra-1', updatedAt: 'old', warehouseVersion: 2, warehouseUpdatedAt: 'stock-v2' });
+    await act(async () => hook.result.current(['warehouse_project_state']));
+    expect(actions.markRemoteCollections).toHaveBeenCalledWith('obra-1', expect.arrayContaining(['warehouseRequisitions']));
+    expect(refs.currentProjectUpdatedAtRef.current).toBe('old');
+    expect(actions.setLastCloudConfirmedAt).not.toHaveBeenCalled();
+    expect(cloud.load).not.toHaveBeenCalled();
   });
 
   it('consulta a entidade antes de classificar um sinal como conflito', async () => {

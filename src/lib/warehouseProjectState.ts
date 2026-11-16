@@ -2,6 +2,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { withReadDeadline } from '@/lib/readDeadline';
 import type { ProjectCollectionKey } from '@/lib/projectDataScope';
 import type { Project, WarehouseState } from '@/types/project';
+import type { Database } from '@/integrations/supabase/types';
 
 const WAREHOUSE_COLLECTIONS = new Set<ProjectCollectionKey>([
   'warehouseMovements', 'warehouseRequisitions', 'warehouseCustody', 'stockMovements',
@@ -11,6 +12,58 @@ export interface WarehouseProjectStateRead {
   warehouse: WarehouseState;
   version: number;
   updatedAt: string;
+}
+
+export const missingWarehouseStateRelationship = (error: { code?: string; message?: string } | null) =>
+  error?.code === 'PGRST200' && /warehouse_project_state/i.test(error.message ?? '');
+
+const missingIndependentColumn = (error: { code?: string; message?: string } | null) =>
+  ['42703', 'PGRST204'].includes(error?.code ?? '') && /independent/i.test(error?.message ?? '');
+
+export async function readVersionedProjectRow(projectId: string) {
+  const projection = await withReadDeadline(supabase.from('projects')
+    .select('id, updated_at, warehouse_version, warehouse_updated_at, warehouse_project_state(warehouse_version, warehouse_updated_at, independent)')
+    .eq('id', projectId).maybeSingle());
+  const projected = missingIndependentColumn(projection.error)
+    ? await withReadDeadline(supabase.from('projects')
+      .select('id, updated_at, warehouse_version, warehouse_updated_at, warehouse_project_state(warehouse_version, warehouse_updated_at)')
+      .eq('id', projectId).maybeSingle())
+    : projection;
+  // A missing relationship is expected only before the projection migration.
+  if (missingWarehouseStateRelationship(projected.error)) {
+    return withReadDeadline(supabase.from('projects')
+      .select('id, updated_at, warehouse_version, warehouse_updated_at')
+      .eq('id', projectId).maybeSingle());
+  }
+  if (projected.data?.warehouse_project_state) {
+    const { warehouse_project_state: state, ...parent } = projected.data;
+    return { ...projected, data: { ...parent, ...state } };
+  }
+  return projected;
+}
+
+type WarehouseStateRow = Pick<Database['public']['Tables']['warehouse_project_state']['Row'],
+  'state_json' | 'warehouse_version' | 'warehouse_updated_at'>;
+
+export function warehouseProjectStateFromRow(project: Project, row: WarehouseStateRow | null): WarehouseProjectStateRead {
+  if (!row) {
+    throw new Error('Falta a projeção do Almoxarifado para esta obra. A edição foi preservada.');
+  }
+  if (!row.state_json || typeof row.state_json !== 'object' || Array.isArray(row.state_json)
+    || !Number.isSafeInteger(row.warehouse_version) || row.warehouse_version < 0) {
+    throw new Error('Estado do Almoxarifado inválido na nuvem. A edição foi preservada.');
+  }
+  return {
+    warehouse: {
+      locations: [], items: [], equipments: [], equipmentGroups: [],
+      ...row.state_json,
+      movements: project.warehouse?.movements ?? [],
+      requisitions: project.warehouse?.requisitions ?? [],
+      custodyTerms: project.warehouse?.custodyTerms ?? [],
+    } as WarehouseState,
+    version: row.warehouse_version,
+    updatedAt: row.warehouse_updated_at,
+  };
 }
 
 /** Lê a projeção nas áreas do estoque e na carga completa de uma obra com estoque. */
@@ -35,25 +88,5 @@ export async function readWarehouseProjectState(
     if (error.code === '42P01' || error.code === 'PGRST205') return null;
     throw error;
   }
-  if (!data) {
-    throw new Error('Falta a projeção do Almoxarifado para esta obra. A edição foi preservada.');
-  }
-  if (!data.state_json || typeof data.state_json !== 'object' || Array.isArray(data.state_json)
-    || !Number.isSafeInteger(data.warehouse_version) || data.warehouse_version < 0) {
-    throw new Error('Estado do Almoxarifado inválido na nuvem. A edição foi preservada.');
-  }
-  return {
-    warehouse: {
-      ...(project.warehouse ?? {
-        locations: [], items: [], movements: [], requisitions: [], equipments: [], equipmentGroups: [], custodyTerms: [],
-      }),
-      ...data.state_json,
-      // As coleções operacionais continuam vindo das tabelas próprias.
-      movements: project.warehouse?.movements ?? [],
-      requisitions: project.warehouse?.requisitions ?? [],
-      custodyTerms: project.warehouse?.custodyTerms ?? [],
-    } as WarehouseState,
-    version: data.warehouse_version,
-    updatedAt: data.warehouse_updated_at,
-  };
+  return warehouseProjectStateFromRow(project, data);
 }

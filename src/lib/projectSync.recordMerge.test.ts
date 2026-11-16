@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Project } from '@/types/project';
 import { hasProjectMetadataChanges, mergeProjectMetadataFields, mergeProjectRecordsThreeWay } from '@/lib/projectSync';
 import { applyProjectOperation, projectWriteOrigin } from '@/lib/projectOperations';
+import { emptyWarehouse } from '@/lib/warehouse';
 
 const base = {
   id: 'project-1', name: 'Obra',
@@ -19,6 +20,15 @@ const base = {
 } as Project;
 
 describe('mesclagem segura por registro', () => {
+  it('preserva o catálogo do estoque ao aplicar metadados que contêm o espelho antigo', () => {
+    const original = { ...base, warehouse: emptyWarehouse() };
+    const local = { ...original, warehouse: { ...original.warehouse, receivers: [{ name: 'Recebedor atual' }] } };
+    const remote = { ...original, name: 'Novo nome' };
+    expect(hasProjectMetadataChanges(original, local)).toBe(false);
+    expect(mergeProjectMetadataFields(original, local, remote)).toMatchObject({
+      name: 'Novo nome', warehouse: local.warehouse,
+    });
+  });
   it('mantém a origem de planejamento após incorporar dados remotos', () => {
     const local = applyProjectOperation('gantt', base, base, { ...base, startDate: '2026-10-16' });
     const remote = { ...base, name: 'Nome remoto' };

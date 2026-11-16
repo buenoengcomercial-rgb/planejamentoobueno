@@ -37,6 +37,12 @@ async function audit(admin: SupabaseClient, organizationId: string, callerId: st
   // Chunk project IDs to avoid oversized URLs; every table has counted keyset pages.
   for (let offset=0; offset<projectIds.length; offset+=50) {
     const ids=projectIds.slice(offset,offset+50);
+    const states=await readCompletePages<{id:string;state_json:unknown}>((after,head)=>{
+      const q=admin.from('warehouse_project_state').select('id:project_id,state_json',{count:'exact',head})
+        .in('project_id',ids).order('project_id').limit(500);
+      return after?q.gt('project_id',after):q;
+    });
+    states.forEach(row=>collectReferences(row.state_json,references));
     for (const table of ['daily_reports','warehouse_requisitions','warehouse_custody','warehouse_movements','audit_logs']) {
       const rows=await readCompletePages<{id:string;data:unknown}>((after,head)=>{
         const q=admin.from(table).select('id,data',{count:'exact',head}).in('project_id',ids).order('id').limit(500);
