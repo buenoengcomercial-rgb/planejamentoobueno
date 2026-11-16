@@ -24,7 +24,7 @@ vi.mock('@/integrations/supabase/client', () => ({
 
 type MockQueryResult = {
   data: Array<Record<string, unknown>> | null;
-  error: { message: string } | null;
+  error: { message: string; code?: string } | null;
   count?: number;
 };
 
@@ -87,33 +87,45 @@ beforeEach(() => {
 });
 
 describe('hidratação progressiva da obra', () => {
-  it.each([273, 501])('carrega %i requisições sem count=exact e só aceita a lista completa', async requisitionCount => {
+  it.each([
+    [273, false], [501, false], [501, true],
+  ])('carrega %i requisições assinadas com timeout intermediário = %s', async (requisitionCount, pageTimeout) => {
     const current = project(`warehouse-requisitions-uncounted-${requisitionCount}`);
     clearCloudSnapshot(current.id);
     const requisitions = Array.from({ length: requisitionCount }, (_, index) => ({
       id: `req-${String(index).padStart(4, '0')}`,
-      data: { id: `req-${String(index).padStart(4, '0')}`, number: index + 1 },
+      data: { id: `req-${String(index).padStart(4, '0')}`, number: index + 1, signatureReceiver: `signature-${index}` },
     }));
     const selectedOptions: unknown[] = [];
     const requestedAfter: Array<string | undefined> = [];
+    const requestedSizes: number[] = [];
     fromMock.mockImplementation((table: string) => {
       if (table === 'projects') return {
         select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { warehouse_version: 8 }, error: null }) }) }),
       };
       expect(table).toBe('warehouse_requisitions');
       let afterId: string | undefined;
+      let pageSize = 0;
       const query = {
         select: vi.fn((_columns: string, options?: unknown) => { selectedOptions.push(options); return query; }),
-        eq: vi.fn(), order: vi.fn(), limit: vi.fn(), gt: vi.fn((_field: string, value: string) => { afterId = value; return query; }),
+        eq: vi.fn(), order: vi.fn(),
+        limit: vi.fn((limit: number) => { pageSize = limit; return query; }),
+        gt: vi.fn((_field: string, value: string) => { afterId = value; return query; }),
         then: (resolve: (result: MockQueryResult) => unknown) => {
           requestedAfter.push(afterId);
+          requestedSizes.push(pageSize);
+          if (pageSize > 80 || (pageTimeout && pageSize === 80 && afterId === 'req-0079')) {
+            return Promise.resolve(resolve({
+              data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' },
+            }));
+          }
           return Promise.resolve(resolve({
-            data: requisitions.filter(row => !afterId || row.id > afterId).slice(0, 500),
+            data: requisitions.filter(row => !afterId || row.id > afterId).slice(0, pageSize),
             error: null,
           }));
         },
       };
-      for (const method of [query.eq, query.order, query.limit]) method.mockReturnValue(query);
+      for (const method of [query.eq, query.order]) method.mockReturnValue(query);
       return query;
     });
 
@@ -121,11 +133,14 @@ describe('hidratação progressiva da obra', () => {
       collections: ['warehouseRequisitions'], strict: true,
     });
 
-    expect(hydrated.warehouse?.requisitions).toHaveLength(requisitionCount);
+    expect(hydrated.warehouse?.requisitions).toEqual(requisitions.map(row => row.data));
     expect(selectedOptions).toEqual(Array(requestedAfter.length).fill(undefined));
-    expect(requestedAfter).toEqual(requisitionCount === 273
-      ? [undefined, 'req-0272']
-      : [undefined, 'req-0499', 'req-0500']);
+    const stride = pageTimeout ? 40 : 80;
+    const afterIds = requisitions
+      .filter((_, index) => index >= 79 && ((index + 1) % stride === 0 || index + 1 === requisitionCount))
+      .map(row => row.id);
+    expect(requestedAfter).toEqual([undefined, ...(pageTimeout ? ['req-0079'] : []), ...afterIds]);
+    expect(requestedSizes.slice(0, 3)).toEqual(pageTimeout ? [80, 80, 40] : [80, 80, 80]);
     expect(getLoadedProjectCollections(current.id)).toEqual([]);
     expect(getHydratedProjectCollections(hydrated)).toEqual(['warehouseRequisitions']);
   });
@@ -163,6 +178,41 @@ describe('hidratação progressiva da obra', () => {
     });
     expect(retried.warehouse?.requisitions).toEqual([]);
     expect(getHydratedProjectCollections(retried)).toEqual(['warehouseRequisitions']);
+  });
+
+  it('aceita uma leitura lenta que confirma cada página de retiradas dentro do prazo', async () => {
+    const current = project('warehouse-requisitions-page-deadlines');
+    const row = { id: 'req-001', signatureReceiver: 'assinatura preservada' };
+    vi.useFakeTimers();
+    try {
+      fromMock.mockImplementation((table: string) => {
+        if (table === 'projects') return {
+          select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { warehouse_version: 8 }, error: null }) }) }),
+        };
+        expect(table).toBe('warehouse_requisitions');
+        let afterId: string | undefined;
+        const query = {
+          select: vi.fn(), eq: vi.fn(), order: vi.fn(), limit: vi.fn(),
+          gt: vi.fn((_field: string, id: string) => { afterId = id; return query; }),
+          then: (resolve: (result: MockQueryResult) => unknown) => {
+            const data = afterId ? [] : [{ id: row.id, data: row }];
+            return new Promise(resolvePage => {
+              setTimeout(() => resolvePage(resolve({ data, error: null })), 18_000);
+            });
+          },
+        };
+        for (const method of [query.select, query.eq, query.order, query.limit]) method.mockReturnValue(query);
+        return query;
+      });
+
+      const hydrated = hydrateProjectFromCloud(current, {
+        collections: ['warehouseRequisitions'], strict: true,
+      }).then(result => result, error => error);
+      await vi.advanceTimersByTimeAsync(36_000);
+      expect(await hydrated).toMatchObject({ warehouse: { requisitions: [row] } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('persiste auditoria append-only sem carregar ou excluir histórico anterior', async () => {

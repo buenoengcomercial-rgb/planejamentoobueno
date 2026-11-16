@@ -62,3 +62,15 @@ Não remover a atribuição explícita de `updated_at` isoladamente: o gatilho `
 ### Leitura seletiva em transição
 
 A mudança do cliente usa a projeção quando a hidratação solicitada contém coleções do Almoxarifado ou quando a carga é completa e o projeto contém estoque. A tabela ainda é atualizada a partir de `projects`, de modo que a leitura nova **não** elimina alterações em `projects.updated_at`. A comparação na base operacional em 28/10/2026 retornou `0` projetos divergentes. Antes de publicar o cliente em outro ambiente, instalar a migração `20261024203000`, recarregar o cache PostgREST e repetir a comparação acima. Confirmar também que o papel autenticado consegue consultar a projeção com a mesma visibilidade de `projects`. Uma consulta de rede malsucedida não pode ser tratada como tabela ausente.
+
+### Preparação para a revisão independente
+
+- A consulta leve cruza a revisão de `projects` com a de `warehouse_project_state` em uma resposta. A paginação do estoque confere a revisão da projeção antes e depois de ler as páginas.
+- Ao abrir uma área que usa estoque, a hidratação lê o catálogo próprio e confere sua revisão junto das coleções carregadas. Realtime e a conferência periódica marcam as coleções do estoque para atualização quando a aba ativa não as usa.
+- A migração `20261116140000` instala os escritores e as validações da fonte separada. As obras passam para o novo escritor mediante `app_private.enable_independent_warehouse(project_id)`, após publicar o cliente compatível e conferir a igualdade da projeção. A função recusa a ativação quando houver registros operacionais presentes somente no JSON antigo.
+- Com o teste operacional aprovado, `app_private.retire_warehouse_mirror(project_id)` retira o JSON congelado da carga da obra e guarda uma cópia técnica em `ops_backup.warehouse_cutover`. A retirada do espelho é uma operação administrativa que avança o timestamp da obra uma vez. Os lançamentos rotineiros só avançam a revisão do estoque.
+- Se for necessário voltar, `app_private.restore_warehouse_mirror(project_id)` restaura na obra a cópia **atual** do estoque, inclusive alterações confirmadas após a ativação.
+
+### Recibos antigos
+
+A migração `20261116133000` disponibiliza `app_private.compact_legacy_warehouse_receipts(project_id, limite)`. Com acesso administrativo, executar por obra e em transações curtas. Começar com um lote de 10. A função só troca o recibo duplicado por uma referência quando confirma a mesma transação, o mesmo autor e o mesmo resultado. As três marcas de versão já são consultadas da fonte vigente em cada reenvio. Um retorno de zero indica ausência de novos recibos elegíveis no momento da consulta. Recibos divergentes ficam disponíveis no formato anterior para conferência.

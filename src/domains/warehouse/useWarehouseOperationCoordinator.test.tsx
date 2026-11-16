@@ -44,12 +44,26 @@ function setup() {
     setLastCloudConfirmedAt: vi.fn(), setSaveStatus: vi.fn(), setDailyReportSaveErrors: vi.fn(),
   } as unknown as WarehouseOperationCoordinatorDeps;
   const hook = renderHook(() => useWarehouseOperationCoordinator(deps));
-  return { hook, refs, persistProject };
+  return { hook, refs, persistProject, deps };
 }
 
 afterEach(() => { vi.clearAllMocks(); });
 
 describe('coordenação das operações do Almoxarifado', () => {
+  it('confirma estoque isolado sem adotar a revisão de uma gravação geral concorrente', async () => {
+    const { hook, refs, deps } = setup();
+    refs.currentProjectUpdatedAtRef.current = 'obra-v1';
+    await act(async () => hook.result.current.applyWarehouseCloudConfirmation({
+      project, projectUpdatedAt: 'obra-v2', warehouseVersion: 8, warehouseIndependent: true,
+      warehouseUpdatedAt: 'estoque-v8', committedAt: 'estoque-v8',
+      acknowledgement: { requisitionId: 'req', movementIds: [], auditLogIds: [] }, dailyReportChanges: [],
+    }));
+    expect(refs.currentWarehouseVersionRef.current).toBe(8);
+    expect(refs.currentProjectUpdatedAtRef.current).toBe('obra-v1');
+    expect(deps.setCurrentProjectUpdatedAt).not.toHaveBeenCalled();
+    expect(deps.setCloudList).not.toHaveBeenCalled();
+    expect(deps.setLastCloudConfirmedAt).toHaveBeenCalledWith('estoque-v8');
+  });
   it('bloqueia uma operação quando as coleções exigidas ainda não foram carregadas', async () => {
     collections.missing.mockReturnValue(['warehouseMovements']);
     const { hook, persistProject } = setup();

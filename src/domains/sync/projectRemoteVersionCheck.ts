@@ -1,6 +1,7 @@
 import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import type { Project } from '@/types/project';
 import type { ProjectCollectionKey } from '@/lib/projectDataScope';
+import { hasRemoteWarehouseVersionAdvance, WAREHOUSE_REMOTE_SYNC_COLLECTIONS } from '@/lib/projectDataScope';
 import {
   confirmCloudProjectRecord,
   discardCloudProjectRecord,
@@ -83,12 +84,17 @@ export async function checkProjectRemoteVersion({
       || refs.conflictDetected.current || refs.saveTimer.current
       || refs.inFlightSave.current || refs.productionCaptureBusy.current) return;
     setLastRemoteCheckAt(new Date().toISOString());
-    if (await refreshWarehouse(currentAfterVersionCheck, remoteVersion)) return;
+    const usesWarehouse = collections.some(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection));
+    if (usesWarehouse && await refreshWarehouse(currentAfterVersionCheck, remoteVersion)) return;
+    if (!usesWarehouse && hasRemoteWarehouseVersionAdvance(refs.observedWarehouseVersion.current, remoteVersion.warehouseVersion)) {
+      markRemoteCollections(current.id, WAREHOUSE_REMOTE_SYNC_COLLECTIONS);
+    }
     const knownRemoteCollections = [
       ...(refs.pendingRealtimeCollections.current.get(current.id) ?? []),
       ...(refs.remoteDirtyCollections.current.get(current.id) ?? []),
-    ];
-    if (await refreshCollections(currentAfterVersionCheck, knownRemoteCollections, remoteVersion)) return;
+    ].filter(collection => !WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection) || collections.includes(collection));
+    if (knownRemoteCollections.length > 0
+      && await refreshCollections(currentAfterVersionCheck, knownRemoteCollections, remoteVersion)) return;
     const hasLocalChanges = projectHasLocalChanges(currentAfterVersionCheck, refs.savedProjectJson.current);
     const action = resolveRemoteVersionAction(remoteVersion.updatedAt, refs.projectUpdatedAt.current);
     if (action === 'current') {

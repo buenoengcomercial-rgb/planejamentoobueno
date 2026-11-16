@@ -11,6 +11,7 @@ interface DispatchOptions {
   ownRowsRef: Ref<Map<string, number>>;
   pendingCollectionsRef: Ref<Map<string, Set<ProjectCollectionKey>>>;
   currentUpdatedAt: () => string | null;
+  currentWarehouseVersion?: () => number | null;
   onDailyReport: (report: DailyReport) => void;
   onRefresh: (sources: readonly string[]) => void;
 }
@@ -18,11 +19,15 @@ interface DispatchOptions {
 /** Groups row notifications while retaining their domain before any autosave can run. */
 export function createProjectRealtimeDispatcher({
   projectId, timerRef, sourcesRef, ownRowsRef, pendingCollectionsRef,
-  currentUpdatedAt, onDailyReport, onRefresh,
+  currentUpdatedAt, currentWarehouseVersion, onDailyReport, onRefresh,
 }: DispatchOptions) {
   let disposed = false;
   const onRow = (payload?: ProjectRealtimePayload, source?: string) => {
     if (disposed) return;
+    if (source === 'warehouse_project_state' && payload?.new?.independent === true) {
+      const incoming = payload.new.warehouse_version;
+      if (typeof incoming === 'number' && incoming <= (currentWarehouseVersion?.() ?? -1)) return;
+    }
     if (source === 'daily_reports') {
       const incoming = payload?.new?.data as DailyReport | undefined;
       if (incoming?.date) {

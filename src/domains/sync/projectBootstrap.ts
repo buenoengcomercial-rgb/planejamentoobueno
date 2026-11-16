@@ -101,9 +101,12 @@ export async function loadInitialProject(options: BootstrapOptions): Promise<Boo
     selection.projectId,
     projectCollectionsForView(selection.view, selection.warehouseTab, independentMeasurement),
   );
-  const record = await withReadDeadline(loadStableCloudProjectRecord(selection.projectId, {
+  const opening = loadStableCloudProjectRecord(selection.projectId, {
     collections, strict: true, deferSnapshot: true,
-  }));
+  });
+  // A leitura do livro de estoque tem um prazo por página. A abertura pode
+  // exceder esse prazo mesmo quando cada requisição confirma normalmente.
+  const record = await (selection.view === 'warehouse' ? opening : withReadDeadline(opening));
   if (options.isCancelled()) {
     if (record) discardCloudProjectRecord(record);
     return null;

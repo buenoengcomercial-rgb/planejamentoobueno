@@ -11,7 +11,8 @@ import {
   hydrateProjectFromCloud,
   mergeHydratedProjectCollections,
 } from '@/lib/projectSync';
-import { normalizeProjectCollections, type ProjectCollectionKey } from '@/lib/projectDataScope';
+import { normalizeProjectCollections, WAREHOUSE_REMOTE_SYNC_COLLECTIONS, type ProjectCollectionKey } from '@/lib/projectDataScope';
+import { needsWarehouseProjectState, readWarehouseProjectState } from '@/lib/warehouseProjectState';
 
 const PRODUCTION_COLLECTIONS: readonly ProjectCollectionKey[] = ['taskDailyLogs', 'eapChapters', 'tasks'];
 
@@ -47,16 +48,24 @@ export type AreaHydrationResult = {
   project: Project;
   savedProjectJson: string;
   repaired: boolean;
+  warehouseVersion?: number;
 };
 
 export async function hydrateAreaCollections(options: HydrationOptions): Promise<AreaHydrationResult | null> {
   const { projectId, collections, source } = options;
   const beforeLoad = await getCloudProjectVersion(projectId);
   if (!beforeLoad) throw new Error('A versão da obra não pôde ser conferida.');
-  const hydrated = await hydrateProjectFromCloud(source, { collections: [...collections], strict: true });
+  const usesWarehouse = needsWarehouseProjectState(collections);
+  const warehouse = usesWarehouse ? await readWarehouseProjectState(source) : null;
+  const base = warehouse ? { ...source, warehouse: warehouse.warehouse } : source;
+  const hydrated = await hydrateProjectFromCloud(base, { collections: [...collections], strict: true });
   try {
     const afterLoad = await getCloudProjectVersion(projectId);
-    if (!afterLoad || afterLoad.updatedAt !== beforeLoad.updatedAt) {
+    const independentWarehouseOnly = usesWarehouse && afterLoad?.warehouseIndependent
+      && collections.every(collection => WAREHOUSE_REMOTE_SYNC_COLLECTIONS.includes(collection));
+    if (!afterLoad || (!independentWarehouseOnly && afterLoad.updatedAt !== beforeLoad.updatedAt)
+      || (usesWarehouse && beforeLoad.warehouseVersion !== afterLoad.warehouseVersion)
+      || (warehouse && warehouse.version !== afterLoad.warehouseVersion)) {
       throw new Error('A obra mudou durante o carregamento. Atualize a área antes de editar.');
     }
     if (!options.isCurrent()) {
@@ -96,6 +105,7 @@ export async function hydrateAreaCollections(options: HydrationOptions): Promise
       project: repair.project,
       savedProjectJson: serializeProject(savedCloudMerged),
       repaired: repair.changed,
+      ...(warehouse && { warehouseVersion: warehouse.version }),
     };
   } catch (error) {
     discardHydratedProjectCollections(hydrated);

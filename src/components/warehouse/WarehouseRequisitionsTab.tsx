@@ -276,6 +276,7 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   const [availability, setAvailability] = useState<WarehouseAvailabilityResult | null>(null);
   const [availabilityError, setAvailabilityError] = useState('');
   const [checkingAvailability, setCheckingAvailability] = useState(false);
+  const cancelAvailabilityPreview = useRef<(() => void) | null>(null);
   const submitLock = useRef(false);
   const preparedAttempt = useRef<{ before: Project; after: Project; operation: WarehouseCloudOperation; requisitionId: string } | null>(null);
   const [errors, setErrors] = useState<WithdrawalErrors>({});
@@ -396,7 +397,12 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
         setAvailabilityError(error.message);
       }).finally(() => { if (active) setCheckingAvailability(false); });
     }, 250);
-    return () => { active = false; window.clearTimeout(timer); };
+    const cancel = () => { active = false; window.clearTimeout(timer); };
+    cancelAvailabilityPreview.current = cancel;
+    return () => {
+      cancel();
+      cancelAvailabilityPreview.current = null;
+    };
   }, [open, project.id, selectedQuantities]);
   const visibleAvailableMaterials = useMemo(() => availableMaterials.slice(0, 60), [availableMaterials]);
   const receiverNames = useMemo(() => (wh.receivers ?? []).map(receiver => receiver.name), [wh.receivers]);
@@ -561,6 +567,9 @@ function WarehouseMaterialWithdrawalsTab({ project, onProjectChange, onCloudOper
   };
 
   const preflightSelectedMaterials = async () => {
+    // A pending preview can arrive after the server's final stock decision.
+    cancelAvailabilityPreview.current?.();
+    setCheckingAvailability(false);
     try {
       const current = await checkWarehouseWithdrawalAvailability(project.id, selectedQuantities);
       setAvailability(current);

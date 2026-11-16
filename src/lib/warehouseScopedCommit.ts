@@ -88,6 +88,7 @@ interface WarehouseScopedRpcResult {
   projectUpdatedAt?: string;
   warehouseUpdatedAt?: string;
   warehouseVersion?: number;
+  warehouseIndependent?: boolean;
 }
 
 export interface WarehouseScopedCommitResult {
@@ -98,6 +99,7 @@ export interface WarehouseScopedCommitResult {
   projectUpdatedAt: string;
   warehouseUpdatedAt: string;
   warehouseVersion: number;
+  warehouseIndependent?: boolean;
   affectedStateKeys: string[];
   affectedMovementIds: string[];
   affectedCustodyIds: string[];
@@ -353,6 +355,7 @@ export async function commitWarehouseScopedOperation(
     committedAt: result.committedAt,
     projectUpdatedAt: result.projectUpdatedAt,
     warehouseUpdatedAt: result.warehouseUpdatedAt,
+    ...(result.warehouseIndependent === true && { warehouseIndependent: true }),
     warehouseVersion: result.warehouseVersion!,
     affectedStateKeys: Object.keys(payload.state),
     affectedMovementIds: [...new Set([...movementIds, ...deletedMovementIds])],

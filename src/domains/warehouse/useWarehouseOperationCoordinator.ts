@@ -144,13 +144,14 @@ export function useWarehouseOperationCoordinator({
       confirmation.projectUpdatedAt = version.updatedAt;
       confirmation.warehouseUpdatedAt = version.warehouseUpdatedAt;
       confirmation.warehouseVersion = version.warehouseVersion;
+      confirmation.warehouseIndependent = version.warehouseIndependent ?? confirmation.warehouseIndependent;
     }
 
     // A resposta da RPC do Almoxarifado é a confirmação oficial da retirada,
     // movimentos e auditoria. Um espelho legado no Diário jamais pode segurar
     // este ponto nem transformar uma confirmação em aparente falha.
     if (rawProjectRef.current?.id !== confirmation.project.id) {
-      setCloudList(previous => previous.map(meta => meta.id === confirmation.project.id
+      if (!confirmation.warehouseIndependent) setCloudList(previous => previous.map(meta => meta.id === confirmation.project.id
         ? { ...meta, updatedAt: confirmation.projectUpdatedAt }
         : meta));
       throw new Error('A retirada foi salva na nuvem, mas outra obra está aberta. Reabra a obra original para conferi-la.');
@@ -175,12 +176,14 @@ export function useWarehouseOperationCoordinator({
     });
     currentWarehouseVersionRef.current = confirmation.warehouseVersion;
     lastObservedWarehouseVersionRef.current = confirmation.warehouseVersion;
-    currentProjectUpdatedAtRef.current = confirmation.projectUpdatedAt;
-    setCurrentProjectUpdatedAt(confirmation.projectUpdatedAt);
     setLastCloudConfirmedAt(confirmation.committedAt);
-    setCloudList(previous => previous.map(meta => meta.id === confirmation.project.id
-      ? { ...meta, updatedAt: confirmation.projectUpdatedAt }
-      : meta));
+    if (!confirmation.warehouseIndependent) {
+      currentProjectUpdatedAtRef.current = confirmation.projectUpdatedAt;
+      setCurrentProjectUpdatedAt(confirmation.projectUpdatedAt);
+      setCloudList(previous => previous.map(meta => meta.id === confirmation.project.id
+        ? { ...meta, updatedAt: confirmation.projectUpdatedAt }
+        : meta));
+    }
 
     setRawProject(current => {
       if (!current || current.id !== confirmation.project.id) return current;
@@ -193,7 +196,7 @@ export function useWarehouseOperationCoordinator({
         skipNextAutoSaveRef.current = true;
         setSaveStatus('saved');
       } else {
-        scheduleProjectDraft(merged, confirmation.projectUpdatedAt);
+        scheduleProjectDraft(merged, currentProjectUpdatedAtRef.current);
         setSaveStatus('saving');
       }
       rawProjectRef.current = merged;
@@ -377,7 +380,7 @@ export function useWarehouseOperationCoordinator({
       }
 
       if (rawProjectRef.current?.id !== result.project.id) {
-        setCloudList(previous => previous.map(meta => meta.id === result.project.id
+        if (!result.warehouseIndependent) setCloudList(previous => previous.map(meta => meta.id === result.project.id
           ? { ...meta, updatedAt: result.projectUpdatedAt }
           : meta));
         return result.project;
@@ -391,6 +394,7 @@ export function useWarehouseOperationCoordinator({
         }
         result.project = refreshed; result.projectUpdatedAt = version.updatedAt;
         result.warehouseUpdatedAt = version.warehouseUpdatedAt; result.warehouseVersion = version.warehouseVersion;
+        result.warehouseIndependent = version.warehouseIndependent ?? result.warehouseIndependent;
       }
 
       const parseSavedBaseline = () => {
@@ -408,10 +412,12 @@ export function useWarehouseOperationCoordinator({
       result.affectedAuditIds.forEach(id => ownWarehouseRealtimeRowsRef.current.set(`audit_logs:${id}`, expiresAt));
       currentWarehouseVersionRef.current = result.warehouseVersion;
       lastObservedWarehouseVersionRef.current = result.warehouseVersion;
-      currentProjectUpdatedAtRef.current = result.projectUpdatedAt;
-      setCurrentProjectUpdatedAt(result.projectUpdatedAt);
       setLastCloudConfirmedAt(result.committedAt);
-      setCloudList(previous => previous.map(meta => meta.id === result.project.id ? { ...meta, updatedAt: result.projectUpdatedAt } : meta));
+      if (!result.warehouseIndependent) {
+        currentProjectUpdatedAtRef.current = result.projectUpdatedAt;
+        setCurrentProjectUpdatedAt(result.projectUpdatedAt);
+        setCloudList(previous => previous.map(meta => meta.id === result.project.id ? { ...meta, updatedAt: result.projectUpdatedAt } : meta));
+      }
 
       let applied = result.project;
       setRawProject(current => {
@@ -423,7 +429,7 @@ export function useWarehouseOperationCoordinator({
           skipNextAutoSaveRef.current = true;
           setSaveStatus('saved');
         } else {
-          scheduleProjectDraft(applied, result.projectUpdatedAt);
+          scheduleProjectDraft(applied, currentProjectUpdatedAtRef.current);
           setSaveStatus('saving');
         }
         rawProjectRef.current = applied;

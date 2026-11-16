@@ -227,6 +227,12 @@ describe('confirmação visual da retirada', () => {
   it('identifica o item quando o saldo muda depois da consulta e o servidor rejeita tudo', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     Element.prototype.scrollIntoView = vi.fn();
+    let finishOldCheck!: () => void;
+    availabilityMock.mockImplementationOnce(() => new Promise(resolve => {
+      finishOldCheck = () => resolve({
+        warehouseVersion: 1, items: [{ itemKey: 'placa', requested: 8, available: 10 }],
+      });
+    }));
     commitMock.mockRejectedValue(new WarehouseInsufficientStockError([{ itemKey: 'placa', requested: 8, available: 2 }]));
     render(<WarehouseRequisitionsTab project={projectWithStock()} onProjectChange={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: /Nova retirada/i }));
@@ -236,9 +242,12 @@ describe('confirmação visual da retirada', () => {
     fireEvent.click(within(screen.getByLabelText('Materiais disponíveis')).getByRole('button'));
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Quantidade de Placa de sinalização' }), { target: { value: '8' } });
     fireEvent.click(screen.getByRole('button', { name: 'Assinar teste' }));
+    await waitFor(() => expect(availabilityMock).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: 'Entregar e baixar estoque' }));
     await waitFor(() => expect(commitMock).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText(/Saldo previsto negativo: -6 UN/)).toBeInTheDocument(), { timeout: 5000 });
+    await act(async () => finishOldCheck());
+    expect(screen.getByText(/Saldo previsto negativo: -6 UN/)).toBeInTheDocument();
     expect(screen.getByAltText('Assinatura registrada')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'PDF' })).not.toBeInTheDocument();
   });
