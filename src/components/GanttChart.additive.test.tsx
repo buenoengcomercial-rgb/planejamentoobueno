@@ -1,8 +1,11 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import GanttChart from './GanttChart';
 import type { AdditiveScheduleSuspensionMeta } from '@/lib/additiveSchedule';
+
+const exportPdf = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/schedulePdf', () => ({ exportSchedulePdf: exportPdf }));
 
 const project: Project = {
   id: 'gantt-additive-test',
@@ -48,6 +51,18 @@ const project: Project = {
     ],
   }],
 };
+
+it('exporta a obra completa mesmo com o filtro crítico ativo e capítulos recolhidos', async () => {
+  const onProjectChange = vi.fn();
+  const monthlyRows = new Map();
+  const measurementValues = { '2026-08': 100 };
+  render(<GanttChart project={project} monthlyRows={monthlyRows} measurementValues={measurementValues}
+    onProjectChange={onProjectChange} collapsedPhaseIds={['phase-1']} readOnly />);
+  fireEvent.click(screen.getByRole('button', { name: /Crítico/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Exportar PDF' }));
+  await waitFor(() => expect(exportPdf).toHaveBeenCalledWith(expect.objectContaining({ project, monthlyRows, measurementValues })));
+  expect(onProjectChange).not.toHaveBeenCalled();
+});
 
 const suspensionMap: Record<string, AdditiveScheduleSuspensionMeta> = {
   'suspended-1d': {

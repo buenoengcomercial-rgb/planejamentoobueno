@@ -5,7 +5,7 @@ import { Project, Task, ViewMode, DependencyType, TaskDependency, MeasuredSchedu
 import type { AuditUserInfo } from '@/lib/audit';
 import { getTeamDefinition, DEFAULT_TEAMS, TeamCode, TeamDefinition } from '@/lib/teams';
 import GerenciarEquipes from './GerenciarEquipes';
-import { Settings2 } from 'lucide-react';
+import { FileDown, Settings2 } from 'lucide-react';
 import { getAllTasks } from '@/data/sampleProject';
 import { flattenTaskTree, mapTaskTree, replaceProjectTasksById, updateProjectTask } from '@/lib/taskTree';
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
@@ -62,6 +62,7 @@ interface GanttChartProps {
   measuredReferences?: ReadonlyMap<string, MeasuredScheduleReference[]>;
   monthlyRows?: ReadonlyMap<string, ReturnType<typeof buildPhysicalFinancialSchedule>['rows'][number]>;
   measurementValues?: Readonly<Record<string, number>>;
+  schedulePdfDeadline?: string;
   onEditMonthly?: (id: string) => void;
   financialForecastNode?: React.ReactNode | null;
   monthlyFinancialForecast?: Array<{
@@ -99,7 +100,7 @@ export default function GanttChart({
   onEditSuspension,
   financialForecastNode,
   monthlyFinancialForecast,
-  monthlyRows, measurementValues, onEditMonthly, measuredReferences,
+  monthlyRows, measurementValues, schedulePdfDeadline, onEditMonthly, measuredReferences,
   lockedTaskLabels = {},
   displayOnlyTaskIds,
   contractedQuantityAdjustments,
@@ -152,6 +153,7 @@ export default function GanttChart({
     () => new Set(controlledCollapsedPhaseIds ?? readGanttCollapsedPhases(project))
   );
   const [showCriticalOnly, setShowCriticalOnly] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [showZeroSuppressed, setShowZeroSuppressed] = useState(false);
   const [teamFilter, setTeamFilter] = useState<string>('all');
   const [phaseFilter, setPhaseFilter] = useState<string>('all');
@@ -171,6 +173,19 @@ export default function GanttChart({
     () => providedSuspensionMap ?? (context === 'official' ? buildPendingAdditiveSuspensionMap(project) : {}),
     [context, project, providedSuspensionMap],
   );
+  async function downloadSchedulePdf() {
+    if (!monthlyRows || exportingPdf) return;
+    setExportingPdf(true);
+    try {
+      const { exportSchedulePdf } = await import('@/lib/schedulePdf');
+      await exportSchedulePdf({ project, monthlyRows, measurementValues, suspensionMap, deadline: schedulePdfDeadline });
+    } catch (error) {
+      toast.error(error instanceof Error && error.message === 'O cronograma está sem atividades para exportar.'
+        ? error.message : 'Não foi possível gerar o PDF do cronograma. Tente novamente.');
+    } finally {
+      setExportingPdf(false);
+    }
+  }
   const isStatusOnlyTask = useCallback(
     // Pending additive restrictions are operational states in both views: keep
     // the row for traceability, but replace its planned bar with the status.
@@ -1398,8 +1413,17 @@ export default function GanttChart({
             <h2 className="text-lg font-bold text-foreground">{title}</h2>
             <p className="text-[10px] text-muted-foreground">{subtitle}</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {undoButton}
+            {context === 'official' && monthlyRows && <button
+              type="button"
+              disabled={exportingPdf}
+              onClick={() => void downloadSchedulePdf()}
+              className="flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-60"
+            >
+              <FileDown className="h-3.5 w-3.5" aria-hidden="true" />
+              {exportingPdf ? 'Gerando PDF…' : 'Exportar PDF'}
+            </button>}
             <ConfiguracaoObra config={obraConfig} canManage={canManageCalendar} auditActor={auditActor} onConfigChange={next => { setObraConfig(next); onCalendarConfigChange?.(next); }} />
             <button
               onClick={() => setShowCriticalOnly(!showCriticalOnly)}
