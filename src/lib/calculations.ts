@@ -151,6 +151,9 @@ export function applyRupToProject(project: Project): Project {
       ...p,
       tasks: mapTaskTree(p.tasks, t => {
         // Respect manual override — don't overwrite duration
+        if (t.operationalReschedule?.monthlySegments?.length) {
+          return { ...t, startDate: t.operationalReschedule.startDate, duration: t.operationalReschedule.duration };
+        }
         if (t.isManual) {
           return t;
         }
@@ -521,7 +524,9 @@ export function dependencyRequiredStart(
   lag = 0,
 ): Date {
   const predecessorStart = nextWorkDay(parseISODateLocal(predecessor.startDate), cal);
-  const predecessorEnd = workEndDate(predecessor.startDate, predecessor.duration, cal);
+  const finalSegment = predecessor.operationalReschedule?.monthlySegments?.at(-1);
+  const predecessorEnd = finalSegment ? parseISODateLocal(finalSegment.endDate)
+    : workEndDate(predecessor.startDate, predecessor.duration, cal);
 
   let required: Date;
   switch (type) {
@@ -671,6 +676,7 @@ function cascadeDependencyDates(
     if (controlling) {
       // An approved remaining-work plan reserves crews/materials from this date.
       // Dependency settling may delay it, but must not pull it ahead of that release.
+      if (successor.operationalReschedule?.monthlySegments?.length) continue;
       const release = successor.operationalReschedule?.startDate;
       const required = toISODateLocal(controlling.start);
       const nextStartDate = release && /^\d{4}-\d{2}-\d{2}$/.test(release) && release > required ? release : required;

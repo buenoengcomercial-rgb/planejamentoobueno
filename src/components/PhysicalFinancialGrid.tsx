@@ -2,17 +2,15 @@ import { Fragment, useMemo, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import type { Additive, Project } from '@/types/project';
 import type { MeasurementWorkspace } from '@/lib/measurementWorkspace';
-import { buildPhysicalFinancialSchedule, isValidMonthlyAllocation, roundQuantity, type MonthlyAllocations } from '@/lib/physicalFinancialSchedule';
+import { buildPhysicalFinancialSchedule, isValidMonthlyAllocation, measurementValuesByMonth, monthlyPercentage, monthlyPeriodLabel, roundQuantity, type MonthlyAllocations } from '@/lib/physicalFinancialSchedule';
 
 type Result = ReturnType<typeof buildPhysicalFinancialSchedule>;
 type Row = Result['rows'][number];
 type Edit = { id: string; month: string; targetMonth: string; amount: string; mode: 'quantity' | 'percent'; original: string };
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format;
 const quantity = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 8 }).format;
-const percent = new Intl.NumberFormat('pt-BR', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format;
-const percentage = (part: number, total: number) => total ? percent(part / total) : '—';
-const monthFormatter = new Intl.DateTimeFormat('pt-BR', { month: 'long', timeZone: 'UTC' });
-const monthLabel = (month: string) => `${monthFormatter.format(new Date(`${month}-01T00:00:00Z`))}/${month.slice(0, 4)}`;
+const percentage = (part: number, total: number) => total ? monthlyPercentage(part / total) : '—';
+const monthLabel = monthlyPeriodLabel;
 
 interface Props {
   project: Project;
@@ -38,6 +36,7 @@ export default function PhysicalFinancialGrid({ project, measurement, additives,
   const [drag, setDrag] = useState<{ id: string; month: string; original: string } | null>(null);
   const [error, setError] = useState('');
   const selected = rows.find(row => row.id === edit?.id);
+  const receipts = useMemo(() => measurementValuesByMonth(measurement), [measurement]);
   const summary = useMemo(() => totals(rows, months), [rows, months]);
   const groups = useMemo(() => {
     const nested = new Map(phases.map(phase => [phase.id, phases.filter(child => child.parentId === phase.id)]));
@@ -131,9 +130,13 @@ export default function PhysicalFinancialGrid({ project, measurement, additives,
           setError('A distribuição mudou. Abra a célula novamente para conferir o valor atual.');
           return;
         }
-        onSave(selected.id, null);
-        setEdit(null);
-        setError('');
+        try {
+          onSave(selected.id, null);
+          setEdit(null);
+          setError('');
+        } catch (failure) {
+          setError(failure instanceof Error ? failure.message : 'Não foi possível preparar a programação.');
+        }
       }}>Voltar à sugestão do Gantt</Button>}
       <Button type="button" variant="outline" onClick={() => { setEdit(null); setError(''); }}>Cancelar</Button>
     </form>}
@@ -143,7 +146,9 @@ export default function PhysicalFinancialGrid({ project, measurement, additives,
           <th className="sticky left-0 min-w-24 bg-muted p-2" scope="col">Item</th>
           <th className="min-w-64 p-2" scope="col">Descrição</th><th className="p-2" scope="col">Un.</th>
           <th className="whitespace-nowrap p-2 text-right" scope="col">Total contratado</th><th className="p-2 text-right" scope="col">Saldo</th>
-          {months.map(month => <th className="min-w-28 p-2 text-right" key={month} scope="col">{monthLabel(month)}</th>)}
+          {months.map(month => <th className="min-w-28 p-2 text-right" key={month} scope="col">{monthLabel(month)}<div className="whitespace-nowrap text-xs font-normal text-emerald-700" title="Valor da medição">
+            {receipts[month] !== undefined ? currency(receipts[month]) : '—'}
+          </div></th>)}
         </tr></thead>
         <tbody>
           {groups.filter(group => group.ancestors.every(id => !collapsed.has(id))).map(({ phase, depth, all, own }) => {

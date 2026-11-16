@@ -1,3 +1,8 @@
+import type { AuditUserInfo } from '@/lib/audit';
+import { logToProject } from '@/lib/audit';
+import { proposeMonthlySchedule, type MonthlyEdit } from '@/lib/monthlyScheduleCommand';
+import { scheduleDateISO } from '@/lib/scheduleCalendar';
+import { monthlyPeriodLabel } from '@/lib/physicalFinancialSchedule';
 import PhysicalFinancialGrid from './PhysicalFinancialGrid';
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
@@ -16,11 +21,13 @@ interface Props {
   mode?: 'gantt' | 'physicalFinancial';
   openPhysicalFinancial?: () => void;
   saveMonthlyAllocation?: (serviceId: string, allocations: Record<string, number> | null) => void;
+  commitMonthlySchedule?: (update: (previous: Project) => Project) => void;
+  auditActor?: AuditUserInfo;
   userId?: string;
   independentMeasurementConfirmed: boolean;
   openMeasurement?: () => void;
   openAdditive?: () => void;
-  renderGantt: (additives: readonly Additive[], measurement?: MeasurementWorkspace | null) => ReactNode;
+  renderGantt: (additives: readonly Additive[], measurement?: MeasurementWorkspace | null, saveMonthly?: Props['saveMonthlyAllocation']) => ReactNode;
 }
 
 interface ConfirmedData {
@@ -31,10 +38,13 @@ interface ConfirmedData {
 }
 
 export default function MonthlyExecutionSchedule({
-  project, userId, independentMeasurementConfirmed, openMeasurement, openAdditive, renderGantt, mode, openPhysicalFinancial, saveMonthlyAllocation,
+  project, userId, independentMeasurementConfirmed, openMeasurement, openAdditive, renderGantt, mode, openPhysicalFinancial, saveMonthlyAllocation, commitMonthlySchedule, auditActor,
 }: Props) {
   const [selectedView, setView] = useState<'monthly' | 'gantt'>('monthly');
   const view = mode === 'gantt' ? 'gantt' : mode === 'physicalFinancial' ? 'monthly' : selectedView;
+  const [proposal, setProposal] = useState<{ edit: MonthlyEdit; preview: ReturnType<typeof proposeMonthlySchedule>; now: string }>();
+  const [proposalError, setProposalError] = useState('');
+  const [checking, setChecking] = useState(false);
   const [read, setRead] = useState(0);
   const [data, setData] = useState<ConfirmedData>({});
   const projectId = project.id;
@@ -96,6 +106,50 @@ export default function MonthlyExecutionSchedule({
     });
   }, [additives, execution, measurement, project]);
 
+  const saveMonthly = commitMonthlySchedule && additives && measurement !== undefined
+    ? (serviceId: string, allocations: Record<string, number> | null) => {
+      const edit = { serviceId, allocations };
+      const now = scheduleDateISO(new Date());
+      setProposalError('');
+      setProposal({ edit, now, preview: proposeMonthlySchedule(project, measurement, additives, edit, now) });
+    } : saveMonthlyAllocation;
+
+  async function confirmMonthly() {
+    if (!proposal || !commitMonthlySchedule || !repository || !additives || checking) return;
+    setChecking(true);
+    setProposalError('');
+    try {
+      const confirmed = await (repository.loadForRetry?.() ?? repository.load());
+      if (repository.loadedOffline?.() || JSON.stringify(confirmed?.entries) !== JSON.stringify(measurement?.entries)
+          || JSON.stringify(confirmed?.services) !== JSON.stringify(measurement?.services)
+          || JSON.stringify(confirmed?.periods) !== JSON.stringify(measurement?.periods)) {
+        throw Error('A Medição mudou desde a prévia. Confira a nuvem e revise a distribuição.');
+      }
+      const record = await loadStableCloudProjectRecord(projectId, { collections: ['additives'], strict: true });
+      if (!record) throw Error('Não foi possível confirmar o aditivo.');
+      discardCloudProjectRecord(record);
+      if (JSON.stringify(record.project.additives ?? []) !== JSON.stringify(additives)) {
+        throw Error('O Aditivo mudou desde a prévia. Confira a nuvem e revise a distribuição.');
+      }
+      const { edit, preview, now } = proposal;
+      commitMonthlySchedule(previous => {
+        const fresh = proposeMonthlySchedule(previous, confirmed, additives, edit, now);
+        if (JSON.stringify(fresh.changes) !== JSON.stringify(preview.changes)
+            || JSON.stringify(fresh.movedAllocations) !== JSON.stringify(preview.movedAllocations)
+            || JSON.stringify(fresh.allocations) !== JSON.stringify(preview.allocations)
+            || JSON.stringify(previous.monthlySchedule) !== JSON.stringify(project.monthlySchedule)) {
+          throw Error('O cronograma mudou desde a prévia. Revise o impacto antes de confirmar.');
+        }
+        return logToProject(fresh.next, { ...auditActor, entityType: 'task', entityId: edit.serviceId, action: 'updated',
+          title: 'Parcelas mensais reprogramadas', description: `${fresh.changes.length} atividade(s) ou marco(s) com datas recalculadas.`,
+          before: previous.monthlySchedule?.[edit.serviceId], after: fresh.next.monthlySchedule?.[edit.serviceId] });
+      });
+      setProposal(undefined);
+    } catch (failure) {
+      setProposalError(failure instanceof Error ? failure.message : 'Não foi possível confirmar a programação.');
+    } finally { setChecking(false); }
+  }
+
   const chapters = new Map<string, NonNullable<typeof execution>['rows']>();
   for (const row of execution?.rows ?? []) {
     if (!chapters.has(row.chapter)) chapters.set(row.chapter, []);
@@ -112,10 +166,24 @@ export default function MonthlyExecutionSchedule({
     {(additiveError || measurementError) && <p role="alert" className="px-4 py-3 text-sm text-destructive">
       Não foi possível confirmar {additiveError && measurementError && view === 'monthly' ? 'a Medição e o Aditivo' : additiveError ? 'o Aditivo' : 'a Medição'} na nuvem. Use “Conferir na nuvem” para tentar novamente.
     </p>}
+    {proposal && <section aria-label="Prévia da reprogramação mensal" className="space-y-2 border-b bg-card p-4">
+      <h2 className="font-semibold">Prévia da reprogramação mensal</h2>
+      <p>Parcelas após o cálculo: {Object.entries(proposal.preview.allocations).map(([month, value]) => `${monthlyPeriodLabel(month)} · ${formatQuantity(value)}`).join(' · ') || 'Distribuição automática do Gantt'}</p>
+      {!!proposal.preview.late.length && <p role="alert" className="text-destructive">A alteração leva {proposal.preview.late.length} atividade(s) após o prazo de {proposal.preview.deadline.split('-').reverse().join('/')}.</p>}
+      {proposal.preview.movedAllocations.length > 0 && <ul className="max-h-32 overflow-auto text-sm" aria-label="Parcelas deslocadas">
+        {proposal.preview.movedAllocations.map(row => <li key={row.id}>{row.label} · {Object.entries(row.allocations).map(([month, value]) => `${monthlyPeriodLabel(month)}: ${formatQuantity(value)}`).join(' · ')}</li>)}
+      </ul>}
+      {proposal.preview.changes.length > 0 && <ul className="max-h-48 overflow-auto text-sm">
+        {proposal.preview.changes.map(change => <li key={change.id}>{change.label} · {change.oldStart} a {change.oldEnd} → {change.start} a {change.end}</li>)}
+      </ul>}
+      {proposalError && <p role="alert" className="text-destructive">{proposalError}</p>}
+      <Button disabled={checking} onClick={() => void confirmMonthly()}>Confirmar reprogramação</Button>{' '}
+      <Button disabled={checking} variant="outline" onClick={() => setProposal(undefined)}>Cancelar prévia</Button>
+    </section>}
     {view === 'gantt' ? (userId && (measurement === undefined || !additives || measurementError || additiveError)
       ? !measurementError && !additiveError && <p role="status" className="p-4">Conferindo a Medição e o Aditivo na nuvem…</p>
-      : renderGantt(additives ?? [], measurement)) : mode === 'physicalFinancial' ? (measurement !== undefined && additives && !measurementError && !additiveError
-      ? <PhysicalFinancialGrid project={project} measurement={measurement} additives={additives} onSave={saveMonthlyAllocation} />
+      : renderGantt(additives ?? [], measurement, saveMonthly)) : mode === 'physicalFinancial' ? (measurement !== undefined && additives && !measurementError && !additiveError
+      ? <PhysicalFinancialGrid project={project} measurement={measurement} additives={additives} onSave={saveMonthly} />
       : !measurementError && !additiveError && <p role="status" className="p-4">Conferindo a Medição e o Aditivo na nuvem…</p>) : <div className="space-y-6 p-4">
       <section aria-label="Execução medida">
         <h2 className="font-semibold">1ª e 2ª medições</h2>

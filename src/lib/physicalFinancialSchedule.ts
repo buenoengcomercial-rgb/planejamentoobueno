@@ -1,7 +1,7 @@
 import type { Additive, Project, Task } from '@/types/project';
 import { additiveServiceId, additiveTaskId, approvedAdditiveRows, includeContractedAdditiveTasks, isContractedAdditive } from './contractedAdditiveSchedule';
 import { calculateLineTotal, money2 } from './financialEngine';
-import { monthlyLines, type MeasurementWorkspace } from './measurementWorkspace';
+import { monthlyLines, monthlyTotal, type MeasurementWorkspace } from './measurementWorkspace';
 import { resolveObraConfig } from './obraConfig';
 import { executionMonth } from './monthlyExecution';
 import { detailPartial } from './productionQuantityDetails';
@@ -10,7 +10,10 @@ import { flattenTaskTree } from './taskTree';
 
 export const MONTHLY_EPSILON = 1e-8;
 export type MonthlyAllocations = Record<string, number>;
-type Cell = { quantity: number; value: number };
+type Cell = { quantity: number; value: number; evidence?: string[] };
+const monthFormatter = new Intl.DateTimeFormat('pt-BR', { month: 'long', timeZone: 'UTC' });
+export const monthlyPeriodLabel = (month: string) => `${monthFormatter.format(new Date(`${month}-01T00:00:00Z`))}/${month.slice(0, 4)}`;
+export const monthlyPercentage = new Intl.NumberFormat('pt-BR', { style: 'percent', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format;
 export const roundQuantity = (value: number) => Number(value.toFixed(8));
 
 export function monthRange(first: string, last: string): string[] {
@@ -58,14 +61,22 @@ function measuredCells(workspace: MeasurementWorkspace) {
       const cells = actual.get(line.service.id) ?? {};
       actual.set(line.service.id, cells);
       const portions = new Map<string, number>();
+      const daysByMonth = new Map<string, Set<string>>();
       for (const row of entries.get(JSON.stringify([period.id, line.service.id])) ?? []) {
         const day = row.origin?.kind === 'daily' ? row.origin.date : undefined;
         const month = day && day >= period.startDate && day <= period.endDate ? executionMonth(day) ?? competence : competence;
-        portions.set(month, (portions.get(month) ?? 0) + detailPartial(row));
+        const amount = detailPartial(row);
+        portions.set(month, (portions.get(month) ?? 0) + amount);
+        if (amount && day && day >= period.startDate && day <= period.endDate && executionMonth(day)) {
+          const dates = daysByMonth.get(month) ?? new Set<string>();
+          dates.add(day);
+          daysByMonth.set(month, dates);
+        }
       }
       const sum = [...portions.values()].reduce((total, quantity) => total + quantity, 0);
       if (Math.abs(sum - line.qty) > MONTHLY_EPSILON) {
         portions.clear();
+        daysByMonth.clear();
         portions.set(competence, line.qty);
       }
       let distributed = 0;
@@ -76,10 +87,22 @@ function measuredCells(workspace: MeasurementWorkspace) {
         const cell = cells[month] ??= { quantity: 0, value: 0 };
         cell.quantity += quantity;
         cell.value = money2(cell.value + value);
+        const dates = [...(daysByMonth.get(month) ?? [])].sort().map(date => date.split('-').reverse().join('/'));
+        const evidence = `${period.number}ª medição${dates.length ? ` · ${dates.join(', ')}` : ''}`;
+        (cell.evidence ??= []).push(evidence);
       });
     }
   }
   return actual;
+}
+
+export function measurementValuesByMonth(workspace: MeasurementWorkspace | null) {
+  const values: Record<string, number> = {};
+  for (const period of workspace?.periods ?? []) {
+    const month = executionMonth(period.endDate);
+    if (month && workspace) values[month] = money2((values[month] ?? 0) + monthlyTotal(workspace, period.id));
+  }
+  return values;
 }
 
 export function buildPhysicalFinancialSchedule(project: Project, workspace: MeasurementWorkspace | null, additives: readonly Additive[]) {
