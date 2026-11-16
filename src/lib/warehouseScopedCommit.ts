@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
-import { stageWarehouseOperation, rejectWarehouseOperation } from './warehouseOperationOutbox';
+import { stageWarehouseOperation, rejectWarehouseOperation, WAREHOUSE_RECEIPT_UNAVAILABLE } from './warehouseOperationOutbox';
+import { summarizeWarehouseAudit } from './warehouseAuditSummary';
 import { acknowledgeWarehouseScopedOperation } from '@/lib/projectSync';
 import { ensureWarehouse } from '@/lib/warehouse';
 import type {
@@ -238,6 +239,9 @@ function scopedCommitError(error: { code?: string; message?: string }) {
   if (/WAREHOUSE_INVALID_SCOPE|WAREHOUSE_INVALID_PAYLOAD|WAREHOUSE_INVALID_MOVEMENT/.test(message)) {
     return new Error('A alteração não corresponde ao fluxo seguro selecionado e não foi gravada.');
   }
+  if (error.code === WAREHOUSE_RECEIPT_UNAVAILABLE.code) {
+    return new Error(WAREHOUSE_RECEIPT_UNAVAILABLE.message);
+  }
   if (error.code === 'PGRST202' || /commit_warehouse_(receipt|custody|inventory|adjustment|catalog)|schema cache|could not find the function/i.test(message)) {
     return new Error('A transação específica deste fluxo ainda não está disponível no servidor. Nenhuma alteração foi gravada.');
   }
@@ -277,9 +281,11 @@ export async function commitWarehouseScopedOperation(
     throw new Error('Este fluxo legado ainda exige uma transação corretiva específica e foi bloqueado sem gravar dados parciais.');
   }
 
+  const movements = rowChanges(before.warehouse!.movements, after.warehouse!.movements);
+  const affected = new Set([...movements.upserts, ...movements.deletes].map(row => row.id));
   const payload: WarehouseScopedPayload = {
     state: stateChanges(before.warehouse!, after.warehouse!),
-    movements: rowChanges(before.warehouse!.movements, after.warehouse!.movements),
+    movements,
     custody: rowChanges(before.warehouse!.custodyTerms, after.warehouse!.custodyTerms),
     audits: addedAudits(before.auditLogs ?? [], after.auditLogs ?? []),
   };
@@ -303,7 +309,7 @@ export async function commitWarehouseScopedOperation(
     p_project_id: before.id,
     p_operation_key: confirmedOperationKey,
     p_expected_warehouse_version: expectedWarehouseVersion,
-    p_changes: payload as unknown as Json,
+    p_changes: { ...payload, audits: payload.audits.map(row => summarizeWarehouseAudit(row, affected)) } as unknown as Json,
   };
   stageWarehouseOperation(actorId, before.id, confirmedOperationKey, RPC_BY_DOMAIN[domain], args);
   const { data, error } = await rpc(RPC_BY_DOMAIN[domain], args);

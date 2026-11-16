@@ -15,6 +15,16 @@ it('mantém identidade e campos esperados após recarga e só limpa após confer
   expect(rpc.mock.calls[1]).toEqual(rpc.mock.calls[0]);
   expect(warehousePendingOperations('a', 'p')).toEqual([]);
 });
+it('preserva a tentativa se o recibo estiver sem o resultado referenciado', async () => {
+  stageWarehouseOperation('a', 'p', 'op', 'commit_warehouse_catalog_v2', args);
+  const [operation] = warehousePendingOperations('a', 'p');
+  const onConfirmed = vi.fn(async () => undefined);
+  rpc.mockResolvedValue({ data: null, error: { code: 'WH001', message: 'WAREHOUSE_RECEIPT_UNAVAILABLE' } });
+
+  await expect(retryWarehouseOutbox('a', 'p', operation, onConfirmed)).rejects.toThrow('tentativa continua preservada');
+  expect(onConfirmed).not.toHaveBeenCalled();
+  expect(warehousePendingOperations('a', 'p')).toEqual([operation]);
+});
 it('não confunde outra conta e preserva duas operações independentes com resposta incerta', () => {
   stageWarehouseOperation('a', 'p', 'op', 'commit_warehouse_catalog_v2', args);
   expect(warehousePendingOperations('b', 'p')).toEqual([]);

@@ -31,7 +31,7 @@ beforeAll(async()=>{
     '20261016123000_concurrent_requisition_receipts.sql','20261016130000_concurrent_audit_stamps.sql',
     '20260914120000_atomic_supplement_corrections.sql','20260916120000_operational_requisition_corrections_and_cancellations.sql',
     '20261020090000_allow_negative_requisition_stock.sql',
-    '20261024203000_warehouse_project_state_shadow.sql']) {
+    '20261024203000_warehouse_project_state_shadow.sql','20261115223000_warehouse_compact_audit_receipts.sql']) {
     await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8'));
   }
 },20000);
@@ -86,6 +86,53 @@ it('repetição usa o recibo sem repetir efeitos e devolve os valores atuais',as
   expect(replay.warehouseState.items[0]).toEqual(item('a','Mais recente'));
   await expect(commit('catalog','once',catalog(item('a','A'),item('a','Forjada')))).rejects.toThrow('conteúdo diferente');
 });
+
+it('grava uma auditoria enxuta e referencia a resposta no novo recibo do Almoxarifado', async () => {
+  const audit = {
+    id: 'audit-compact', entityType: 'warehouse', entityId: project, action: 'updated',
+    title: 'Ajuste de material', at: '2026-10-16T12:00:00Z', userId: actor,
+    before: { quantity: 1, movements: [{ id: 'historical', description: 'Histórico'.repeat(2500) }] },
+    after: { quantity: 3, movements: [
+      { id: 'historical', description: 'Histórico'.repeat(2500) },
+      { id: 'entry', itemKey: 'a', quantity: 3, signature: 'Foto'.repeat(2500) },
+    ] },
+  };
+  const first = { ...changes({}, [{ id: 'entry', expected: null, row: {
+    id: 'entry', itemKey: 'a', type: 'entrada', originType: 'fiscal_note', fiscalNoteId: 'nf', quantity: 3,
+  } }]), audits: [audit] };
+  const result = await commit('receipt', 'compact', first);
+  const stored = (await db.query<{ data: unknown; request: unknown; result: unknown }>(`
+    SELECT audit.data, receipt.request, receipt.result
+    FROM audit_logs audit CROSS JOIN app_private.concurrent_operation_receipts receipt
+    WHERE audit.id = 'audit-compact' AND receipt.operation_id = 'compact'
+  `)).rows[0];
+  expect(stored.data).toMatchObject({ before: { quantity: 1 }, after: {
+    quantity: 3, quantities: [{ id: 'entry', itemKey: 'a', quantity: 3 }],
+  }, userId: actor });
+  expect(stored.data).not.toHaveProperty('after.movements');
+  expect(JSON.stringify(stored.data)).not.toMatch(/Histórico|Foto/);
+  expect(stored.request).toEqual({ sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+  expect(stored.result).toEqual({ receiptFormat: 'warehouse-reference-v1', source: 'scoped' });
+  expect(await commit('receipt', 'compact', first)).toEqual(result);
+  const equivalent = JSON.stringify(first).replaceAll('"quantity":3', '"quantity":3.00');
+  expect((await db.query('SELECT commit_warehouse_receipt_v2($1,$2,0,$3) result', [project, 'compact', equivalent])).rows)
+    .toEqual([{ result }]);
+  expect((await db.query('SELECT id FROM audit_logs')).rows).toEqual([{ id: 'audit-compact' }]);
+});
+
+it('mantém o reenvio de um recibo anterior e preserva a tentativa quando a nova referência sumiu', async () => {
+  const first = catalog(item('a','A'), item('a','Primeiro'));
+  await commit('catalog', 'older', first);
+  await db.query(`UPDATE app_private.concurrent_operation_receipts r SET request=$1,
+    result=(SELECT result FROM warehouse_scoped_commits WHERE operation_key=r.operation_id)
+    WHERE operation_id='older'`, [JSON.stringify({ domain:'catalog', changes:first })]);
+  const second = catalog(item('a','Primeiro'), item('a','Novo'));
+  await commit('catalog', 'newer', second);
+  expect((await commit('catalog', 'older', first)).warehouseState.items[0]).toEqual(item('a','Novo'));
+  await db.exec("DELETE FROM warehouse_scoped_commits WHERE operation_key='newer'");
+  await expect(commit('catalog', 'newer', second)).rejects.toMatchObject({ code: 'WH001' });
+  expect((await db.query<{ n: number }>('SELECT count(*)::int n FROM audit_logs')).rows[0].n).toBe(2);
+});
 it('exclusão concorrente não ressuscita cadastro e não apaga uma edição confirmada',async()=>{
   await commit('catalog','remove',changes({items:{records:{identity:'key',upserts:[],deletes:[{id:'a',expected:item('a','A')}]}}}));
   await expect(commit('catalog','edit',catalog(item('a','A'),item('a','Outra')))).rejects.toThrow('Conflito no campo');
@@ -128,6 +175,8 @@ it('duas retiradas da mesma fotografia permitem déficit; repetir não duplica',
   const id=(await db.query<{id:string}>('SELECT id FROM warehouse_requisitions')).rows[0].id;
   await db.query('UPDATE warehouse_requisitions SET data=data||$1::jsonb WHERE id=$2',[JSON.stringify({notes:'Confirmado depois'}),id]);
   expect((await delivery(id)).rows[0].result.requisition.notes).toBe('Confirmado depois');
+  expect((await db.query("SELECT result FROM app_private.concurrent_operation_receipts WHERE domain='warehouse-requisition' AND operation_id=$1", [id])).rows[0])
+    .toEqual({ result: { receiptFormat: 'warehouse-reference-v1', source: 'operation' } });
   expect((await db.query<{n:number}>('SELECT count(*)::int n FROM warehouse_movements')).rows[0].n).toBe(3);
 });
 

@@ -1,4 +1,9 @@
 import { supabase } from '@/integrations/supabase/client';
+export const WAREHOUSE_RECEIPT_UNAVAILABLE = {
+  code: 'WH001',
+  message: 'A resposta da operação confirmada não pôde ser conferida. A tentativa continua preservada neste navegador.',
+} as const;
+
 export interface WarehousePendingOperation { id: string; rpc: string; args: Record<string, unknown>; conflict?: string; at: string }
 const prefix = (actorId: string, projectId: string) => `obraplanner:warehouse-operations:${actorId}:${projectId}:`;
 const notify = () => window.dispatchEvent(new Event('obraplanner:warehouse-operations'));
@@ -46,7 +51,11 @@ export async function retryWarehouseOutbox(actorId: string, projectId: string, o
     throw new Error('A tentativa não pertence a esta obra.');
   }
   const { data, error } = await supabase.rpc(operation.rpc as never, operation.args as never);
-  if (error) { rejectWarehouseOperation(actorId, projectId, operation.id, error); throw error; }
+  if (error) {
+    rejectWarehouseOperation(actorId, projectId, operation.id, error);
+    if (error.code === WAREHOUSE_RECEIPT_UNAVAILABLE.code) throw new Error(WAREHOUSE_RECEIPT_UNAVAILABLE.message);
+    throw error;
+  }
   const receipt = data as unknown as { committedAt?: string; warehouseVersion?: number; projectUpdatedAt?: string };
   if (!receipt?.committedAt || !receipt.projectUpdatedAt || !Number.isSafeInteger(receipt.warehouseVersion)) throw new Error('A confirmação ainda não pôde ser conferida.');
   await onConfirmed();

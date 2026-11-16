@@ -153,7 +153,14 @@ describe('confirmação transacional do Almoxarifado', () => {
       type: 'delivery', requisitionId: provisional.requisitionId, operationKey: 'attempt-legacy-audit',
     });
 
-    expect(rpcMock.mock.calls[0][1].p_request.audits).toEqual([newAudit]);
+    const { audits } = rpcMock.mock.calls[0][1].p_request;
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      id: newAudit.id,
+      after: { requisition: { id: requisition.id }, quantities: [{ itemKey: 'placa', quantity: 1, unit: 'UN' }] },
+    });
+    expect(audits[0].after.requisition).not.toHaveProperty('items');
+    expect(audits[0].after.requisition).not.toHaveProperty('signatureReceiver');
     expect(confirmed.project.auditLogs).toHaveLength(3);
     expect(confirmed.project.warehouse!.movements.filter(row => row.requisitionId === requisition.id)).toHaveLength(1);
   });
@@ -302,7 +309,15 @@ describe('confirmação transacional do Almoxarifado', () => {
       p_request: { type: 'supplement_correction', requisitionId: delivered.requisitionId, supplementId: complemented.supplementId },
     });
     expect(rpcMock.mock.calls[0][1].p_request.type).toBe('supplement_correction');
-    expect(rpcMock.mock.calls[0][1].p_request.audits).toEqual([correctionAudit]);
+    const { audits } = rpcMock.mock.calls[0][1].p_request;
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      id: correctionAudit.id, userId: 'user-1', userName: 'Gabriel',
+      before: { quantities: expect.arrayContaining([expect.objectContaining({ itemKey: 'placa', quantity: 3 })]) },
+      after: { quantities: expect.arrayContaining([expect.objectContaining({ itemKey: 'placa', quantity: 1 })]) },
+    });
+    expect(audits[0].before).not.toHaveProperty('movements');
+    expect(audits[0].after).not.toHaveProperty('movements');
     expect(rpcMock.mock.calls[0][1].p_request.movements).toHaveLength(3);
     expect(confirmed.project.warehouse!.requisitions.find(row => row.id === delivered.requisitionId)?.supplements?.[0].items[0].quantity).toBe(1);
   });
