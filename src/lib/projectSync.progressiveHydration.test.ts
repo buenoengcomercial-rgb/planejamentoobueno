@@ -24,7 +24,7 @@ vi.mock('@/integrations/supabase/client', () => ({
 
 type MockQueryResult = {
   data: Array<Record<string, unknown>> | null;
-  error: { message: string } | null;
+  error: { message: string; code?: string } | null;
   count?: number;
 };
 
@@ -87,7 +87,9 @@ beforeEach(() => {
 });
 
 describe('hidratação progressiva da obra', () => {
-  it.each([273, 501])('carrega %i requisições assinadas em páginas completas sem count=exact', async requisitionCount => {
+  it.each([
+    [273, false], [501, false], [501, true],
+  ])('carrega %i requisições assinadas com timeout intermediário = %s', async (requisitionCount, pageTimeout) => {
     const current = project(`warehouse-requisitions-uncounted-${requisitionCount}`);
     clearCloudSnapshot(current.id);
     const requisitions = Array.from({ length: requisitionCount }, (_, index) => ({
@@ -96,6 +98,7 @@ describe('hidratação progressiva da obra', () => {
     }));
     const selectedOptions: unknown[] = [];
     const requestedAfter: Array<string | undefined> = [];
+    const requestedSizes: number[] = [];
     fromMock.mockImplementation((table: string) => {
       if (table === 'projects') return {
         select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { warehouse_version: 8 }, error: null }) }) }),
@@ -110,9 +113,10 @@ describe('hidratação progressiva da obra', () => {
         gt: vi.fn((_field: string, value: string) => { afterId = value; return query; }),
         then: (resolve: (result: MockQueryResult) => unknown) => {
           requestedAfter.push(afterId);
-          if (pageSize > 80) {
+          requestedSizes.push(pageSize);
+          if (pageSize > 80 || (pageTimeout && pageSize === 80 && afterId === 'req-0079')) {
             return Promise.resolve(resolve({
-              data: null, error: { message: '57014: canceling statement due to statement timeout' },
+              data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' },
             }));
           }
           return Promise.resolve(resolve({
@@ -131,10 +135,12 @@ describe('hidratação progressiva da obra', () => {
 
     expect(hydrated.warehouse?.requisitions).toEqual(requisitions.map(row => row.data));
     expect(selectedOptions).toEqual(Array(requestedAfter.length).fill(undefined));
-    expect(requestedAfter).toEqual([
-      undefined,
-      ...requisitions.filter((_, index) => (index + 1) % 80 === 0 || index + 1 === requisitionCount).map(row => row.id),
-    ]);
+    const stride = pageTimeout ? 40 : 80;
+    const afterIds = requisitions
+      .filter((_, index) => index >= 79 && ((index + 1) % stride === 0 || index + 1 === requisitionCount))
+      .map(row => row.id);
+    expect(requestedAfter).toEqual([undefined, ...(pageTimeout ? ['req-0079'] : []), ...afterIds]);
+    expect(requestedSizes.slice(0, 3)).toEqual(pageTimeout ? [80, 80, 40] : [80, 80, 80]);
     expect(getLoadedProjectCollections(current.id)).toEqual([]);
     expect(getHydratedProjectCollections(hydrated)).toEqual(['warehouseRequisitions']);
   });

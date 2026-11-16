@@ -695,6 +695,7 @@ const WAREHOUSE_PAGE_SIZE: Record<WarehouseRowTable, number> = {
   warehouse_requisitions: 80,
   warehouse_custody: 80,
 };
+const WAREHOUSE_MIN_PAGE_SIZE = 10;
 
 async function warehouseLedgerVersion(projectId: string): Promise<number> {
   const result = await readVersionedProjectRow(projectId);
@@ -710,15 +711,24 @@ async function loadWarehouseRows(table: WarehouseRowTable, projectId: string): P
       const startVersion = await warehouseLedgerVersion(projectId);
       const rows: DataRow[] = [];
       let lastId: string | undefined;
+      let pageSize = WAREHOUSE_PAGE_SIZE[table];
       while (true) {
         let query = supabase.from(table)
           .select('id, data')
           .eq('project_id', projectId)
           .order('id', { ascending: true })
-          .limit(WAREHOUSE_PAGE_SIZE[table]);
+          .limit(pageSize);
         if (lastId) query = query.gt('id', lastId);
         const result = await withReadDeadline(query);
-        if (result.error) return { data: null, error: result.error };
+        if (result.error) {
+          // Retenta a mesma página com menos dados após statement_timeout.
+          // O cursor permanece na última linha confirmada.
+          if (result.error.code === '57014' && pageSize > WAREHOUSE_MIN_PAGE_SIZE) {
+            pageSize = Math.max(WAREHOUSE_MIN_PAGE_SIZE, Math.floor(pageSize / 2));
+            continue;
+          }
+          return { data: null, error: result.error };
+        }
         if (!Array.isArray(result.data)) throw new Error('A consulta devolveu uma coleção incompleta.');
         const page = result.data;
         if (!page.length) break;
