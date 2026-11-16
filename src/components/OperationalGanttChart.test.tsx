@@ -114,6 +114,7 @@ it('reúne a execução e o saldo na mesma linha com o total fiscal da competên
   const visible = captured.props!;
   const rows = getAllTasks(visible.project);
   expect(rows.filter(task => task.id === 'detectors')).toHaveLength(1);
+  expect(rows.find(task => task.id === 'detectors')).toMatchObject({ percentComplete: 50, physicalProgress: 50 });
   expect(rows.some(task => task.id.startsWith('measured:'))).toBe(false);
   expect(visible.monthlyRows?.get('detectors')?.measured['2026-09']).toMatchObject({ quantity: 200, evidence: ['1ª medição'] });
   expect(visible.measurementValues?.['2026-09']).toBe(monthlyTotal(candidate, 'm1'));
