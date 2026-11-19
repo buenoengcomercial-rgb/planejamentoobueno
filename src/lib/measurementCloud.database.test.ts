@@ -14,6 +14,7 @@ import { measurementDeletionPatch } from './measurementDeletionPatch';
 import { measurementConcurrentCommand } from './measurementConcurrentCommand';
 import { deleteMeasuredPeriod, restoreMeasuredPeriod } from './measurementLifecycle';
 import { fromOperationalWorkspace, measurementOperation, type MeasurementOperationalWorkspace } from './measurementOperational';
+import { measurementBulletin } from './measurementWorkspace';
 const projectId='00000000-0000-4000-8000-000000000001', userId='00000000-0000-4000-8000-000000000002', planId='00000000-0000-4000-8000-000000000003';
 type DeltaAudit = MeasurementWorkspace['audit'][number] & {periodDelta?: {kind:string;periodId:string;afterPeriod?:MeasuredPeriod}};
 const actor={id:userId,name:'Teste',canEdit:true,canReview:true};
@@ -86,6 +87,7 @@ beforeAll(async()=>{
   await db.exec(await readFile(new URL('../../drizzle/migrations/0010_measurement_backup_pages.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../supabase/migrations/20261115210000_measurement_backup_digests.sql',import.meta.url),'utf8'));
   await db.exec(await readFile(new URL('../../drizzle/migrations/0011_measurement_backup_digests.sql',import.meta.url),'utf8'));
+  await db.exec(await readFile(new URL('../../supabase/migrations/20261119170000_measurement_bulletin_fields.sql',import.meta.url),'utf8'));
  const f=measurementFixture(); f.project.id=projectId; f.plans[0].id=planId; f.plans[0].storagePath=`${projectId}/${planId}/drawing.png`;
  base=prepareIncorporation(await createIncorporationBackup(f.project,f.plans,[])).candidate;
 },20000);
@@ -100,8 +102,46 @@ describe('documento operacional v2 sem histórico acumulado',()=>{
   await db.query('SELECT convert_measurement_operational_workspace($1,$2,$3)',[projectId,w.revision,inventory.checksum]);
   return loadOperational();
  };
- const send=async(before:MeasurementWorkspace,after:MeasurementWorkspace)=>(await db.query<{value:unknown}>(
-  'SELECT commit_measurement_operation_v2($1,$2) value',[projectId,JSON.stringify(measurementOperation(before,after))])).rows[0].value;
+ const send=async(before:MeasurementWorkspace,after:MeasurementWorkspace)=>{
+  const command=measurementOperation(before,after);
+  const rpc=command.changes.bulletins?'patch_measurement_bulletin_v2':'commit_measurement_operation_v2';
+  return (await db.query<{value:unknown}>(`SELECT ${rpc}($1,$2) value`,[projectId,JSON.stringify(command)])).rows[0].value;
+ };
+ it('salva campos do boletim em transação curta e preserva as demais coleções',async()=>{
+  const current=await convert();
+  const first=editMeasuredBulletin(current,actor,'m1',{contract:{artNumber:'ART A'}});
+  const command=measurementOperation(current,first);
+  const started=performance.now();
+  const receipt=await send(current,first);
+  const elapsed=performance.now()-started;
+  expect(await send(current,first)).toEqual(receipt);
+  const other=editMeasuredBulletin(current,actor,'m1',{contract:{location:'Local B'}});
+  await send(current,other);
+  const saved=await loadOperational();
+  expect(saved.periods.find(p=>p.id==='m1')?.bulletin?.contract).toMatchObject({artNumber:'ART A',location:'Local B'});
+  for(const key of ['entries','services','plans','importedKeys'] as const) expect(saved[key]).toEqual(current[key]);
+  expect(saved.periods.slice(1)).toEqual(current.periods.slice(1));
+  await expect(send(current,editMeasuredBulletin(current,actor,'m1',{contract:{artNumber:'ART C'}}))).rejects.toThrow('Conflito');
+  const invalid=structuredClone(command);invalid.event.id='invalid-field';
+  invalid.changes.bulletins![0].fields[0].path=['status'];
+  await expect(db.query('SELECT patch_measurement_bulletin_v2($1,$2)',[projectId,JSON.stringify(invalid)])).rejects.toThrow('Campo fora');
+  await db.exec("SET test.role='viewer'");
+  await expect(send(current,other)).rejects.toThrow('Sem permissão');
+  await db.exec("SET test.role='owner'");
+  console.log('bulletin field patch',JSON.stringify({bytes:JSON.stringify(command).length,commitMs:Math.round(elapsed)}));
+ });
+ it('o patch de boletim respeita bloqueios fiscais e recusa BDI inválido sem gravar recibo',async()=>{
+  const current=await convert();
+  const command=measurementOperation(current,editMeasuredBulletin(current,actor,'m1',{contract:{artNumber:'teste'}}));
+  const rpc=(value:typeof command)=>db.query('SELECT patch_measurement_bulletin_v2($1,$2)',[projectId,JSON.stringify(value)]);
+  const invalid=structuredClone(command); invalid.event.id='invalid-bdi';
+  invalid.changes.bulletins![0].fields=[{path:['contract','bdiPercent'],before:measurementBulletin(current,'m1').contract.bdiPercent??null,after:-1}];
+  await expect(rpc(invalid)).rejects.toThrow('BDI inválido');
+  const locked=await convert(approveMeasuredPeriod(freezeMeasuredPeriod(base,actor,'m1'),actor,'m1'));
+  command.baseRevision=locked.revision;
+  await expect(rpc(command)).rejects.toThrow('bloqueado');
+  expect((await db.query('SELECT 1 FROM measurement_operational_receipts WHERE operation_id=ANY($1)',[[command.event.id,'invalid-bdi']])).rows).toHaveLength(0);
+ });
  it('converte com backup e mantém todos os períodos, lançamentos, totais e arquivos',async()=>{
   const current=await convert();
   expect(current.audit).toEqual([]);

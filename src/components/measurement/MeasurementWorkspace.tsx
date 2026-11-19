@@ -1,4 +1,5 @@
 import { isContractedAdditive } from '@/lib/contractedAdditiveSchedule';
+import { registerPendingCloudSave } from '@/lib/pendingCloudSaves';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FileCheck2, Plus } from 'lucide-react';
 import ProductionQuantityDetails, { QuantityEntryInput } from '@/components/ProductionQuantityDetails';
@@ -236,6 +237,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [workspace, setWorkspace] = useState<Workspace | null>(null), current = useRef<Workspace | null>(null);
   const [active, setActive] = useState(''), [expanded, setExpanded] = useState<MeasurementDetailSelection | null>(null);
   const [saving, setSaving] = useState(false), busy = useRef(false);
+  const bulletinFlush = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
+  const registerBulletinFlush = useCallback((flush: () => Promise<boolean>) => {
+    bulletinFlush.current = flush;
+    return () => { if (bulletinFlush.current === flush) bulletinFlush.current = () => Promise.resolve(true); };
+  }, []);
   const [error, setError] = useState(''), [status, setStatus] = useState('Carregando…');
   const [confirmedAt, setConfirmedAt] = useState<string | null>(null);
   const [online, setOnline] = useState(() => navigator.onLine);
@@ -1412,6 +1418,19 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     }
     return true;
   };
+  const flushOnExit = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
+  flushOnExit.current = async () => {
+    if (!await bulletinFlush.current()) return false;
+    if (!await flushConfirmedEdits()) return false;
+    if (failedTaskEdits.current.size || draftChanges.current.size || latestCaptureDraft.current) {
+      setError('Confira as alterações ainda pendentes antes de sair da Medição.');
+      return false;
+    }
+    return true;
+  };
+  useEffect(() => registerPendingCloudSave(
+    `measurement:${actor.id}:${workspace?.projectId ?? ''}`, () => flushOnExit.current(),
+  ), [actor.id, workspace?.projectId]);
   const resolveQuantityProposal = async (key: string, proposal: QuantityProposal, useLocal: boolean) => {
     const failed = failedTaskEdits.current.get(key);
     const shown = current.current;
@@ -1752,7 +1771,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         </li>;
       })}</ul>
     </details>}
-    {period && <MeasurementBulletin key={active} workspace={workspace} measurementId={active} readOnly={!!locked} drafts={drafts}
+    {period && <MeasurementBulletin key={active} workspace={workspace} measurementId={active} readOnly={!!locked} drafts={drafts} registerFlush={registerBulletinFlush}
       onDraft={async (field, value) => {
         draftChanges.current.set(draftKey(active, bulletinDraftKey, field), { value });
         writingDrafts.current++;
@@ -1762,15 +1781,20 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
         } catch (e) { setError(`Falha ao preservar rascunho do boletim: ${e instanceof Error ? e.message : String(e)}`); throw e; }
         finally { writingDrafts.current--; }
       }}
-      onCommit={async (field, patch, draftWritten) => {
+      onCommit={async (fields, patch, draftWritten) => {
         if (!current.current) return false;
         try {
           if (!await flushConfirmedEdits()) return false;
           pendingOperation.current = persist(editMeasuredBulletin(current.current, actor, active, patch));
           if (!await pendingOperation.current) return false;
           await draftWritten.catch(() => undefined);
-          await repository.clearDraft(active, bulletinDraftKey, field);
-          draftChanges.current.delete(draftKey(active, bulletinDraftKey, field));
+          for (const field of fields) {
+            const key = draftKey(active, bulletinDraftKey, field);
+            const value = field === 'projectName' ? patch.projectName : patch.contract?.[field as keyof NonNullable<typeof patch.contract>];
+            if (String(draftChanges.current.get(key)?.value) !== String(value)) continue;
+            await repository.clearDraft(active, bulletinDraftKey, field);
+            draftChanges.current.delete(key);
+          }
           markDraftChange(value => value + 1);
           setDrafts(await repository.drafts()); return true;
         } catch (e) { setError(e instanceof Error ? e.message : String(e)); return false; }

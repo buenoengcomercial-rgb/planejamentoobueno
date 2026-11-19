@@ -13,6 +13,7 @@ import { cloudMeasurementRepository } from './measurementCloudRepository';
 import { MeasurementCommitRejectedError } from './measurementWorkspaceStore';
 import type { PendingMeasurementSave, StoredMeasurementPending, WorkspaceDraft } from './measurementWorkspaceStore';
 import { measurementOperation, toOperationalWorkspace, type MeasurementOperationReceipt } from './measurementOperational';
+import { editMeasuredBulletin } from './measurementWorkspace';
 
 const mocks = vi.hoisted(() => ({
   rpc: vi.fn(), from: vi.fn(), download: vi.fn(), upload: vi.fn(),
@@ -97,6 +98,21 @@ describe('Medição operacional v2', () => {
   const receiptFor = (base: MeasurementWorkspace, next: MeasurementWorkspace): MeasurementOperationReceipt => ({
     format: 2, projectId: base.projectId, operationId: next.audit.at(-1)!.id, actorId: actor.id,
     baseRevision: base.revision, revision: next.revision, operational: base.operational!, changes: measurementOperation(base,next).changes,
+  });
+  it('envia só os campos do boletim e adota o recibo sem consultar a planilha novamente', async () => {
+    const base = await operationalFixture();
+    mocks.rpc.mockResolvedValueOnce({ data: toOperationalWorkspace(base), error: null });
+    const repo = cloudMeasurementRepository({ userId: actor.id, projectId: base.projectId });
+    await repo.load();
+    const next = editMeasuredBulletin(base, actor, 'm1', { contract: { artNumber: 'ART A' } });
+    await repo.stage!(next, base);
+    mocks.rpc.mockResolvedValueOnce({ data: receiptFor(base, next), error: null });
+    const saved = await repo.commit(next, base.revision);
+    expect(saved.periods.find(period => period.id === 'm1')?.bulletin?.contract.artNumber).toBe('ART A');
+    expect(saved.entries).toEqual(base.entries);
+    expect(mocks.rpc.mock.calls.map(([name]) => name)).toEqual(['load_measurement_workspace', 'patch_measurement_bulletin_v2']);
+    expect(JSON.stringify(mocks.rpc.mock.calls[1][1])).not.toContain('frozen');
+    expect(mocks.stored).toEqual([]);
   });
   it('confirma o delta e atualiza a tela sem recarregar a planilha ou acumular auditoria', async () => {
     const base = await operationalFixture();

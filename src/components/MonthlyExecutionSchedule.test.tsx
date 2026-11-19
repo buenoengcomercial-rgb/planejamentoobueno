@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import MonthlyExecutionSchedule from './MonthlyExecutionSchedule';
 import { measurementFixture } from '@/test/measurementWorkspaceFixture';
@@ -18,6 +18,22 @@ beforeEach(() => {
   cloud.load.mockReset();
   cloud.record.mockReset().mockResolvedValue({ project: { additives: [] } });
   cloud.offline.mockReset().mockReturnValue(false);
+});
+
+it('consulta a Medição ao abrir o Cronograma e só repete com a ação explícita', async () => {
+  const { project } = measurementFixture();
+  cloud.load.mockResolvedValue(null);
+  const view = render(<MonthlyExecutionSchedule project={project} userId="user" mode="gantt"
+    independentMeasurementConfirmed={false} renderGantt={() => <div>Gantt confirmado</div>} />);
+  await screen.findByText('Gantt confirmado');
+  expect(cloud.load).toHaveBeenCalledTimes(1);
+  fireEvent(window, new Event('focus'));
+  await act(async () => undefined);
+  expect(cloud.load).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Conferir na nuvem' }));
+  await screen.findByText('Gantt confirmado');
+  expect(cloud.load).toHaveBeenCalledTimes(2);
+  view.unmount();
 });
 
 it('abre o quadro mensal e mantém o Gantt disponível', async () => {

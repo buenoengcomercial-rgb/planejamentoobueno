@@ -325,7 +325,7 @@ export function cloudMeasurementRepository(scope: { userId: string; projectId: s
       localStorage.setItem(attemptedKey, '1');
       let response: { data: unknown; error: { code?: string; message: string } | null };
       try {
-        response = await withWriteResponseDeadline(supabase.rpc('commit_measurement_operation_v2' as never,
+        response = await withWriteResponseDeadline(supabase.rpc((command.changes.bulletins ? 'patch_measurement_bulletin_v2' : 'commit_measurement_operation_v2') as never,
           { p_project_id: scope.projectId, p_operation: command } as never));
       } catch {
         const receipt = await lookup();
