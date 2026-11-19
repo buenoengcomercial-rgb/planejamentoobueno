@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import type { ComponentProps } from 'react';
 import MeasurementBulletin from './MeasurementBulletin';
 import type { MeasurementWorkspace } from '@/lib/measurementWorkspace';
 
@@ -12,7 +13,7 @@ afterEach(() => vi.useRealTimers());
 
 it('agrupa as teclas e envia ao sair do campo ou após a pausa de digitação', async () => {
   vi.useFakeTimers();
-  const onCommit = vi.fn(async () => true);
+  const onCommit = vi.fn<ComponentProps<typeof MeasurementBulletin>['onCommit']>(async () => true);
   render(<MeasurementBulletin workspace={workspace} measurementId="m1" readOnly={false} drafts={[]}
     onDraft={async () => undefined} onCommit={onCommit} />);
   const field = screen.getByLabelText('Nº da ART');
@@ -29,7 +30,7 @@ it('agrupa as teclas e envia ao sair do campo ou após a pausa de digitação', 
 
 it('mantém uma gravação em voo e envia só o último texto digitado durante a confirmação', async () => {
   let finish: (saved: boolean) => void = () => undefined;
-  const onCommit = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; }));
+  const onCommit = vi.fn<ComponentProps<typeof MeasurementBulletin>['onCommit']>(() => new Promise<boolean>(resolve => { finish = resolve; }));
   render(<MeasurementBulletin workspace={workspace} measurementId="m1" readOnly={false} drafts={[]}
     onDraft={async () => undefined} onCommit={onCommit} />);
   const field = screen.getByLabelText('Nº da ART');
