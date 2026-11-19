@@ -122,6 +122,8 @@ vi.mock('@/lib/projectSync', async importOriginal => {
 vi.mock('@/lib/idlePreload', () => ({ scheduleIdlePreload: vi.fn(() => undefined) }));
 vi.mock('sonner', () => ({
   toast: {
+    loading: vi.fn(),
+    dismiss: vi.fn(),
     error: mocks.toastError,
     info: vi.fn(),
     message: mocks.toastMessage,

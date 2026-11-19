@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Project } from '@/types/project';
 import { serializeProject } from '@/lib/cloudProjectDraftCore';
+import { registerPendingCloudSave } from '@/lib/pendingCloudSaves';
 import {
   flushPendingProjectSave, navigateToProjectView, runProtectedProjectNavigation,
   type PendingSaveGuardContext, type ProjectViewNavigationContext,
 } from './projectNavigationGuard';
 
 const mocks = vi.hoisted(() => ({ warning: vi.fn(), error: vi.fn(), pendingForms: vi.fn(() => [] as string[]), flushEdits: vi.fn() }));
-vi.mock('sonner', () => ({ toast: { warning: mocks.warning, error: mocks.error } }));
+vi.mock('sonner', () => ({ toast: { warning: mocks.warning, error: mocks.error, loading: vi.fn(), dismiss: vi.fn() } }));
 vi.mock('@/lib/pendingFormNavigation', () => ({ getPendingFormNames: mocks.pendingForms }));
 vi.mock('@/lib/pendingEditCommits', () => ({ flushPendingEditCommits: mocks.flushEdits }));
 
@@ -196,5 +197,20 @@ describe('navegação protegida da obra', () => {
     navigateToProjectView(context, 'measurement');
     confirmSave(true);
     await vi.waitFor(() => expect(context.setCurrentView).toHaveBeenCalledWith('measurement'));
+  });
+
+  it('aguarda o recibo da Medição antes de desmontar a tela e recusa a saída se falhar', async () => {
+    let finish: (ok: boolean) => void = () => undefined;
+    const unregister = registerPendingCloudSave('measurement-test', () => new Promise(resolve => { finish = resolve; }));
+    const action = vi.fn(async () => true);
+    try {
+      const first = runProtectedProjectNavigation(ref(false), async () => true, action);
+      expect(action).not.toHaveBeenCalled();
+      finish(false); await first;
+      expect(action).not.toHaveBeenCalled();
+      const second = runProtectedProjectNavigation(ref(false), async () => true, action);
+      finish(true); await second;
+      expect(action).toHaveBeenCalledOnce();
+    } finally { unregister(); }
   });
 });

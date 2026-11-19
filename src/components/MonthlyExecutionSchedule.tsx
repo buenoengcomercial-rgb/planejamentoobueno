@@ -66,9 +66,6 @@ export default function MonthlyExecutionSchedule({
       } finally { pending = false; }
     };
     void refreshMeasurement();
-    const refreshVisibleMeasurement = () => { if (!document.hidden) void refreshMeasurement(); };
-    const timer = window.setInterval(refreshVisibleMeasurement, 30_000);
-    window.addEventListener('focus', refreshVisibleMeasurement);
     void loadStableCloudProjectRecord(projectId, { collections: ['additives'], strict: true }).then(record => {
       if (!record) throw new Error();
       discardCloudProjectRecord(record);
@@ -78,8 +75,6 @@ export default function MonthlyExecutionSchedule({
     });
     return () => {
       active = false;
-      window.clearInterval(timer);
-      window.removeEventListener('focus', refreshVisibleMeasurement);
     };
   }, [independentMeasurementConfirmed, projectId, read, repository]);
 

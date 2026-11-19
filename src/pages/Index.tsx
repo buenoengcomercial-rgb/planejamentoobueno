@@ -361,10 +361,11 @@ export default function Index() {
   }, [markTrackedRemoteCollections]);
 
   const synchronizeLoadedProjectSchedule = useCallback((candidate: Project) => (
-    getMissingProjectCollections(candidate.id, WORK_START_COLLECTIONS).length === 0
+    ['gantt', 'physicalFinancial'].includes(safeCurrentView)
+      && getMissingProjectCollections(candidate.id, WORK_START_COLLECTIONS).length === 0
       ? synchronizeProjectScheduleToWorkStart(candidate)
       : candidate
-  ), []);
+  ), [safeCurrentView]);
 
   useEffect(() => {
     if (!authLoading && !authError && !user) navigate('/auth', { replace: true });
@@ -906,7 +907,8 @@ export default function Index() {
     : undefined;
   const appliedWorkStart = rawProject?.uiState?.ganttWorkStartDateApplied;
   useEffect(() => {
-    if (productionCaptureBusyRef.current || !editor || !measurementWorkStart) return;
+    if (!['gantt', 'physicalFinancial'].includes(safeCurrentView)
+      || productionCaptureBusyRef.current || !editor || !measurementWorkStart) return;
     if (conflictDetectedRef.current || partialSyncPendingRef.current?.projectId === rawProjectRef.current?.id) return;
     setRawProject(previous => {
       if (!previous) return previous;
@@ -920,7 +922,7 @@ export default function Index() {
       setSaveStatus('saving');
       return synchronized;
     });
-  }, [appliedWorkStart, editor, measurementWorkStart, partialSyncIssue, rawProject?.id, scheduleProjectDraft, synchronizeLoadedProjectSchedule]);
+  }, [appliedWorkStart, editor, measurementWorkStart, partialSyncIssue, rawProject?.id, safeCurrentView, scheduleProjectDraft, synchronizeLoadedProjectSchedule]);
 
   const flushPendingSave = useCallback((useLatestProject = false, requireCloudConfirmation = false) => flushPendingProjectSave({
     userId: user?.id, orgId, project: useLatestProject ? rawProjectRef.current : rawProject, initialLoadRef, canPersistProject,

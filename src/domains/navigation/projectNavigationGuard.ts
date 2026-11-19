@@ -6,6 +6,7 @@ import type { SaveStatus } from '@/components/SaveStatusIndicator';
 import { CloudProjectConflictError } from '@/lib/cloudProjects';
 import { getPendingFormNames } from '@/lib/pendingFormNavigation';
 import { flushPendingEditCommits } from '@/lib/pendingEditCommits';
+import { flushPendingCloudSaves } from '@/lib/pendingCloudSaves';
 import { serializeProject } from '@/lib/cloudProjectDraftCore';
 import { canAccessAppView, type OrgRole } from '@/lib/organizations';
 
@@ -167,6 +168,7 @@ export async function runProtectedProjectNavigation<T>(
   }
   navigationInFlightRef.current = true;
   try {
+    if (!await flushPendingCloudSaves()) return undefined;
     if (!(await flushPendingSave())) return undefined;
     return await action();
   } finally {
@@ -227,19 +229,23 @@ export function navigateToProjectView(context: ProjectViewNavigationContext, nex
     setSidebarOpen(false);
   };
   const switchAfterSave = () => {
-    if (currentView !== 'additiveSchedule') { switchView(); return; }
+    if (currentView !== 'additiveSchedule' && currentView !== 'measurement') { switchView(); return; }
     if (navigationInFlightRef.current) {
-      toast.warning('Aguarde a confirmação do Cronograma do Aditivo antes de navegar.');
+      toast.warning('Aguarde a confirmação das alterações na nuvem.');
       return;
     }
     navigationInFlightRef.current = true;
+    const notice = toast.loading('Aguarde a confirmação das alterações na nuvem…');
     void (async () => {
       try {
-        if (await flushPendingAdditiveSave()) switchView();
+        const confirmed = currentView === 'measurement' ? await flushPendingCloudSaves() : await flushPendingAdditiveSave();
+        if (confirmed) switchView();
+        else toast.warning('A gravação ainda não foi confirmada. A edição continua aberta para conferência.');
       } catch (error) {
         console.warn(error);
-        toast.error('Não foi possível confirmar o Cronograma do Aditivo na nuvem. A edição continua preservada.');
+        toast.error('Não foi possível confirmar as alterações na nuvem. A edição continua preservada.');
       } finally {
+        toast.dismiss(notice);
         navigationInFlightRef.current = false;
       }
     })();
