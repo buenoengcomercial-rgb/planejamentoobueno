@@ -1,5 +1,10 @@
 # Proteção dos dados e desempenho
 
+## Medição: registro único por lote
+- [x] Eliminar a repetição de todas as edições ao preparar cada versão local do lote; seis alterações passaram de 27 para seis mutações no teste, com somente um evento consolidado e sua identidade.
+- [x] Testar seis linhas, valores finais, exclusões, falhas e confirmação; 114 testes focados, 1.843 testes de regressão (um ignorado preexistente), 15 verificações de integridade e ESLint passaram.
+- [x] Validar na Medição autenticada: seis comentários de linhas existentes enviados somente ao sair, em um único comando/registro; navegação e confirmação em 4,78 s. Releitura conferida, comentários originais restaurados em um segundo lote, total inalterado, nenhum erro de página. Sem migração, exclusão do histórico ou publicação; auditoria compacta e controles fiscais preservados.
+
 ## Medição: lote automático e saída protegida
 - [x] Agrupar exclusões independentes com edições, preservando vínculos e validações; operações que alteram plantas mantêm o caminho transacional separado.
 - [x] Consolidar alterações ainda não enviadas enquanto outra gravação aguarda resposta; saída força envio e espera confirmação, sem reescrever comandos já enviados.

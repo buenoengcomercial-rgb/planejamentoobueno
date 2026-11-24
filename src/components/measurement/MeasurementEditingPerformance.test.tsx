@@ -6,11 +6,41 @@ import { newMeasuredRow, type MeasurementWorkspace as Workspace } from '@/lib/me
 import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import { flushPendingCloudSaves } from '@/lib/pendingCloudSaves';
 import { CLOUD_DETAIL_IDLE_MS, CLOUD_DETAIL_MAX_WAIT_MS } from './measurementBatching';
+import * as measurementMutations from '@/lib/measurementWorkspace';
 vi.mock('./measurementBatching', () => ({ CLOUD_DETAIL_IDLE_MS: 600, CLOUD_DETAIL_MAX_WAIT_MS: 1000 }));
 vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({ default: () => <div>Visualizador de teste</div> }));
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
+
+it('prepara seis linhas sem repetir mutações anteriores e envia um único evento com valores finais', async () => {
+  const { repository, saved } = setup(6);
+  repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  const mutate = vi.spyOn(measurementMutations, 'editMeasuredRow');
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  vi.useFakeTimers();
+  try {
+    for (let i = 0; i < 6; i++) {
+      const cell = screen.getByLabelText(`Quantidade de Serviço ${i}`);
+      fireEvent.change(cell, { target: { value: String(i + 1) } }); fireEvent.blur(cell);
+      fireEvent.click(cell); fireEvent.click(cell);
+    }
+    await act(async () => { await Promise.resolve(); });
+    expect(mutate).toHaveBeenCalledTimes(6);
+    expect(repository.commit).not.toHaveBeenCalled();
+    const candidates = vi.mocked(repository.stage).mock.calls.map(([candidate]) => candidate);
+    expect(new Set(candidates.map(candidate => candidate.audit.at(-1)?.id)).size).toBe(1);
+    expect(candidates.every(candidate => candidate.audit.length === 1)).toBe(true);
+    await act(async () => { expect(await flushPendingCloudSaves()).toBe(true); });
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    expect(saved().audit).toHaveLength(1);
+    expect(saved().audit[0].affected.map(entry => entry.serviceId)).toEqual(['s0', 's1', 's2', 's3', 's4', 's5']);
+    expect(saved().entries.map(entry => entry.rows[0].multiplier)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(saved().periods[0].status).toBe('draft');
+  } finally { mutate.mockRestore(); vi.useRealTimers(); }
+});
 
 it('agrupa seis exclusões independentes e só libera a saída após confirmar o lote', async () => {
   const { repository, saved } = setup(1);

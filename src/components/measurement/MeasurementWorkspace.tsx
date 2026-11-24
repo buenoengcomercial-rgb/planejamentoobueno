@@ -106,6 +106,7 @@ interface BufferedDetail {
   after: Array<() => void>;
   operationId: string;
   createdAt: string;
+  hasDeletion: boolean;
   stagedCandidate?: Workspace;
   durable?: Promise<void>;
   timer?: ReturnType<typeof setTimeout>;
@@ -211,12 +212,15 @@ function captureCellFingerprint(workspace: Workspace, target: Destination): stri
     source.kind, source.heightMeters, source.points.map(point => [point.x, point.y])] : null]);
 }
 /** Several validated cell edits become one auditable task operation. */
-function coalesceTaskEdits(base: Workspace, edits: DetailEdit[], actor: MeasurementActor, operationId: string, createdAt: string): Workspace {
-  let hasDeletion = false;
-  const final = edits.reduce((state, edit) => {
+function coalesceTaskEdits(base: Workspace, edits: DetailEdit[], actor: MeasurementActor, operationId: string, createdAt: string,
+  prepared?: { preview: Workspace; hasDeletion: boolean }): Workspace {
+  let hasDeletion = prepared?.hasDeletion ?? false;
+  const final = prepared?.preview ?? edits.reduce((state, edit) => {
     const next = edit(state);
     if (next !== state && next.audit.at(-1)?.action === 'Excluir linha / desvincular referência') hasDeletion = true;
-    return next;
+    // Intermediate row events are transient validation results, not history.
+    // Retry may replay the edits, but must not clone an ever-growing audit.
+    return next === state ? state : { ...next, revision: base.revision, audit: base.audit };
   }, base);
   const original = new Map(base.entries.map(entry => [`${entry.measurementId}:${entry.serviceId}`, entry]));
   const changed = final.entries.filter(entry => {
@@ -752,7 +756,10 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   };
   const stageBufferedDetail = (buffered: BufferedDetail) => {
     if (!repository.stage) return;
-    const candidate = coalesceTaskEdits(buffered.base, buffered.edits, actor, buffered.operationId, buffered.createdAt);
+    // The preview already passed the row, period and quantity validations.
+    // Build ONE before/after event from that result, never replay every prior
+    // mutation on each blur (six edits previously ran 27 mutations).
+    const candidate = coalesceTaskEdits(buffered.base, [], actor, buffered.operationId, buffered.createdAt, buffered);
     buffered.stagedCandidate = candidate;
     localStagePending.current++;
     const durable = latestLocalStage.current.catch(() => undefined).then(() => candidate === buffered.base
@@ -772,7 +779,8 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     if (buffered.timer) clearTimeout(buffered.timer);
     bufferedDetail.current = null;
     const build = (base: Workspace) => coalesceTaskEdits(base, buffered.edits, actor, buffered.operationId, buffered.createdAt);
-    const candidate = buffered.stagedCandidate ?? build(buffered.base);
+    const candidate = buffered.stagedCandidate
+      ?? coalesceTaskEdits(buffered.base, [], actor, buffered.operationId, buffered.createdAt, buffered);
     const after = () => buffered.after.forEach(callback => callback());
     if (candidate === buffered.base) {
       detailPreview.current = buffered.base;
@@ -880,10 +888,11 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       }
       const preview = { ...updated, revision: base.revision, audit: base.audit };
       const buffered: BufferedDetail = prior ?? { measurementId: active, serviceIds: new Set(), startedAt: Date.now(),
-        base, preview, edits: [], after: [], operationId: crypto.randomUUID(), createdAt: new Date().toISOString() };
+        base, preview, edits: [], after: [], operationId: crypto.randomUUID(), createdAt: new Date().toISOString(), hasDeletion: false };
       buffered.base = base;
       buffered.serviceIds.add(serviceId);
       buffered.edits.push(edit);
+      buffered.hasDeletion ||= event?.action === 'Excluir linha / desvincular referência';
       if (after) buffered.after.push(after);
       buffered.preview = preview;
       bufferedDetail.current = buffered;

@@ -4,6 +4,8 @@
 
 - Measurement independent row edits and deletions share one unsent buffer that waits for a long idle (not seconds) and an explicit save button; hold it while a prior command awaits its receipt, never rewrite attempted commands, and force confirmation on internal navigation, blocking exit on failure.
 
+- Stage measurement batches from their already-validated preview with one stable event ID; replay edits only when rebasing, not on every row blur, to avoid quadratic validation/audit work while preserving durable recovery and deletion intent.
+
 - Period daily-report PDFs read all confirmed reports using paginated inclusive date queries before rendering; partial page state must not omit saved diaries.
 
 - Legacy private role checks delegate to the canonical public membership helper through a non-public compatibility function; this preserves trigger checks without duplicating authorization rules.
