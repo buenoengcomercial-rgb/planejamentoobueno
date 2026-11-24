@@ -392,6 +392,44 @@ export type Database = {
         }
         Relationships: []
       }
+      measurement_operational_receipts: {
+        Row: {
+          actor_id: string
+          created_at: string
+          operation_id: string
+          project_id: string
+          request_hash: string
+          result: Json
+          revision: number
+        }
+        Insert: {
+          actor_id: string
+          created_at?: string
+          operation_id: string
+          project_id: string
+          request_hash: string
+          result: Json
+          revision: number
+        }
+        Update: {
+          actor_id?: string
+          created_at?: string
+          operation_id?: string
+          project_id?: string
+          request_hash?: string
+          result?: Json
+          revision?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "measurement_operational_receipts_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "measurement_workspaces"
+            referencedColumns: ["project_id"]
+          },
+        ]
+      }
       measurement_workspace_backups: {
         Row: {
           created_at: string
@@ -1397,6 +1435,10 @@ export type Database = {
         }
         Returns: undefined
       }
+      begin_measurement_operational_backup: {
+        Args: { p_expected_revision: number; p_project_id: string }
+        Returns: Json
+      }
       capture_geometry_value: {
         Args: { p_measure: Json; p_scale: number }
         Returns: number
@@ -1414,10 +1456,6 @@ export type Database = {
         Args: { p_items: Json; p_project_id: string }
         Returns: Json
       }
-      clear_independent_warehouse_owner: {
-        Args: { p_project_id: string }
-        Returns: undefined
-      }
       checkpoint_measurement_workspace:
         | { Args: { p_project_id: string }; Returns: boolean }
         | {
@@ -1428,6 +1466,10 @@ export type Database = {
             }
             Returns: Json
           }
+      clear_independent_warehouse_owner: {
+        Args: { p_project_id: string }
+        Returns: undefined
+      }
       commit_measurement_command_v2: {
         Args: {
           p_command: Json
@@ -1442,6 +1484,10 @@ export type Database = {
           p_patch: Json
           p_project_id: string
         }
+        Returns: Json
+      }
+      commit_measurement_operation_v2: {
+        Args: { p_operation: Json; p_project_id: string }
         Returns: Json
       }
       commit_measurement_workspace: {
@@ -1635,6 +1681,37 @@ export type Database = {
         }
         Returns: Json
       }
+      convert_measurement_operational_workspace: {
+        Args: {
+          p_checksum: string
+          p_expected_revision: number
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      convert_measurement_operational_workspace_snapshot: {
+        Args: {
+          p_checksum: string
+          p_expected_revision: number
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      copy_measurement_operational_backup_page: {
+        Args: {
+          p_after_key?: string
+          p_checksum: string
+          p_expected_revision: number
+          p_kind: string
+          p_max_bytes?: number
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      digest_measurement_operational_backup_page: {
+        Args: { p_checksum: string; p_max_bytes?: number; p_project_id: string }
+        Returns: Json
+      }
       duplicate_project: {
         Args: {
           p_new_name: string
@@ -1644,6 +1721,32 @@ export type Database = {
         Returns: string
       }
       execution_detail_partial: { Args: { p_detail: Json }; Returns: number }
+      export_measurement_operational_backup: {
+        Args: { p_checksum: string; p_project_id: string }
+        Returns: Json
+      }
+      export_measurement_operational_backup_rows: {
+        Args: {
+          p_after_key?: string
+          p_checksum: string
+          p_kind: string
+          p_max_bytes?: number
+          p_project_id: string
+        }
+        Returns: {
+          checksum: string
+          payload: string
+          record_key: string
+        }[]
+      }
+      finish_measurement_operational_backup: {
+        Args: {
+          p_checksum: string
+          p_expected_revision: number
+          p_project_id: string
+        }
+        Returns: Json
+      }
       get_user_org_id: { Args: { _user_id: string }; Returns: string }
       has_org_role: {
         Args: {
@@ -1673,9 +1776,22 @@ export type Database = {
         Args: { p_project_id: string }
         Returns: Json
       }
+      load_measurement_workspace_legacy: {
+        Args: { p_project_id: string }
+        Returns: Json
+      }
       materialize_measurement_workspace: {
         Args: { p_project_id: string }
         Returns: Json
+      }
+      measurement_contract_total_for_period: {
+        Args: {
+          period_number: number
+          price: number
+          s: Json
+          value_key: string
+        }
+        Returns: number
       }
       measurement_detail_quantity: { Args: { rows: Json }; Returns: number }
       measurement_fiscal_line_rows: {
@@ -1695,6 +1811,10 @@ export type Database = {
         Returns: Json
       }
       measurement_money: { Args: { v: number }; Returns: number }
+      measurement_service_for_period: {
+        Args: { period_number: number; s: Json }
+        Returns: Json
+      }
       measurement_workspace_audit_digest: {
         Args: { p_audit: Json }
         Returns: string
@@ -1705,6 +1825,18 @@ export type Database = {
       }
       merge_concurrent_fields: {
         Args: { p_base: Json; p_current: Json; p_next: Json; p_path: string }
+        Returns: Json
+      }
+      patch_measurement_additive_catalog: {
+        Args: {
+          p_expected_revision: number
+          p_patch: Json
+          p_project_id: string
+        }
+        Returns: Json
+      }
+      patch_measurement_bulletin_v2: {
+        Args: { p_operation: Json; p_project_id: string }
         Returns: Json
       }
       patch_measurement_capture: {
@@ -1747,12 +1879,25 @@ export type Database = {
         }
         Returns: Json
       }
+      prepare_measurement_operational_migration: {
+        Args: { p_expected_revision: number; p_project_id: string }
+        Returns: Json
+      }
       prepare_storage_cleanup: {
         Args: {
           p_action: string
           p_actor_id: string
           p_organization_id: string
           p_path: string
+        }
+        Returns: Json
+      }
+      read_measurement_operation_receipts: {
+        Args: {
+          p_after_revision?: number
+          p_operation_id?: string
+          p_project_id: string
+          p_through_revision?: number
         }
         Returns: Json
       }
@@ -1822,6 +1967,10 @@ export type Database = {
       }
       strip_task_logs: { Args: { node: Json }; Returns: Json }
       sync_measurement_workspace_entry_state: {
+        Args: { p_data: Json; p_project_id: string; p_revision: number }
+        Returns: undefined
+      }
+      sync_measurement_workspace_entry_state_legacy: {
         Args: { p_data: Json; p_project_id: string; p_revision: number }
         Returns: undefined
       }
