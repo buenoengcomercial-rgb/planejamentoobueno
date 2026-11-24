@@ -213,7 +213,12 @@ function captureCellFingerprint(workspace: Workspace, target: Destination): stri
 }
 /** Several validated cell edits become one auditable task operation. */
 function coalesceTaskEdits(base: Workspace, edits: DetailEdit[], actor: MeasurementActor, operationId: string, createdAt: string): Workspace {
-  const final = edits.reduce((state, edit) => edit(state), base);
+  let hasDeletion = false;
+  const final = edits.reduce((state, edit) => {
+    const next = edit(state);
+    if (next !== state && next.audit.at(-1)?.action === 'Excluir linha / desvincular referência') hasDeletion = true;
+    return next;
+  }, base);
   const original = new Map(base.entries.map(entry => [`${entry.measurementId}:${entry.serviceId}`, entry]));
   const changed = final.entries.filter(entry => {
     const before = original.get(`${entry.measurementId}:${entry.serviceId}`)
@@ -223,7 +228,8 @@ function coalesceTaskEdits(base: Workspace, edits: DetailEdit[], actor: Measurem
   const plansChanged = base.plans !== final.plans && JSON.stringify(base.plans) !== JSON.stringify(final.plans);
   if (!changed.length && !plansChanged) return base;
   const event: Workspace['audit'][number] = {
-    id: operationId, at: createdAt, actor: { id: actor.id, name: actor.name }, action: 'Editar detalhe',
+    id: operationId, at: createdAt, actor: { id: actor.id, name: actor.name },
+    action: hasDeletion ? 'Excluir linha / desvincular referência' : 'Editar detalhe',
     affected: changed.map(entry => ({ measurementId: entry.measurementId, serviceId: entry.serviceId })),
     before: changed.map(entry => structuredClone(entryFor(base, entry.measurementId, entry.serviceId))),
     after: structuredClone(changed),
@@ -700,7 +706,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       await Promise.allSettled(draftWrites.current.values());
       try { setDrafts(await repository.drafts()); } catch { setError(previous => `${previous} · Não foi possível ler os rascunhos locais.`); }
       return false;
-    } finally { busy.current = false; setSaving(false); }
+    } finally {
+      busy.current = false; setSaving(false);
+      // Start the waiting batch immediately after the prior drain ends, rather
+      // than requiring a timer tick or another user interaction to resume it.
+      if (repository.concurrentEntries && !detailQueue.current.length && bufferedDetail.current
+        && Date.now() - bufferedDetail.current.startedAt >= CLOUD_DETAIL_IDLE_MS)
+        flushBufferedDetailRef.current();
+    }
   };
   drainDetailQueueRef.current = drainDetailQueue;
   const rebaseFailedTask = (failed: FailedTaskEdit, base: Workspace, includeFirst: boolean) => {
@@ -784,9 +797,14 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const scheduleBufferedDetail = (buffered: BufferedDetail) => {
     if (buffered.timer) clearTimeout(buffered.timer);
     buffered.timer = setTimeout(() => {
-      if (bufferedDetail.current === buffered) flushBufferedDetail();
+      if (bufferedDetail.current !== buffered) return;
+      // Keep UNSENT edits in one mutable batch while a prior immutable command
+      // waits for its receipt. Never rebuild or combine an attempted command.
+      if (repository.concurrentEntries && busy.current) { scheduleBufferedDetail(buffered); return; }
+      flushBufferedDetail();
     }, repository.concurrentEntries
-      ? Math.min(CLOUD_DETAIL_IDLE_MS, Math.max(0, CLOUD_DETAIL_MAX_WAIT_MS - (Date.now() - buffered.startedAt)))
+      ? busy.current ? CLOUD_DETAIL_IDLE_MS
+        : Math.min(CLOUD_DETAIL_IDLE_MS, Math.max(0, CLOUD_DETAIL_MAX_WAIT_MS - (Date.now() - buffered.startedAt)))
       : 2000);
   };
   const resumeFailedTaskEdit = (serviceId: string): boolean => {
@@ -855,7 +873,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       const updated = edit(previous);
       if (updated === previous) { after?.(); return true; }
       const event = updated.audit.at(-1);
-      if (repository.concurrentEntries && event && (event.action !== 'Editar detalhe'
+      if (repository.concurrentEntries && event && (!['Editar detalhe', 'Excluir linha / desvincular referência'].includes(event.action)
         || event.beforePlans || event.afterPlans
         || event.affected.some(item => item.measurementId !== active || item.serviceId !== serviceId))) {
         return flushBufferedDetail() && applyDetail(edit, after);
@@ -1833,7 +1851,9 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
             onCreate={changes => { const fresh = newMeasuredRow(); const row = { ...fresh, ...changes, id: fresh.id }; saveDraft(active, s.id, '__new__', { ...changes, createdRowId: fresh.id }); return bufferDetail(s.id, w => editMeasuredRow(w, actor, active, s.id, row), clearCommittedDraft(active, s.id, '__new__'), '__new__') ? row.id : null; }}
             onEdit={(id, changes) => bufferDetail(s.id, w => { const row = entryFor(w, active, s.id).rows.find(r => r.id === id); if (!row) throw new Error('Linha não encontrada.'); return editMeasuredRow(w, actor, active, s.id, { ...row, ...changes }); }, clearCommittedDraft(active, s.id, id), id)}
             onDelete={id => repository.savedLabel === 'Salvo na nuvem'
-              ? flushBufferedDetail() && applyDetail(w => deleteMeasuredRow(w, actor, active, s.id, id))
+              ? repository.concurrentEntries
+                ? bufferDetail(s.id, w => deleteMeasuredRow(w, actor, active, s.id, id))
+                : flushBufferedDetail() && applyDetail(w => deleteMeasuredRow(w, actor, active, s.id, id))
               : apply(w => deleteMeasuredRow(w, actor, active, s.id, id))}
             onOpenPlan={(rowId, field) => { void (async () => {
               const request = ++captureOpenRequest.current;

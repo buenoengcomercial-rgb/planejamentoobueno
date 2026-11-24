@@ -4,10 +4,97 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import MeasurementWorkspace from './MeasurementWorkspace';
 import { newMeasuredRow, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
+import { flushPendingCloudSaves } from '@/lib/pendingCloudSaves';
 vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({ default: () => <div>Visualizador de teste</div> }));
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
+
+it('agrupa seis exclusões independentes e só libera a saída após confirmar o lote', async () => {
+  const { repository, saved } = setup(1);
+  saved().operational = { version: 2, cutoffRevision: 0, fiscal: {} };
+  saved().entries[0].rows = Array.from({ length: 7 }, (_, i) => ({ ...newMeasuredRow(`r${i}`), multiplier: i + 1, measuredQuantity: 1 }));
+  repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  let confirm: (() => void) | undefined;
+  vi.mocked(repository.commit).mockImplementation(candidate => new Promise(resolve => { confirm = () => resolve(candidate); }));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  vi.useFakeTimers();
+  try {
+    for (let i = 0; i < 6; i++) fireEvent.click(screen.getByRole('button', { name: 'Excluir linha 1' }));
+    expect(repository.commit).not.toHaveBeenCalled();
+    let leave: Promise<boolean> = Promise.resolve(false);
+    let completed = false;
+    await act(async () => { leave = flushPendingCloudSaves(); void leave.then(() => { completed = true; }); });
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    expect(completed).toBe(false);
+    const candidate = vi.mocked(repository.commit).mock.calls[0][0];
+    expect(candidate.entries[0].rows.map(row => row.id)).toEqual(['r6']);
+    expect(candidate.audit.at(-1)?.action).toBe('Excluir linha / desvincular referência');
+    expect(candidate.audit.at(-1)?.before[0].rows).toHaveLength(7);
+    expect(candidate.periods).toEqual(saved().periods);
+    expect(candidate.services).toEqual(saved().services);
+    await act(async () => { confirm?.(); });
+    expect(await leave).toBe(true);
+    expect(completed).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
+
+it('mantém seis edições em um lote não enviado enquanto a primeira gravação aguarda recibo', async () => {
+  const { repository } = setup(7);
+  repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  repository.stage = vi.fn(async () => undefined);
+  let confirm: (() => void) | undefined;
+  vi.mocked(repository.commit).mockImplementationOnce(candidate => new Promise(resolve => { confirm = () => resolve(candidate); }));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  await screen.findByLabelText('Quantidade de Serviço 0');
+  vi.useFakeTimers();
+  try {
+    const first = screen.getByLabelText('Quantidade de Serviço 0');
+    fireEvent.change(first, { target: { value: '10' } }); fireEvent.blur(first);
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    const original = vi.mocked(repository.commit).mock.calls[0][0];
+    for (let i = 1; i <= 6; i++) {
+      const cell = screen.getByLabelText(`Quantidade de Serviço ${i}`);
+      fireEvent.change(cell, { target: { value: String(i * 10) } }); fireEvent.blur(cell);
+      await act(async () => vi.advanceTimersByTimeAsync(1200));
+    }
+    expect(repository.commit).toHaveBeenCalledTimes(1);
+    expect(original.entries.map(entry => entry.serviceId)).toEqual(['s0']);
+    await act(async () => { confirm?.(); });
+    await act(async () => vi.advanceTimersByTimeAsync(600));
+    expect(repository.commit).toHaveBeenCalledTimes(2);
+    const batch = vi.mocked(repository.commit).mock.calls[1][0];
+    expect(batch.audit.at(-1)?.affected.map(item => item.serviceId)).toEqual(['s1', 's2', 's3', 's4', 's5', 's6']);
+    expect(batch.entries.map(entry => entry.rows[0].multiplier)).toEqual([10, 10, 20, 30, 40, 50, 60]);
+    expect(await flushPendingCloudSaves()).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
+
+it('impede sair após falha do lote de seis exclusões e preserva a tentativa local', async () => {
+  const { repository, saved } = setup(1);
+  saved().operational = { version: 2, cutoffRevision: 0, fiscal: {} };
+  saved().entries[0].rows = Array.from({ length: 6 }, (_, i) => ({ ...newMeasuredRow(`r${i}`), multiplier: 1 }));
+  repository.savedLabel = 'Salvo na nuvem'; repository.concurrentEntries = true;
+  const staged = new Map<string, Workspace>();
+  repository.stage = vi.fn(async candidate => { const id = candidate.audit.at(-1)?.id; if (id) staged.set(id, candidate); });
+  vi.mocked(repository.commit).mockRejectedValue(new Error('Sem conexão'));
+  render(<MeasurementWorkspace repository={repository} actor={actor}/>);
+  fireEvent.click(await screen.findByLabelText('Quantidade de Serviço 0'));
+  vi.useFakeTimers();
+  try {
+    for (let i = 0; i < 6; i++) fireEvent.click(screen.getByRole('button', { name: 'Excluir linha 1' }));
+    let leave: Promise<boolean> = Promise.resolve(true);
+    await act(async () => { leave = flushPendingCloudSaves(); await leave; });
+    expect(await leave).toBe(false);
+    expect(saved().entries[0].rows).toHaveLength(6);
+    expect([...staged.values()].at(-1)?.entries[0].rows).toEqual([]);
+    expect(repository.archivePending).not.toHaveBeenCalled();
+    expect(screen.queryByText('Salvo e conferido na nuvem')).not.toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
 const actor = { id: 'editor', name: 'Editor', canEdit: true };
 function setup(size = 402) {
   let w: Workspace = { schema: 1, projectId: 'performance', projectName: 'Isolada', revision: 0,

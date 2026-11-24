@@ -1,5 +1,11 @@
 # Proteção dos dados e desempenho
 
+## Medição: lote automático e saída protegida
+- [x] Agrupar exclusões independentes com edições, preservando vínculos e validações; operações que alteram plantas mantêm o caminho transacional separado.
+- [x] Consolidar alterações ainda não enviadas enquanto outra gravação aguarda resposta; saída força envio e espera confirmação, sem reescrever comandos já enviados.
+- [x] Testar seis linhas, envio em andamento, falha e proteção da navegação; 119 testes focados, 99 testes de persistência, ESLint e regressão (1.841 testes, 15 verificações de integridade) passaram.
+- [x] Validar fluxo autenticado com seis linhas temporárias sem quantidade na 3ª medição: criação, navegação, releitura, exclusão, navegação e restauração conferidas; total inalterado e nenhum erro de página. Saída: 9,2 s na criação e 5,7 s na exclusão (dois envios, incluindo lote já iniciado); sem promessa de confirmação em dois segundos ou publicação.
+
 - [x] Estabilizar o contexto de autenticação contra divergência durante atualização de módulos; testes de sessão e regressão passaram, Medição autenticada abriu sem o erro e sem editar dados.
 
 - [x] Separar os botões PDF do dia e PDF da medição do aviso de salvamento; ambos acessíveis no Diário autenticado.

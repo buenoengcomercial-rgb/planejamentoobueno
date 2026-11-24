@@ -2,6 +2,8 @@
 
 - Authentication context identity lives in a non-component module shared by provider and hook; hot refresh must not split mounted providers from consumers or bypass the missing-provider guard.
 
+- Measurement independent row deletions and edits share an unsent buffer; hold that buffer while a prior command awaits its receipt, never rewrite attempted commands, and force confirmation on internal navigation to avoid serial backlogs without weakening persistence guards.
+
 - Period daily-report PDFs read all confirmed reports using paginated inclusive date queries before rendering; partial page state must not omit saved diaries.
 
 - Legacy private role checks delegate to the canonical public membership helper through a non-public compatibility function; this preserves trigger checks without duplicating authorization rules.

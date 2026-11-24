@@ -107,6 +107,29 @@ describe('documento operacional v2 sem histórico acumulado',()=>{
   const rpc=command.changes.bulletins?'patch_measurement_bulletin_v2':'commit_measurement_operation_v2';
   return (await db.query<{value:unknown}>(`SELECT ${rpc}($1,$2) value`,[projectId,JSON.stringify(command)])).rows[0].value;
  };
+ it('confirma seis exclusões independentes em uma operação sem alterar contrato ou outros períodos',async()=>{
+  let initial=base;
+  for(let i=0;i<6;i++) initial=editMeasuredRow(initial,actor,'m1','signs',{...newMeasuredRow(`batch-delete-${i}`),multiplier:i+1});
+  const current=await convert(initial);
+  const candidate=transactMeasurement(current,actor,'Excluir linha / desvincular referência',next=>{
+   const entry=entryFor(next,'m1','signs');
+   entry.rows=entry.rows.filter(row=>!row.id.startsWith('batch-delete-'));
+  });
+  await send(current,candidate);
+  const saved=await loadOperational();
+  expect(saved.revision).toBe(current.revision+1);
+  expect(entryFor(saved,'m1','signs').rows).toEqual(entryFor(base,'m1','signs').rows);
+  expect(saved.services).toEqual(current.services);
+  expect(saved.periods).toEqual(current.periods);
+  expect(saved.plans).toEqual(current.plans);
+  expect(saved.entries.filter(entry=>entry.measurementId!=='m1'||entry.serviceId!=='signs')).toEqual(current.entries.filter(entry=>entry.measurementId!=='m1'||entry.serviceId!=='signs'));
+  await send(current,candidate);
+  expect((await loadOperational()).revision).toBe(saved.revision);
+  await db.exec("SET test.role='viewer'");
+  await expect(send(saved,editMeasuredRow(saved,actor,'m1','signs',{...newMeasuredRow('forbidden-batch'),multiplier:2}))).rejects.toThrow('Sem permissão');
+  expect((await db.query<{revision:number}>('SELECT revision FROM measurement_workspaces')).rows[0].revision).toBe(saved.revision);
+  await db.exec("SET test.role='owner'");
+ });
  it('salva campos do boletim em transação curta e preserva as demais coleções',async()=>{
   const current=await convert();
   const first=editMeasuredBulletin(current,actor,'m1',{contract:{artNumber:'ART A'}});
