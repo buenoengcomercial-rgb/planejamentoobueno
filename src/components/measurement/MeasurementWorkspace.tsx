@@ -16,6 +16,7 @@ import type { TakeoffCatalogPlan, TakeoffMeasure, TakeoffRepository, TakeoffDraf
 import { reconcileDrawingCatalog } from '@/lib/measurementDrawingCatalog';
 import { exportMonthlyMeasurement } from '@/lib/measurementMonthlyExport';
 import { fmtBRL, fmtDateBR } from './measurementFormat';
+import { CLOUD_DETAIL_IDLE_MS, CLOUD_DETAIL_MAX_WAIT_MS } from './measurementBatching';
 const PlanTakeoff = lazy(() => import('@/components/planTakeoff/PlanTakeoff'));
 import MeasurementHeader from './MeasurementHeader';
 import MeasurementBulletin, { bulletinDraftKey } from './MeasurementBulletin';
@@ -114,8 +115,6 @@ function isEntryConfirmationNotice(message: string): boolean {
     || message === 'Gravação confirmada na nuvem. Conferindo os dados mais recentes.';
 }
 
-const CLOUD_DETAIL_IDLE_MS = 600;
-const CLOUD_DETAIL_MAX_WAIT_MS = 1000;
 
 function overlayDetailEntries(base: Workspace, source: Workspace, measurementId: string, serviceIds: ReadonlySet<string>): Workspace {
   const matches = (entry: Workspace['entries'][number]) => entry.measurementId === measurementId && serviceIds.has(entry.serviceId);
@@ -243,6 +242,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
   const [workspace, setWorkspace] = useState<Workspace | null>(null), current = useRef<Workspace | null>(null);
   const [active, setActive] = useState(''), [expanded, setExpanded] = useState<MeasurementDetailSelection | null>(null);
   const [saving, setSaving] = useState(false), busy = useRef(false);
+  const [savingBatch, setSavingBatch] = useState(false);
   const bulletinFlush = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
   const registerBulletinFlush = useCallback((flush: () => Promise<boolean>) => {
     bulletinFlush.current = flush;
@@ -1588,6 +1588,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
     {plan && <><dl className="grid grid-cols-3 gap-3 text-sm"><div>Serviços: <b>{plan.inventory.services}</b></div><div>Lançamentos antigos: <b>{plan.inventory.dailyLogs + plan.inventory.periodLogs}</b></div><div>Medições: <b>{plan.inventory.periods}</b></div><div>Plantas: <b>{plan.inventory.plans}</b></div><div>Marcações: <b>{plan.inventory.marks}</b></div><div>Divergências: <b>{plan.issues.length}</b></div></dl><div className="my-4 max-h-72 overflow-auto text-sm">{plan.issues.length ? plan.issues.map((i, n) => <p key={n} className="mb-1 text-amber-800">{i.message}</p>) : <p className="text-emerald-700">Quantidades conciliadas. Nenhuma diferença encontrada.</p>}</div><button className={button} disabled={saving || !actor.canEdit || plan.issues.length > 0} onClick={() => void initialize()}>Confirmar incorporação</button></>}
     {!plan && <p>Ativação aguardando inventário, backup e validação do servidor. Nenhum dado operacional foi migrado.</p>}{error && <p role="alert" className="mt-3 text-red-700">{error}</p>}</section>;
   const period = workspace.periods.find(p => p.id === active);
+  const pendingBatchCount = (bufferedDetail.current?.edits.length ?? 0) + detailQueue.current.length + failedTaskEdits.current.size;
   const failedVisible = [...failedTaskEdits.current].filter(([, failed]) => failed.measurementId === active);
   const hasFiscalDrafts = hasPendingFiscalDraft(active);
   const fiscalPending = saving || recovery || detailQueue.current.length > 0 || !!bufferedDetail.current || failedVisible.length > 0 || hasFiscalDrafts;
@@ -1680,6 +1681,7 @@ export default function MeasurementWorkspace({ repository, actor, incorporationB
       <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px]"><strong>{workspace.projectName}</strong><div className="flex flex-wrap items-center gap-4"><span>Valor desta medição: <strong data-testid="monthly-value">{period ? fmtBRL(allTotals.period) : '—'}</strong></span><div className="flex flex-col items-end">{repository.savedLabel === 'Salvo na nuvem'
         ? <div role="status"><SaveStatusIndicator status={cloudStatus} cloudReadStatus={cloudReadStatus} confirmedAt={confirmedAt} lastCheckedAt={realtime.lastCheckedAt} projectId={workspace.projectId} live={online && !readFailed && !cachedBase && realtime.connected}/>{online && (readFailed || cachedBase) && !saving && <div className="mt-1 text-[10px] text-amber-800">{cachedBase && <span>Cópia local preservada. </span>}{cloudReadFailure && <span>{cloudReadFailure} </span>}<button disabled={recovery || realtime.checking || !!bufferedDetail.current || detailQueue.current.length > 0 || writingDrafts.current > 0} className="underline disabled:opacity-50" onClick={() => realtime.available ? realtime.retry() : (setLoading(true), setLoadAttempt(attempt => attempt + 1))}>Tentar consultar novamente</button></div>}</div>
         : <span role="status" className={recovery || saving || status !== 'Confirmado' ? 'text-amber-700' : 'text-emerald-700'}>{status === 'Confirmado' ? 'Salvo neste navegador' : status}</span>}{recovery && <button className="text-[10px] text-amber-800 underline" onClick={() => void retryPendingSave()}>Tentar salvar</button>}</div></div></div>
+      {repository.concurrentEntries && actor.canEdit && <div className="mb-1.5 flex justify-end"><button type="button" className={button} disabled={!pendingBatchCount || savingBatch} onClick={() => { void (async () => { setSavingBatch(true); try { await flushConfirmedEdits(); } finally { setSavingBatch(false); } })(); }}>{savingBatch ? 'Salvando lote na nuvem…' : pendingBatchCount ? `Salvar alterações (${pendingBatchCount} pendente${pendingBatchCount > 1 ? 's' : ''})` : 'Nenhuma alteração pendente'}</button></div>}
       <div className="flex flex-wrap items-center gap-2"><label className="text-[11px] font-semibold uppercase text-muted-foreground" htmlFor="measurement-period">Medições</label><select id="measurement-period" aria-label="Medição selecionada" value={active} className="h-8 rounded-md border border-primary bg-primary px-2.5 text-xs font-medium text-primary-foreground" disabled={!!destination} onChange={e => {
         selectPeriod(e.target.value); setExpanded(null); setError('');
       }}>{workspace.periods.map(p => <option key={p.id} value={p.id}>{p.number}ª medição</option>)}</select>

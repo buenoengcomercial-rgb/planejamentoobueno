@@ -6,6 +6,7 @@ import { captureMeasurement, newMeasuredRow, type MeasurementWorkspace as Worksp
 import { measurementCapturePatch } from '@/lib/measurementCapturePatch';
 import type { MeasurementRepository } from '@/lib/measurementWorkspaceStore';
 import type { TakeoffMeasure, TakeoffPlan } from '@/lib/planTakeoff';
+vi.mock('./measurementBatching', () => ({ CLOUD_DETAIL_IDLE_MS: 600, CLOUD_DETAIL_MAX_WAIT_MS: 1000 }));
 
 vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({
   default: function MockDXF({ onUseMeasure, measureContext, destinationColumn }: {

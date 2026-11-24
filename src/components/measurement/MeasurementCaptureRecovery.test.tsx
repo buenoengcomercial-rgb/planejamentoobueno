@@ -4,6 +4,7 @@ import MeasurementWorkspace from './MeasurementWorkspace';
 import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import { newMeasuredRow, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import type { TakeoffDraft } from '@/lib/planTakeoff';
+vi.mock('./measurementBatching', () => ({ CLOUD_DETAIL_IDLE_MS: 600, CLOUD_DETAIL_MAX_WAIT_MS: 1000 }));
 
 vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({ default: ({ onDraftChange, initialDraft }: { onDraftChange: (draft: TakeoffDraft) => void; initialDraft?: TakeoffDraft }) => <div>
   <span>Recuperados: {initialDraft?.points.length ?? 0}</span>

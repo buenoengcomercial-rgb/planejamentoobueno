@@ -13,6 +13,7 @@ import { selectedMeasurement } from '@/lib/measurementSelection';
 import { measurementDeletionPatch } from '@/lib/measurementDeletionPatch';
 import { encodeMeasurementWorkspace } from '@/lib/measurementCloudCodec';
 import { measurementPresentation } from './measurementWorkspacePresentation';
+vi.mock('./measurementBatching', () => ({ CLOUD_DETAIL_IDLE_MS: 600, CLOUD_DETAIL_MAX_WAIT_MS: 1000 }));
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 beforeEach(() => localStorage.clear());

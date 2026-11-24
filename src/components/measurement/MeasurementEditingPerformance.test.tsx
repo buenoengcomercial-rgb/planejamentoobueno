@@ -5,6 +5,8 @@ import MeasurementWorkspace from './MeasurementWorkspace';
 import { newMeasuredRow, type MeasurementWorkspace as Workspace } from '@/lib/measurementWorkspace';
 import type { MeasurementRepository, WorkspaceDraft } from '@/lib/measurementWorkspaceStore';
 import { flushPendingCloudSaves } from '@/lib/pendingCloudSaves';
+import { CLOUD_DETAIL_IDLE_MS, CLOUD_DETAIL_MAX_WAIT_MS } from './measurementBatching';
+vi.mock('./measurementBatching', () => ({ CLOUD_DETAIL_IDLE_MS: 600, CLOUD_DETAIL_MAX_WAIT_MS: 1000 }));
 vi.mock('@/components/planTakeoff/PlanTakeoff', () => ({ default: () => <div>Visualizador de teste</div> }));
 
 afterEach(cleanup);
@@ -53,18 +55,18 @@ it('mantém seis edições em um lote não enviado enquanto a primeira gravaçã
   try {
     const first = screen.getByLabelText('Quantidade de Serviço 0');
     fireEvent.change(first, { target: { value: '10' } }); fireEvent.blur(first);
-    await act(async () => vi.advanceTimersByTimeAsync(600));
+    await act(async () => vi.advanceTimersByTimeAsync(CLOUD_DETAIL_IDLE_MS));
     expect(repository.commit).toHaveBeenCalledTimes(1);
     const original = vi.mocked(repository.commit).mock.calls[0][0];
     for (let i = 1; i <= 6; i++) {
       const cell = screen.getByLabelText(`Quantidade de Serviço ${i}`);
       fireEvent.change(cell, { target: { value: String(i * 10) } }); fireEvent.blur(cell);
-      await act(async () => vi.advanceTimersByTimeAsync(1200));
+      await act(async () => vi.advanceTimersByTimeAsync(CLOUD_DETAIL_IDLE_MS * 2));
     }
     expect(repository.commit).toHaveBeenCalledTimes(1);
     expect(original.entries.map(entry => entry.serviceId)).toEqual(['s0']);
     await act(async () => { confirm?.(); });
-    await act(async () => vi.advanceTimersByTimeAsync(600));
+    await act(async () => vi.advanceTimersByTimeAsync(CLOUD_DETAIL_IDLE_MS));
     expect(repository.commit).toHaveBeenCalledTimes(2);
     const batch = vi.mocked(repository.commit).mock.calls[1][0];
     expect(batch.audit.at(-1)?.affected.map(item => item.serviceId)).toEqual(['s1', 's2', 's3', 's4', 's5', 's6']);
@@ -491,7 +493,7 @@ it.each([false, true])('mantém a linha criada quando A confirma entre digitar e
       return input;
     };
     edit('Unidades da linha 2', '4');
-    await act(async () => vi.advanceTimersByTimeAsync(600));
+    await act(async () => vi.advanceTimersByTimeAsync(CLOUD_DETAIL_IDLE_MS));
     expect(repository.commit).toHaveBeenCalledTimes(1);
     const created = vi.mocked(repository.commit).mock.calls[0][0];
     const newId = created.entries[0].rows[1].id;
@@ -504,7 +506,7 @@ it.each([false, true])('mantém a linha criada quando A confirma entre digitar e
     expect(b).toHaveValue(3);
     fireEvent.blur(b);
     edit('Largura da linha 2', '2');
-    await act(async () => vi.advanceTimersByTimeAsync(600));
+    await act(async () => vi.advanceTimersByTimeAsync(CLOUD_DETAIL_IDLE_MS));
 
     expect(screen.queryByText('Linha não encontrada.')).not.toBeInTheDocument();
     expect(repository.commit).toHaveBeenCalledTimes(2);
@@ -736,7 +738,7 @@ it('agrupa cinco serviços na nuvem e mantém a edição seguinte durante o envi
       if (index !== 4) await act(async () => vi.advanceTimersByTimeAsync(150));
     }
     expect(repository.commit).not.toHaveBeenCalled();
-    await act(async () => vi.advanceTimersByTimeAsync(400));
+    await act(async () => vi.advanceTimersByTimeAsync(CLOUD_DETAIL_MAX_WAIT_MS));
     expect(repository.commit).toHaveBeenCalledTimes(1);
     const first = vi.mocked(repository.commit).mock.calls[0][0];
     expect(first.audit.at(-1)?.affected.map(item => item.serviceId)).toEqual(['s0', 's1', 's2', 's3', 's4']);
@@ -744,7 +746,7 @@ it('agrupa cinco serviços na nuvem e mantém a edição seguinte durante o envi
     const next = screen.getByLabelText('Unidades da linha 1');
     fireEvent.change(next, { target: { value: '9' } });
     fireEvent.blur(next);
-    await act(async () => vi.advanceTimersByTimeAsync(600));
+    await act(async () => vi.advanceTimersByTimeAsync(CLOUD_DETAIL_IDLE_MS));
     expect(repository.commit).toHaveBeenCalledTimes(1);
     await act(async () => release(first));
     expect(repository.commit).toHaveBeenCalledTimes(2);
@@ -781,9 +783,9 @@ it('preserva o 11 confirmado por outro operador após a rejeição de um lote an
       fireEvent.change(field, { target: { value } }); fireEvent.blur(field);
     };
     edit(0, '5');
-    await act(async () => vi.advanceTimersByTimeAsync(600));
+    await act(async () => vi.advanceTimersByTimeAsync(CLOUD_DETAIL_IDLE_MS));
     edit(1, '7');
-    await act(async () => vi.advanceTimersByTimeAsync(600));
+    await act(async () => vi.advanceTimersByTimeAsync(CLOUD_DETAIL_IDLE_MS));
     expect(repository.commit).toHaveBeenCalledTimes(1);
     await act(async () => rejectFirst(new Error('Conflito no campo')));
     expect(repository.commit).toHaveBeenCalledTimes(2);

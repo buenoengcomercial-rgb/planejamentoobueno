@@ -2,7 +2,7 @@
 
 - Authentication context identity lives in a non-component module shared by provider and hook; hot refresh must not split mounted providers from consumers or bypass the missing-provider guard.
 
-- Measurement independent row deletions and edits share an unsent buffer; hold that buffer while a prior command awaits its receipt, never rewrite attempted commands, and force confirmation on internal navigation to avoid serial backlogs without weakening persistence guards.
+- Measurement independent row edits and deletions share one unsent buffer that waits for a long idle (not seconds) and an explicit save button; hold it while a prior command awaits its receipt, never rewrite attempted commands, and force confirmation on internal navigation, blocking exit on failure.
 
 - Period daily-report PDFs read all confirmed reports using paginated inclusive date queries before rendering; partial page state must not omit saved diaries.
 
