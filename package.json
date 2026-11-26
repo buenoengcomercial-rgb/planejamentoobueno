@@ -13,7 +13,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:regression": "vitest run --maxWorkers=2 --testTimeout=20000 --reporter=dot",
-    "test:server": "node --test scripts/test-server-integrity.mjs",
+    "test:server": "node --test scripts/test-server-integrity.mjs scripts/test-fiscal-migration.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.app.json --noEmit",
     "verify:regression": "npm run test:regression && npm run test:server && npm run typecheck && npm run build"

@@ -208,6 +208,12 @@ export type Database = {
           },
         ]
       }
+      daily_report_fiscal_notes: {
+        Row: { id: string; project_id: string; report_date: string; author_id: string; note: string; photos: Json; created_at: string; updated_at: string }
+        Insert: { id?: string; project_id: string; report_date: string; author_id?: string; note?: string; photos?: Json; created_at?: string; updated_at?: string }
+        Update: { id?: string; project_id?: string; report_date?: string; author_id?: string; note?: string; photos?: Json; created_at?: string; updated_at?: string }
+        Relationships: [{ foreignKeyName: "daily_report_fiscal_notes_project_id_fkey"; columns: ["project_id"]; isOneToOne: false; referencedRelation: "projects"; referencedColumns: ["id"] }]
+      }
       daily_reports: {
         Row: {
           created_at: string
@@ -1388,6 +1394,14 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      fiscal_diary_projects: {
+        Args: Record<PropertyKey, never>
+        Returns: { id: string; name: string; updated_at: string }[]
+      }
+      fiscal_diary_report: {
+        Args: { p_project_id: string; p_date: string }
+        Returns: Json
+      }
       backfill_tasks_recursive: {
         Args: {
           _chapter_id: string
@@ -1866,6 +1880,7 @@ export type Database = {
         | "admin"
         | "engineer"
         | "field_user"
+        | "fiscal"
         | "viewer"
         | "warehouse_operator"
     }
@@ -2001,6 +2016,7 @@ export const Constants = {
         "admin",
         "engineer",
         "field_user",
+        "fiscal",
         "viewer",
         "warehouse_operator",
       ],

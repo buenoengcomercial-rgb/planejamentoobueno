@@ -7,8 +7,10 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/hooks/useAuth";
 import { OrganizationProvider } from "@/hooks/useOrganization";
 import { lazyWithReload } from "@/lib/lazyWithReload";
+import { useOrganization } from "@/hooks/useOrganization";
 
 const Index = lazyWithReload(() => import("./pages/Index.tsx"));
+const FiscalDiary = lazyWithReload(() => import("./pages/FiscalDiary.tsx"));
 const Auth = lazyWithReload(() => import("./pages/Auth.tsx"));
 const ResetPassword = lazyWithReload(() => import("./pages/ResetPassword.tsx"));
 const TeamManagement = lazyWithReload(() => import("./pages/TeamManagement.tsx"));
@@ -19,6 +21,12 @@ const PageFallback = () => (
     Carregando plataforma...
   </div>
 );
+
+const Home = () => {
+  const { membership, loading } = useOrganization();
+  if (loading) return <PageFallback />;
+  return membership?.role === 'fiscal' ? <FiscalDiary /> : <Index />;
+};
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,8 +53,8 @@ const App = () => (
                 <Route path="/auth" element={<Auth />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="/team" element={<TeamManagement />} />
-                <Route path="/" element={<Index />} />
-                <Route path="/obras/:routeProjectId/:routeView" element={<Index />} />
+                <Route path="/" element={<Home />} />
+                <Route path="/obras/:routeProjectId/:routeView" element={<Home />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </Suspense>

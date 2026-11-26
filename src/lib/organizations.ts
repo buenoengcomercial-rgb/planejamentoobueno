@@ -1,10 +1,10 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { AppView } from '@/types/project';
 
-export type OrgRole = 'owner' | 'admin' | 'engineer' | 'warehouse_operator' | 'field_user' | 'viewer';
+export type OrgRole = 'owner' | 'admin' | 'engineer' | 'warehouse_operator' | 'field_user' | 'fiscal' | 'viewer';
 export type MemberStatus = 'active' | 'invited' | 'blocked';
 
-export const ORG_ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'engineer', 'warehouse_operator', 'field_user', 'viewer'];
+export const ORG_ROLE_OPTIONS: OrgRole[] = ['owner', 'admin', 'engineer', 'warehouse_operator', 'field_user', 'fiscal', 'viewer'];
 
 export interface Organization {
   id: string;
@@ -38,6 +38,7 @@ export const ROLE_LABELS: Record<OrgRole, string> = {
   engineer: 'Engenheiro',
   warehouse_operator: 'Almoxarife',
   field_user: 'Equipe de campo',
+  fiscal: 'Fiscalização',
   viewer: 'Visualizador',
 };
 
@@ -47,6 +48,7 @@ export const ROLE_DESCRIPTIONS: Record<OrgRole, string> = {
   engineer: 'Edita planejamento, produção, medições e suprimentos.',
   warehouse_operator: 'Opera somente o Almoxarifado, sem acesso aos demais módulos.',
   field_user: 'Acessa somente o Diário de Obra para consulta e preenchimento.',
+  fiscal: 'Consulta somente o Diário de Obra e registra apontamentos e fotos em área própria.',
   viewer: 'Acesso somente para consulta, sem alterações nos dados.',
 };
 
@@ -56,6 +58,7 @@ export const ROLE_PERMISSIONS: Record<OrgRole, string[]> = {
   engineer: ['Editar planejamento e campo', 'Gerir medições e suprimentos'],
   warehouse_operator: ['Acessar somente o Almoxarifado', 'Registrar entradas, retiradas e equipamentos', 'Cancelar lançamentos sem apagar o histórico'],
   field_user: ['Acessar somente o Diário de Obra', 'Preencher Diário de Obra'],
+  fiscal: ['Consultar somente o Diário de Obra', 'Registrar apontamentos e fotos da fiscalização'],
   viewer: ['Consultar todos os módulos'],
 };
 
@@ -82,7 +85,7 @@ export function canEditWarehouse(role: OrgRole): boolean {
 }
 export function canAccessAppView(role: OrgRole, view: AppView): boolean {
   if (role === 'warehouse_operator') return view === 'warehouse';
-  if (role === 'field_user') return view === 'dailyReport';
+  if (role === 'field_user' || role === 'fiscal') return view === 'dailyReport';
   if (role === 'engineer') return view !== 'dashboard' && view !== 'realCost';
   return true;
 }
@@ -90,7 +93,7 @@ export function canAccessAppView(role: OrgRole, view: AppView): boolean {
 /** Tela segura usada quando uma URL, sessão salva ou troca de perfil aponta para uma área restrita. */
 export function getRestrictedFallbackView(role: OrgRole): AppView {
   if (role === 'warehouse_operator') return 'warehouse';
-  if (role === 'field_user') return 'dailyReport';
+  if (role === 'field_user' || role === 'fiscal') return 'dailyReport';
   return 'gantt';
 }
 export function canDeleteProject(role: OrgRole): boolean {
