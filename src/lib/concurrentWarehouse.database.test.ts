@@ -47,7 +47,9 @@ beforeAll(async()=>{
     '20261024203000_warehouse_project_state_shadow.sql','20261115223000_warehouse_compact_audit_receipts.sql',
     '20261116133000_compact_legacy_warehouse_receipts.sql',
     '20261116140000_independent_warehouse_persistence.sql']) {
-    await db.exec(await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8'));
+    // PostgreSQL definitions use LF; Windows checkouts must load the same SQL text
+    // before the migration compares exact function fragments for drift.
+    await db.exec((await readFile(new URL(`../../supabase/migrations/${file}`,import.meta.url),'utf8')).replace(/\r\n/g,'\n'));
   }
 },20000);
 afterAll(async()=>db.close());

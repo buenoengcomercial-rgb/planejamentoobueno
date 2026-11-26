@@ -83,6 +83,22 @@ describe('movimentações diárias de cautelas', () => {
     expect(vi.mocked(generateCustodyTermPdf).mock.calls.map(([, term]) => term.id)).toEqual(['missing', 'building-b', 'front-a', 'front-b']);
   });
 
+  it('mostra cards e amplia a foto preservada no termo legado sem cadastro de equipamento', () => {
+    const project = makeProject();
+    project.warehouse!.custodyTerms[1].equipmentPhoto = { id: 'legacy-photo', name: 'foto.png', uploadedAt: '2026-09-30', dataUrl: 'data:image/png;base64,AA==' };
+    const save = vi.fn();
+    render(<WarehouseCustodyTab project={project} onProjectChange={save} />);
+    switchView('Movimentações do dia');
+    fireEvent.change(screen.getByLabelText('Data das movimentações'), { target: { value: '2026-09-30' } });
+    fireEvent.click(screen.getByRole('row', { name: 'Cautela TC-2026-0002' }));
+    const details = screen.getByTestId('custody-history-details');
+    expect(within(details).getByLabelText('Equipamentos da cautela').querySelectorAll('article')).toHaveLength(1);
+    expect(within(details).queryByRole('table')).not.toBeInTheDocument();
+    fireEvent.click(within(details).getByRole('button', { name: /Ampliar foto de Perfurador/ }));
+    expect(within(screen.getByRole('dialog', { name: 'Foto do equipamento' })).getByRole('img')).toHaveAttribute('src', 'data:image/png;base64,AA==');
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it('preserva o histórico e não grava ao mudar data, expandir ou trocar subaba', () => {
     const onProjectChange = vi.fn();
     const onCommitWarehouseScoped = vi.fn();
