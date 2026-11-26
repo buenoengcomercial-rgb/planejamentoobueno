@@ -45,10 +45,10 @@ import { getChapterNumbering } from '@/lib/chapters';
 import SignaturePad from './SignaturePad';
 import WarehouseAuditIdentity from './WarehouseAuditIdentity';
 import WarehouseCustodyReturnDialog from './WarehouseCustodyReturnDialog';
+import WarehouseEquipmentPhoto from './WarehouseEquipmentPhoto';
 import { toast } from 'sonner';
 import {
   WarehouseEmptyState,
-  WarehouseEquipmentThumbnail,
   WarehouseField,
   WarehouseSectionHeader,
   WarehouseStatusBadge,
@@ -420,7 +420,7 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
       </div>
 
       <Dialog open={open} onOpenChange={nextOpen => { if (!nextOpen) requestCloseCustody(); }}>
-        <DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-6xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
+        <DialogContent className="warehouse-ui flex max-h-[95dvh] w-[calc(100vw-1rem)] max-w-7xl flex-col gap-0 overflow-hidden p-0 [&>button]:h-11 [&>button]:w-11">
           <DialogHeader className="border-b p-4 pr-16">
             <DialogTitle>Nova cautela de equipamentos</DialogTitle>
             <DialogDescription>Informe o responsável, escolha os equipamentos e registre a assinatura antes de emitir.</DialogDescription>
@@ -436,21 +436,26 @@ export default function WarehouseCustodyTab({ project, onProjectChange, onCommit
           <div className="text-xs text-muted-foreground">Almoxarife identificado pelo login: <strong className="text-foreground">{warehouseActorName(auditActor)}</strong></div>
 
           <div className="overflow-hidden rounded-xl border">
-            <WarehouseSectionHeader icon={Wrench} title="Escolha os equipamentos" description="Toque em + para adicionar." help="A busca encontra código interno, patrimônio, série, descrição, marca e modelo. Somente equipamentos disponíveis aparecem." />
+            <WarehouseSectionHeader icon={Wrench} title="Escolha os equipamentos" description="Confira a foto e toque em Adicionar. Toque na imagem para ampliar." help="A busca encontra código interno, patrimônio, série, descrição, marca e modelo. Somente equipamentos disponíveis aparecem." />
             <div className="p-3">
               <div className="relative"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input id="custody-equipment-search" className="min-h-11 pl-9 text-base" value={equipmentSearch} onChange={event => setEquipmentSearch(event.target.value)} placeholder="Nome, código, patrimônio ou série" aria-label="Buscar equipamento" /></div>
-              <div className="mt-2 max-h-72 overflow-y-auto rounded-lg border bg-background" aria-label="Equipamentos disponíveis">
-                {availableEquipments.map((equipment, index) => <button key={equipment.id} type="button" className={`flex min-h-[72px] w-full items-center gap-3 border-b px-3 py-2 text-left last:border-0 hover:bg-primary/10 ${index % 2 ? 'bg-muted/25' : ''}`} onClick={() => addEquipment(equipment.id)}><WarehouseEquipmentThumbnail equipment={equipment} /><span className="min-w-0 flex-1"><span className="block text-sm font-bold leading-snug">{equipment.description || equipment.name}</span><span className="mt-1 block text-xs font-medium text-muted-foreground">{equipment.internalCode || 'Código legado'} · Patrimônio {equipment.patrimony || '—'} · Série {equipment.serial || '—'}</span></span><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground" aria-hidden="true"><Plus className="h-5 w-5" /></span></button>)}
+              <div className="mt-3 grid max-h-[60dvh] grid-cols-1 gap-3 overflow-y-auto p-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" aria-label="Equipamentos disponíveis">
+                {availableEquipments.map(equipment => <article key={equipment.id} className="flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm">
+                  <WarehouseEquipmentPhoto equipment={equipment} />
+                  <div className="min-w-0 flex-1 break-words"><div className="text-sm font-bold text-primary">{equipment.internalCode || 'Código legado'}</div><h3 className="font-bold leading-snug">{equipment.description || equipment.name}</h3><p className="mt-1 text-sm text-muted-foreground">Patrimônio {equipment.patrimony || '—'}<br />Série {equipment.serial || '—'}</p></div>
+                  <Button type="button" className="min-h-11 w-full" aria-label={`Adicionar ${equipment.internalCode || ''} ${equipment.description || equipment.name}`} onClick={() => addEquipment(equipment.id)}><Plus className="mr-2 h-5 w-5" />Adicionar</Button>
+                </article>)}
                 {!availableEquipments.length && <WarehouseEmptyState message="Nenhum equipamento disponível" hint="Tente outra palavra na busca." className="m-2" icon={Wrench} />}
               </div>
               {errors.equipments && <div role="alert" className="mt-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm font-semibold text-destructive">{errors.equipments}</div>}
-              <div className="mt-3 space-y-2">
+              <h4 className="mt-4 font-bold">Equipamentos selecionados · {form.equipments.length}</h4>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {form.equipments.map(item => {
                   const equipment = wh.equipments.find(candidate => candidate.id === item.equipmentId);
                   if (!equipment) return null;
-                  return <div key={item.equipmentId} className="grid gap-2 rounded-md border p-2 md:grid-cols-[minmax(180px,1fr)_minmax(160px,1fr)_minmax(160px,1fr)_44px] md:items-end"><div className="min-w-0 self-center"><div className="truncate text-sm font-medium">{equipment.internalCode || 'Código legado'} · {equipment.description || equipment.name}</div><div className="text-xs text-muted-foreground">Patrimônio {equipment.patrimony || '—'} · Série {equipment.serial || '—'}</div></div><Field label="Estado na entrega"><Input className="min-h-11 text-base" value={item.stateOnDelivery} onChange={event => updateEquipment(item.equipmentId, { stateOnDelivery: event.target.value })} placeholder="Ex.: bom estado" /></Field><Field label="Acessórios"><Input className="min-h-11 text-base" value={item.accessories} onChange={event => updateEquipment(item.equipmentId, { accessories: event.target.value })} placeholder="Opcional" /></Field><Button size="icon" variant="ghost" className="min-h-11 min-w-11 text-destructive" onClick={() => setForm(current => ({ ...current, equipments: current.equipments.filter(candidate => candidate.equipmentId !== item.equipmentId) }))} aria-label={`Remover ${equipment.description || equipment.name}`}><Trash2 className="h-4 w-4" /></Button></div>;
+                  return <div key={item.equipmentId} className="flex min-w-0 flex-col gap-3 rounded-xl border border-primary/30 bg-card p-3"><div className="min-w-0 self-center"><WarehouseEquipmentPhoto equipment={equipment} /><div className="mt-2 break-words text-sm font-bold">{equipment.internalCode || 'Código legado'} · {equipment.description || equipment.name}</div><div className="text-xs text-muted-foreground">Patrimônio {equipment.patrimony || '—'} · Série {equipment.serial || '—'}</div></div><Field label="Estado na entrega"><Input className="min-h-11 text-base" value={item.stateOnDelivery} onChange={event => updateEquipment(item.equipmentId, { stateOnDelivery: event.target.value })} placeholder="Ex.: bom estado" /></Field><Field label="Acessórios"><Input className="min-h-11 text-base" value={item.accessories} onChange={event => updateEquipment(item.equipmentId, { accessories: event.target.value })} placeholder="Opcional" /></Field><Button variant="outline" className="mt-auto min-h-11 text-destructive" onClick={() => setForm(current => ({ ...current, equipments: current.equipments.filter(candidate => candidate.equipmentId !== item.equipmentId) }))} aria-label={`Remover ${equipment.description || equipment.name}`}><Trash2 className="mr-2 h-4 w-4" />Remover</Button></div>;
                 })}
-                {!form.equipments.length && <WarehouseEmptyState message="Nenhum equipamento escolhido" hint="Toque em + para adicionar." icon={Wrench} />}
+                {!form.equipments.length && <WarehouseEmptyState message="Nenhum equipamento escolhido" hint="Use Adicionar no card do equipamento." icon={Wrench} />}
               </div>
             </div>
           </div>
@@ -552,12 +557,14 @@ function ActiveCustodyCard({ term, item, equipment, destination, onReturn }: Act
   const thumbnail: Equipment = equipment?.photos?.length ? equipment : {
     id: item.equipmentId,
     name: title,
+    internalCode: equipment?.internalCode || item.equipmentInternalCode,
+    patrimony: equipment?.patrimony || item.equipmentPatrimony,
     createdAt: term.createdAt,
     photos: item.equipmentPhoto ? [item.equipmentPhoto] : undefined,
   };
   return <article className="flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm">
-    <div className="flex items-start gap-3">
-      <WarehouseEquipmentThumbnail equipment={thumbnail} className="h-16 w-16" />
+    <div className="flex flex-col gap-3">
+      <WarehouseEquipmentPhoto equipment={thumbnail} />
       <div className="min-w-0 break-words">
         <p className="text-xs font-bold text-primary">{equipment?.internalCode || item.equipmentInternalCode || 'Código legado'}</p>
         <h3 className="font-bold leading-tight">{title}</h3>
@@ -603,7 +610,29 @@ function PhotoPreview({ file, onRemove }: { file: File; onRemove: () => void }) 
 function CustodyDetails({ term, project, onReturn, canDelete, onDelete }: { term: CustodyTerm; project: Project; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; canDelete: boolean; onDelete: () => void }) {
   const items = custodyTermEquipmentItems(term);
   const actions = <div className="custody-detail-actions flex flex-wrap justify-end gap-1"><Button size="sm" variant="outline" className="min-h-9" onClick={() => void import('./pdf').then(({ generateCustodyTermPdf }) => generateCustodyTermPdf(project, term))}><FileDown className="mr-1 h-4 w-4" />PDF</Button>{canDelete && <Button size="sm" variant="destructive" className="min-h-9" onClick={onDelete}><Trash2 className="mr-1 h-4 w-4" />Excluir</Button>}</div>;
-  return <div className="space-y-3">{(term.attachments?.length ?? 0) > 0 && <div className="text-xs text-muted-foreground">{term.attachments!.length} foto(s) registrada(s) na entrega.</div>}<div className="overflow-x-auto"><table className="w-[820px] table-fixed text-xs md:w-full md:min-w-[760px]"><colgroup><col className="w-[34%]" /><col className="w-[19%]" /><col className="w-[16%]" /><col className="w-[16%]" /><col className="w-[15%]" /></colgroup><thead><tr><th className="p-2 text-left">Equipamento</th><th className="p-2 text-left">Estado / acessórios</th><th className="p-2 text-left">Situação</th><th className="p-2 text-left">Devolução</th><th className="p-2 text-right">{actions}</th></tr></thead><tbody>{items.map(item => <tr key={item.equipmentId} className="border-t"><td className="p-2"><div className="whitespace-normal break-words font-medium [overflow-wrap:anywhere]">{item.equipmentInternalCode || 'Código legado'} · {item.equipmentName}</div><div className="text-muted-foreground">Patrimônio {item.equipmentPatrimony || '—'} · Série {item.equipmentSerial || '—'}</div></td><td className="p-2">{item.stateOnDelivery || '—'}<div className="text-muted-foreground">{item.accessories || 'Sem acessórios'}</div></td><td className="p-2"><WarehouseStatusBadge label={statusLabel[item.status] || item.status} tone={statusTone(item.status)} /></td><td className="p-2">{item.returnedAt || '—'}<div className="text-muted-foreground">{item.stateOnReturn || item.divergenceNotes || ''}</div></td><td className="p-2 text-right">{item.status === 'em_uso' && <Button size="sm" variant="outline" className="min-h-10" onClick={() => onReturn(term, item)}><Undo2 className="mr-1 h-4 w-4" />Devolver</Button>}</td></tr>)}</tbody></table></div><WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} className="rounded-md bg-muted/40 p-2 text-xs" /></div>;
+  return <div className="space-y-3">
+    <div className="flex flex-wrap items-center justify-between gap-2"><h4 className="font-bold">Equipamentos da cautela · {items.length}</h4>{actions}</div>
+    {(term.attachments?.length ?? 0) > 0 && <div className="text-xs text-muted-foreground">{term.attachments!.length} foto(s) registrada(s) na entrega.</div>}
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" aria-label="Equipamentos da cautela">
+      {items.map(item => {
+        const equipment = project.warehouse?.equipments.find(candidate => candidate.id === item.equipmentId);
+        const photoEquipment: Equipment = {
+          id: item.equipmentId, name: item.equipmentName, createdAt: term.createdAt,
+          internalCode: item.equipmentInternalCode || equipment?.internalCode,
+          patrimony: item.equipmentPatrimony || equipment?.patrimony,
+          photos: equipment?.photos?.length ? equipment.photos : item.equipmentPhoto ? [item.equipmentPhoto] : [],
+        };
+        return <article key={item.equipmentId} className="flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm">
+          <WarehouseEquipmentPhoto equipment={photoEquipment} />
+          <div className="break-words"><p className="text-sm font-bold text-primary">{photoEquipment.internalCode || 'Código legado'}</p><h5 className="font-bold leading-snug [overflow-wrap:anywhere]">{item.equipmentName}</h5><p className="mt-1 text-sm text-muted-foreground">Patrimônio {photoEquipment.patrimony || '—'}<br />Série {item.equipmentSerial || equipment?.serial || '—'}</p></div>
+          <div><WarehouseStatusBadge label={statusLabel[item.status] || item.status} tone={statusTone(item.status)} /></div>
+          <div className="flex-1 space-y-1 break-words text-sm"><p><strong>Estado na entrega: </strong>{item.stateOnDelivery || '—'}</p><p className="text-muted-foreground">{item.accessories || 'Sem acessórios'}</p>{item.returnedAt && <p><strong>Devolução: </strong>{item.returnedAt}</p>}{(item.stateOnReturn || item.divergenceNotes) && <p>{item.stateOnReturn}{item.divergenceNotes && <span className="block">{item.divergenceNotes}</span>}</p>}</div>
+          {item.status === 'em_uso' && <Button type="button" className="min-h-11 w-full" onClick={() => onReturn(term, item)}><Undo2 className="mr-2 h-5 w-5" />Devolver</Button>}
+        </article>;
+      })}
+    </div>
+    <WarehouseAuditIdentity createdBy={term.createdBy} updatedBy={term.updatedBy} createdAt={term.createdAt} updatedAt={term.updatedAt} className="rounded-md bg-muted/40 p-2 text-xs" />
+  </div>;
 }
 
 function CustodyMobileCard({ term, expanded, onToggle, onReturn, project, canDelete, onDelete }: { term: CustodyTerm; expanded: boolean; onToggle: () => void; onReturn: (term: CustodyTerm, item: CustodyTermEquipmentItem) => void; project: Project; canDelete: boolean; onDelete: () => void }) {

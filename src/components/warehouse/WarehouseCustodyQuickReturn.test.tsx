@@ -35,6 +35,45 @@ function fixture(): Project {
 
 const search = () => screen.getByRole('searchbox');
 
+it('amplia a foto da pendência sem devolver ou alterar a cautela', () => {
+  const save = vi.fn();
+  render(<WarehouseCustodyTab project={fixture()} onProjectChange={save} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Ampliar foto de Furadeira de impacto' }));
+  const photo = screen.getByRole('dialog', { name: 'Foto do equipamento' });
+  expect(photo).toHaveTextContent('Furadeira de impacto');
+  expect(within(photo).getByRole('img')).toHaveAttribute('src', fixture().warehouse!.equipments[0].photos![0].dataUrl);
+  expect(screen.queryByRole('dialog', { name: 'Devolver equipamento' })).not.toBeInTheDocument();
+  fireEvent.click(within(photo).getByRole('button', { name: 'Close' }));
+  expect(screen.getByText('Com: João da Silva')).toBeVisible();
+  expect(save).not.toHaveBeenCalled();
+});
+
+it('separa ampliar, adicionar e remover; mantém os dados da nova cautela ao fechar a foto', () => {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+  const project = fixture();
+  project.warehouse!.equipments[0].status = 'disponivel';
+  const save = vi.fn();
+  render(<WarehouseCustodyTab project={project} onProjectChange={save} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Nova cautela' }));
+  const form = screen.getByRole('dialog', { name: 'Nova cautela de equipamentos' });
+  fireEvent.change(within(form).getByPlaceholderText('Nome do responsável'), { target: { value: 'João teste' } });
+  fireEvent.click(within(form).getByRole('button', { name: 'Ampliar foto de Furadeira de impacto' }));
+  fireEvent.click(within(screen.getByRole('dialog', { name: 'Foto do equipamento' })).getByRole('button', { name: 'Close' }));
+  expect(within(form).getByText('Nenhum equipamento escolhido')).toBeVisible();
+  fireEvent.click(within(form).getByRole('button', { name: 'Adicionar EQ-101 Furadeira de impacto' }));
+  expect(within(form).queryByText('Nenhum equipamento escolhido')).not.toBeInTheDocument();
+  fireEvent.change(within(form).getByPlaceholderText('Ex.: bom estado'), { target: { value: 'Conferido' } });
+  fireEvent.change(within(form).getByPlaceholderText('Opcional'), { target: { value: 'Maleta' } });
+  fireEvent.click(within(form).getByRole('button', { name: 'Ampliar foto de Furadeira de impacto' }));
+  fireEvent.click(within(screen.getByRole('dialog', { name: 'Foto do equipamento' })).getByRole('button', { name: 'Close' }));
+  expect(within(form).getByPlaceholderText('Nome do responsável')).toHaveValue('João teste');
+  expect(within(form).getByPlaceholderText('Ex.: bom estado')).toHaveValue('Conferido');
+  expect(within(form).getByPlaceholderText('Opcional')).toHaveValue('Maleta');
+  fireEvent.click(within(form).getByRole('button', { name: 'Remover Furadeira de impacto' }));
+  expect(within(form).getByRole('button', { name: 'Adicionar EQ-101 Furadeira de impacto' })).toBeVisible();
+  expect(save).not.toHaveBeenCalled();
+});
+
 it('abre nas pendências e identifica responsáveis, inclusive em cautela legada sem cadastro', () => {
   render(<WarehouseCustodyTab project={fixture()} onProjectChange={vi.fn()} />);
   expect(screen.getByRole('tab', { name: 'Em uso / Pendentes de devolução' })).toHaveAttribute('aria-selected', 'true');

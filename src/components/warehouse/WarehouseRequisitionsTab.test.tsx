@@ -709,9 +709,8 @@ describe('WarehouseRequisitionsTab', () => {
     fireEvent.mouseDown(equipmentTab, { button: 0, ctrlKey: false });
     fireEvent.click(screen.getByRole('button', { name: /Nova cautela/i }));
     const available = screen.getByLabelText('Equipamentos disponíveis');
-    const equipmentButtons = within(available).getAllByRole('button');
-    fireEvent.click(equipmentButtons[0]);
-    fireEvent.click(within(available).getAllByRole('button')[0]);
+    fireEvent.click(within(available).getByRole('button', { name: 'Adicionar EQ-001 Furadeira' }));
+    fireEvent.click(within(available).getByRole('button', { name: 'Adicionar EQ-002 Parafusadeira' }));
 
     expect(screen.getAllByLabelText('Estado na entrega')).toHaveLength(2);
     expect(within(available).queryAllByRole('button')).toHaveLength(0);
