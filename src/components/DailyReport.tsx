@@ -11,6 +11,7 @@ import { DailyReportHeader } from '@/components/dailyReport/DailyReportHeader';
 import { DailyReportMeasurementBanner } from '@/components/dailyReport/DailyReportMeasurementBanner';
 import { DailyReportGeneralInfo } from '@/components/dailyReport/DailyReportGeneralInfo';
 import { DailyReportTextAreas } from '@/components/dailyReport/DailyReportTextAreas';
+import { FiscalNotes } from '@/components/dailyReport/FiscalNotes';
 import { DailyReportTeamsCard } from '@/components/dailyReport/DailyReportTeamsCard';
 import { DailyReportEquipmentCard } from '@/components/dailyReport/DailyReportEquipmentCard';
 import { DailyReportPhotosCard } from '@/components/dailyReport/DailyReportPhotosCard';
@@ -282,6 +283,9 @@ export default function DailyReport({ project, onProjectChange, undoButton, read
                 <DailyReportTextAreas currentReport={currentReport} updateField={updateField} />
               </fieldset>
             </DailyReportMobileSection>
+            <div className="order-5 lg:order-4">
+              <FiscalNotes projectId={project.id} date={selectedDate} canWrite={false} />
+            </div>
           </div>
         </TabsContent>
       </Tabs>

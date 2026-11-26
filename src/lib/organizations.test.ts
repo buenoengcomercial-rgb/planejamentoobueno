@@ -13,6 +13,18 @@ import {
 } from './organizations';
 
 describe('função Almoxarife', () => {
+  it('limita Fiscalização à consulta do Diário e ao registro fiscal separado', () => {
+    expect(ORG_ROLE_OPTIONS).toContain('fiscal');
+    expect(ROLE_LABELS.fiscal).toBe('Fiscalização');
+    expect(ROLE_PERMISSIONS.fiscal).toContain('Registrar apontamentos e fotos da fiscalização');
+    const otherViews: AppView[] = ['dashboard', 'management', 'gantt', 'physicalFinancial', 'tasks', 'measurement', 'additive', 'additiveSchedule', 'realCost', 'materials', 'warehouse'];
+    otherViews.forEach(view => expect(canAccessAppView('fiscal', view)).toBe(false));
+    expect(canAccessAppView('fiscal', 'dailyReport')).toBe(true);
+    expect(getRestrictedFallbackView('fiscal')).toBe('dailyReport');
+    expect(canEditDailyReport('fiscal')).toBe(false);
+    expect(canEditProject('fiscal')).toBe(false);
+    expect(canEditWarehouse('fiscal')).toBe(false);
+  });
   it('aparece entre as funções disponíveis com descrição operacional', () => {
     expect(ORG_ROLE_OPTIONS).toContain('warehouse_operator');
     expect(ROLE_LABELS.warehouse_operator).toBe('Almoxarife');

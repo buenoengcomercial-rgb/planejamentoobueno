@@ -6,8 +6,8 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-type Role = "owner" | "admin" | "engineer" | "warehouse_operator" | "field_user" | "viewer";
-const ALLOWED_ROLES: Role[] = ["owner", "admin", "engineer", "warehouse_operator", "field_user", "viewer"];
+type Role = "owner" | "admin" | "engineer" | "warehouse_operator" | "field_user" | "fiscal" | "viewer";
+const ALLOWED_ROLES: Role[] = ["owner", "admin", "engineer", "warehouse_operator", "field_user", "fiscal", "viewer"];
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
